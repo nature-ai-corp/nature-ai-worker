@@ -25,6 +25,8 @@ install -m 600 /dev/null ~/.nwk-openai && nano ~/.nwk-openai     # paste the key
 .venv/bin/python scripts/acceptance.py --provider openai --model <tool-capable model> --key-file ~/.nwk-openai
 ```
 
+To rerun only some scenarios, add `--only` with comma-separated letters (for example `--only F`). Setup always runs; the connection test runs only in a full run. A focused run writes `acceptance-<provider>-<letters>.md`, so the full report is kept.
+
 For another provider, replace `openai` (both in `--provider` and the file name) with `anthropic`, `gemini` or `deepseek`. The script refuses key files that other users can read and never prints the key. Delete the key file when you are done (`rm ~/.nwk-openai`).
 
 ## 2. Ollama on another computer

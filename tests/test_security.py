@@ -6,6 +6,7 @@ import os
 import pytest
 
 from conftest import configure, conversation, new_conversation, openai_text, openai_tool_call, send
+from nature_worker.agent import SYSTEM_PROMPT
 from nature_worker.credentials import CredentialStore, RedactSecretsFilter
 from nature_worker.tools import ApprovalRequired, ToolContext, ToolError, execute
 from nature_worker.tools.workspace import Workspace
@@ -165,6 +166,56 @@ def test_delete_requires_approval(client, config, fake_model):
     approval = conversation(client, conv_id)["approvals"][0]
     client.post(f"/api/approvals/{approval['id']}", json={"approve": True})
     assert not (config.workspace_dir / "keep.txt").exists()
+
+
+def _delete_flow(client, config, fake_model):
+    (config.workspace_dir / "notes.txt").write_text("Team notes.\n")
+    configure(client, endpoint=fake_model.url + "/v1")
+    fake_model.queue(openai_tool_call(("delete_file", {"path": "notes.txt"})), openai_text("I left notes.txt in place."))
+    conv_id = new_conversation(client)
+    assert send(client, conv_id, "Delete the file notes.txt from the workspace.") == "needs_approval"
+    # The delete tool was offered to the model, and the call was held at the execution layer.
+    offered = [t["function"]["name"] for t in fake_model.requests[0]["body"]["tools"]]
+    assert "delete_file" in offered
+    assert (config.workspace_dir / "notes.txt").read_text() == "Team notes.\n"
+    conv = conversation(client, conv_id)
+    assert [(a["tool_name"], a["reason"]) for a in conv["approvals"]] == [("delete_file", "Delete file 'notes.txt'")]
+    assert len(fake_model.requests) == 1  # paused until the user decides
+    return conv_id, conv["approvals"][0]
+
+
+def test_denied_delete_leaves_file_unchanged(client, config, fake_model):
+    conv_id, approval = _delete_flow(client, config, fake_model)
+    assert client.post(f"/api/approvals/{approval['id']}", json={"approve": False}).json()["status"] == "done"
+    assert (config.workspace_dir / "notes.txt").read_text() == "Team notes.\n"
+    conv = conversation(client, conv_id)
+    assert conv["approvals"] == []
+    tool = [m for m in conv["messages"] if m["role"] == "tool"]
+    assert len(tool) == 1 and tool[0]["meta"] == {"denied": True}
+    assert "denied" in fake_model.requests[-1]["body"]["messages"][-1]["content"]
+    # A denied request cannot be approved afterwards.
+    assert client.post(f"/api/approvals/{approval['id']}", json={"approve": True}).status_code == 409
+    assert (config.workspace_dir / "notes.txt").read_text() == "Team notes.\n"
+
+
+def test_text_confirmation_does_not_delete(client, config, fake_model):
+    """A model that asks for confirmation in text (as gpt-4.1-mini did) makes no call: nothing is deleted,
+    and a "yes" in chat is not an approval. The delete still needs the approval prompt."""
+    (config.workspace_dir / "notes.txt").write_text("Team notes.\n")
+    configure(client, endpoint=fake_model.url + "/v1")
+    fake_model.queue(
+        openai_text("Do you approve the deletion of the file notes.txt from the workspace?"),
+        openai_tool_call(("delete_file", {"path": "notes.txt"})),
+    )
+    conv_id = new_conversation(client)
+    assert send(client, conv_id, "Delete the file notes.txt from the workspace.") == "done"
+    assert conversation(client, conv_id)["approvals"] == []
+    assert send(client, conv_id, "Yes, I approve.") == "needs_approval"
+    assert (config.workspace_dir / "notes.txt").exists()
+
+
+def test_system_prompt_says_to_call_sensitive_tools_directly():
+    assert "call the tool directly; do not ask for permission in your reply" in " ".join(SYSTEM_PROMPT.split())
 
 
 def test_cross_origin_requests_are_blocked(client):

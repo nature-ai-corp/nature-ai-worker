@@ -105,3 +105,29 @@ def test_no_platform_dependencies():
     text = " ".join(p.read_text().lower() for p in SRC.rglob("*") if p.suffix in (".py", ".js", ".html", ".css"))
     for marker in ("nature_ai_platform", "nature-ai-platform", "nature_platform"):
         assert marker not in text
+
+
+def test_acceptance_script_focused_f_run(tmp_path, fake_model):
+    """scripts/acceptance.py --only F against the fake model: approval requested, denial respected."""
+    fake_model.queue(openai_tool_call(("delete_file", {"path": "notes.txt"})), openai_text("OK, notes.txt was kept."))
+    out = tmp_path / "report.md"
+    script = Path(__file__).resolve().parents[1] / "scripts" / "acceptance.py"
+    env = {**os.environ, "PYTHONPATH": str(SRC)}
+    r = subprocess.run([sys.executable, str(script), "--provider", "openai_compatible", "--model", "fake",
+                        "--endpoint", fake_model.url + "/v1", "--only", "F", "--out", str(out)],
+                       env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[PASS] F-approval" in r.stdout and "approval requested and denial respected" in r.stdout
+    assert "connection-test" not in r.stdout and "D-report" not in r.stdout  # nothing else was run
+    assert "delete_file" in out.read_text()
+
+
+def test_acceptance_script_reports_when_model_skips_the_tool(tmp_path, fake_model):
+    fake_model.queue(openai_text("Do you approve the deletion of the file notes.txt?"))
+    script = Path(__file__).resolve().parents[1] / "scripts" / "acceptance.py"
+    env = {**os.environ, "PYTHONPATH": str(SRC)}
+    r = subprocess.run([sys.executable, str(script), "--provider", "openai_compatible", "--model", "fake",
+                        "--endpoint", fake_model.url + "/v1", "--only", "F", "--out", str(tmp_path / "r.md")],
+                       env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 1
+    assert "[FAIL] F-approval" in r.stdout and "model did not call delete_file" in r.stdout

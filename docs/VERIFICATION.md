@@ -187,3 +187,47 @@ No FAIL results. No PASS is claimed for any real-model or Docker test.
 6. Initial commit (requires authorization; nothing has been pushed).
 
 The exact commands are under "Real-provider test commands" in the WKR-008 section above.
+
+---
+
+# WKR-011 / WKR-012 Real-Provider Acceptance and Release Preparation (2026-10-17)
+
+## WKR-011: F-approval failure with OpenAI (fixed)
+
+The first real OpenAI run failed F: `gpt-4.1-mini` replied "Do you approve the deletion of the file notes.txt…?" as text and made no tool call, so there was nothing for the approval layer to hold. The approval mechanism was not defective. Fix (commit `b367ba5`): the system prompt tells the model to call approval-gated tools directly (enforcement in `execute()` is unchanged), the acceptance F prompt names `delete_file`, F now also checks that `notes.txt` is byte-for-byte unchanged after the denial and reports whether the model skipped the tool or the gate failed, and `--only` reruns single scenarios.
+
+## Real-provider results
+
+Reports: `acceptance-openai.md`, `acceptance-openai-F.md`, `acceptance-ollama.md` (gitignored, kept locally). They contain no keys; the endpoint is not recorded. Local temporary paths in the transcripts are omitted here.
+
+| Check | OpenAI `gpt-4.1-mini` | Ollama `qwen3.8:27b` |
+|---|---|---|
+| Code under test | full run before WKR-011 (15:51); F rerun with the WKR-011 changes (16:00) | `b367ba5` (16:07) |
+| setup | PASS | PASS |
+| connection-test (real tool call) | PASS | PASS |
+| D: read files, compute totals, write report.md | PASS: `read_file`×3, `table_summary`, `write_file`; North=170, total=490 | PASS: `read_file`×2, `write_file`; North=170, total=490 |
+| E: workspace escape | PASS: no leak. The model refused without calling a tool, so the sandbox was not exercised by this model | PASS: no leak. Both attempts reached the sandbox and were blocked (`outside the workspace`, `is an absolute path`) |
+| F: delete needs approval, deny | FAIL in full run (no tool call, see above); **PASS** in `--only F` rerun: `delete_file` called, 1 approval, denied, `notes.txt` unchanged | PASS: `delete_file` called, 1 approval, denied, `notes.txt` unchanged |
+| G: provider failure | PASS: invalid key → `auth` notice | PASS: unknown model → `not_found` notice |
+| H: history after restart | PASS | PASS |
+| Key in server log | not found | n/a (no key) |
+
+Verdict for B and C: **B PASS (OpenAI)** and **C PASS (Ollama)**. Anthropic, Gemini and DeepSeek remain **NOT EXECUTED** against their real services; they are covered by wire-format tests only.
+
+## Release preparation checks
+
+| Check | Result |
+|---|---|
+| Automated tests (dev venv, Python 3.14.4) | **104 passed** |
+| Clean install | **PASS**: wheel built from `git archive HEAD`, installed with `requirements.lock` into a fresh venv; `pip check` clean; **104 passed** against the installed package; `nature-worker --help` works. The wheel contains only the package, static files, LICENSE and metadata |
+| Docker build/run | **NOT EXECUTED**: no Docker or Podman in this environment |
+| Python 3.11 / 3.12 / 3.13 | **NOT EXECUTED**: only Python 3.14 is installed. `requires-python = ">=3.11"` is untested at runtime below 3.14 |
+| Tracked files | No credentials (only obvious dummy test keys), no acceptance reports, no user data, no private host addresses (two WSL addresses were removed from the WKR-009 section above, and from Git history in WKR-014 before the first push) |
+| `.gitignore` | Covers `data/`, `workspace/`, `.env*`, `*.key`, `credentials.enc`, databases, `acceptance-*.md` |
+| `.dockerignore` | Now also excludes `acceptance-*.md`, `.env.*` and `*.key` from the build context (the Dockerfile never copied them; this keeps them out of the context sent to the daemon) |
+
+## Remaining blockers
+
+1. Docker image build and run (`docker compose up -d --build`, then health check and one real task).
+2. README `git clone <this repository>` placeholders (needs the public repository URL).
+3. Decide whether Python 3.11–3.13 must be tested before release, or state "tested on 3.14" only (current README wording is accurate).

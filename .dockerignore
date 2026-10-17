@@ -7,3 +7,6 @@ workspace
 .pytest_cache
 tests
 scripts
+.env.*
+*.key
+acceptance-*.md

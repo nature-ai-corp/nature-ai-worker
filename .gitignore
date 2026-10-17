@@ -1,6 +1,8 @@
 # Local state: never commit
 /data/
 /workspace/
+/demo-data/
+/demo-workspace/
 .env
 .env.*
 !.env.example

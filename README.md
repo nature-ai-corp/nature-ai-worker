@@ -1,17 +1,42 @@
 # Nature AI Worker
 
-**Connect your model. Configure. Start working.**
+**A self-hosted AI agent that works on the files in a folder on your computer.**
+Connect the model you already use, describe a task in plain language, and approve anything risky before it happens.
 
-Nature AI Worker is a lightweight, self-hosted, general-purpose AI agent. Run it on your own computer, connect the AI model you already use, and give it tasks in plain language. It can read, search and write files in a workspace folder, summarize data, do exact calculations, and (optionally) fetch web pages.
+[![CI](https://github.com/nature-ai-corp/nature-ai-worker/actions/workflows/ci.yml/badge.svg)](https://github.com/nature-ai-corp/nature-ai-worker/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/nature-ai-corp/nature-ai-worker)](https://github.com/nature-ai-corp/nature-ai-worker/releases/tag/v0.1.0)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-You do not need to write code, create agents, or design workflows. There is one built-in General Agent.
+![Nature AI Worker after a finished task: the agent listed the files, summarized sales.csv and wrote report.md](docs/screenshots/03-task-done.png)
 
-- One Python process, SQLite storage, and a small web UI. No other services are needed.
-- Works with OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Ollama (local models), and any OpenAI-compatible API.
-- File access is limited to one workspace folder. Overwriting or deleting files and fetching web pages need your approval.
-- Licensed under Apache-2.0.
+<sub>The real web UI. This screenshot was taken during automated UI testing with a scripted test model, not a real AI model; see [Verification status](#verification-status) for real-model results. More: [approval prompt](docs/screenshots/05-approval-prompt.png), [workspace files](docs/screenshots/08-files-panel.png).</sub>
 
-> Status: v0.1, an early release. See [Known limitations](#known-limitations).
+## Highlights
+
+- **One built-in General Agent.** No agents, workflows or code to set up. It reads, searches and writes files, summarizes CSV/TSV/JSON tables, does exact arithmetic, and can fetch web pages if you turn that on.
+- **You stay in control.** Overwriting or deleting a file and fetching a web page always wait for your approval. This is enforced where tools run, not just requested in the prompt.
+- **Confined to one workspace folder.** Paths outside it, `..` traversal and escaping symlinks are blocked. There is no shell or code-execution tool.
+- **Your model, your choice:** OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Ollama (local models), or any OpenAI-compatible API.
+- **Small and local.** One Python process, SQLite, and a plain web UI. API keys are encrypted at rest and only sent to the endpoint you configured.
+- **Apache-2.0 licensed.**
+
+## Quick start
+
+Requires Python 3.11–3.14 and a model that supports tool calling (for example, a tool-capable model in Ollama).
+
+```bash
+git clone https://github.com/nature-ai-corp/nature-ai-worker.git
+cd nature-ai-worker
+python3 -m venv .venv && source .venv/bin/activate
+pip install .
+nature-worker
+```
+
+Open **http://127.0.0.1:8080**, pick your provider and model, click **Test connection**, then **Save**. Put files in `./workspace` and describe a task.
+
+Want something to try? The [sales report demo](examples/sales-report/) has a synthetic dataset, a ready-made task and the correct answers to check against. To run with Docker instead, see [Option B](#option-b-docker-compose).
+
+> **Status:** [v0.1.0](https://github.com/nature-ai-corp/nature-ai-worker/releases/tag/v0.1.0), an early release for **single-user, local use**. Do not expose it to a network. See [Known limitations](#known-limitations) and [SECURITY.md](SECURITY.md).
 
 ---
 
@@ -172,6 +197,7 @@ src/nature_worker/
   tools/            Workspace sandbox, file tools, data tools, guarded web fetch
   static/           The web UI (plain HTML/CSS/JS, no build step)
 tests/              Automated tests
+examples/           Synthetic demo data (sales report demo)
 scripts/acceptance.py   Real-provider acceptance check
 ```
 

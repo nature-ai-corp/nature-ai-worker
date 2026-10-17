@@ -20,7 +20,7 @@ You do not need to write code, create agents, or design workflows. There is one 
 ### Option A: Python (3.11+; tested on 3.14)
 
 ```bash
-git clone <this repository> nature-ai-worker
+git clone https://github.com/nature-ai-corp/nature-ai-worker.git
 cd nature-ai-worker
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
@@ -35,7 +35,7 @@ By default, data is stored in `./data` and the workspace folder is `./workspace`
 ### Option B: Docker Compose
 
 ```bash
-git clone <this repository> nature-ai-worker
+git clone https://github.com/nature-ai-corp/nature-ai-worker.git
 cd nature-ai-worker
 mkdir -p data workspace            # create these first so they are owned by you
 NATURE_WORKER_UID=$(id -u) NATURE_WORKER_GID=$(id -g) docker compose up -d --build

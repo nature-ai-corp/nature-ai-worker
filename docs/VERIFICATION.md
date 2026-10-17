@@ -288,3 +288,7 @@ Not covered: the default container user (1000) on a host whose user ID differs, 
 | Docker | Non-root user, `127.0.0.1`-only port, volumes for data and workspace, pinned Python dependencies. The base image is pinned by tag (`python:3.14-slim`), not by digest. |
 | GitHub Actions | `permissions: contents: read`; triggers `push` (main), `pull_request` and `workflow_dispatch` (no `pull_request_target`); `persist-credentials: false`; third-party actions pinned by commit SHA; no secrets; job timeouts. |
 | Package version | `0.1.0` in `pyproject.toml`, `nature_worker.__version__`, the compose image tag, and the health response. |
+
+## WKR-018: security reporting correction
+
+`SECURITY.md` referred to a contact address "listed in the repository profile", but the organization profile lists none. That reference was removed. GitHub Private Vulnerability Reporting is now documented as the only reporting channel, with the direct advisory link and a supported-versions note. It must be enabled when the repository is made public; GitHub does not offer it for private repositories.

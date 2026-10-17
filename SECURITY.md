@@ -2,7 +2,18 @@
 
 ## Reporting a vulnerability
 
-Please do not open a public issue for security problems. Report them privately through the repository's security advisory feature ("Report a vulnerability"), or contact the maintainers at the address listed in the repository profile. Include steps to reproduce and the affected version. We aim to acknowledge reports within 5 working days.
+Please do not open a public issue, discussion or pull request for security problems.
+
+Report them privately with GitHub **Private Vulnerability Reporting**:
+
+1. Open the repository's **Security** tab and click **Report a vulnerability**, or go directly to <https://github.com/nature-ai-corp/nature-ai-worker/security/advisories/new>.
+2. Describe the problem, the affected version (for example `0.1.0`, shown by `/api/health`), and steps to reproduce. Do not include real API keys or private data.
+
+The report is visible only to you and the maintainers. We aim to acknowledge reports within 5 working days, and we coordinate a fix and disclosure through the advisory. You need a GitHub account to file a report.
+
+## Supported versions
+
+Security fixes are made for the latest release (currently 0.1.x).
 
 ## Security model
 

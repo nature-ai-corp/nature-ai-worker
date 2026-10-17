@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nature-ai-worker"
+version = "0.1.0"
+description = "Lightweight, self-hosted general-purpose AI agent. Connect your model, configure, start working."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "httpx>=0.28",
+    "openai>=1.50",
+    "anthropic>=0.40",
+    "google-genai>=1.20",
+    "cryptography>=42",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+nature-worker = "nature_worker.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+nature_worker = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,26 @@
+# Local state: never commit
+/data/
+/workspace/
+.env
+.env.*
+!.env.example
+*.key
+credentials.enc
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+acceptance-*.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/

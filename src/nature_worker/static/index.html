@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nature AI Worker</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="brand">Nature AI Worker</div>
+      <button id="new-chat" class="primary">+ New chat</button>
+      <nav id="conversations" aria-label="Conversation history"></nav>
+      <div class="sidebar-footer">
+        <button id="open-files">Workspace files</button>
+        <button id="open-settings">Settings</button>
+        <div id="model-label" class="muted small"></div>
+      </div>
+    </aside>
+
+    <main id="chat">
+      <header id="chat-header">
+        <button id="toggle-sidebar" class="icon" aria-label="Show conversations">☰</button>
+        <h1 id="chat-title">New chat</h1>
+        <button id="delete-chat" class="danger" title="Delete conversation" hidden>Delete</button>
+      </header>
+      <section id="messages" aria-live="polite"></section>
+      <form id="composer">
+        <textarea id="input" rows="2" placeholder="Describe a task… (Enter to send, Shift+Enter for a new line)"></textarea>
+        <button id="send" class="primary" type="submit">Send</button>
+      </form>
+    </main>
+
+    <aside id="files-panel" hidden>
+      <header><h2>Workspace</h2><button id="close-files" class="icon" aria-label="Close">✕</button></header>
+      <p id="workspace-path" class="muted small"></p>
+      <div class="files-actions">
+        <label class="button">Upload file<input id="upload" type="file" hidden></label>
+        <button id="refresh-files">Refresh</button>
+      </div>
+      <ul id="file-list"></ul>
+      <div id="file-preview" hidden>
+        <header><strong id="preview-name"></strong><button id="close-preview" class="icon" aria-label="Close preview">✕</button></header>
+        <pre id="preview-content"></pre>
+      </div>
+    </aside>
+  </div>
+
+  <dialog id="settings-dialog">
+    <form id="settings-form" method="dialog">
+      <h2 id="settings-heading">Settings</h2>
+      <p id="setup-intro" class="muted" hidden>Welcome! Connect an AI model to get started. You can change this later in Settings.</p>
+      <label>Provider
+        <select id="s-provider" required></select>
+      </label>
+      <label>Model
+        <input id="s-model" required autocomplete="off" spellcheck="false">
+      </label>
+      <label id="s-endpoint-row">Endpoint URL
+        <input id="s-endpoint" autocomplete="off" spellcheck="false">
+      </label>
+      <label id="s-key-row">API key
+        <input id="s-key" type="password" autocomplete="off" spellcheck="false">
+        <span id="s-key-status" class="muted small"></span>
+      </label>
+      <details>
+        <summary>Advanced</summary>
+        <label class="check"><input id="s-web" type="checkbox"> Allow web fetching (each request still needs your approval)</label>
+        <label>Max steps per task <input id="s-steps" type="number" min="1" max="100"></label>
+      </details>
+      <div id="settings-result" role="status"></div>
+      <div class="dialog-actions">
+        <button type="button" id="s-test">Test connection</button>
+        <span class="spacer"></span>
+        <button type="button" id="s-cancel">Cancel</button>
+        <button type="button" id="s-save" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

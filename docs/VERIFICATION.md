@@ -1,5 +1,7 @@
 # v0.1 Verification Record
 
+> **Current status (v0.1.0, 2026-10-17):** tests pass on Python 3.11–3.14 and the Docker deployment passes its runtime checks, both in GitHub Actions. Real-provider acceptance passed for OpenAI (`gpt-4.1-mini`) and Ollama (`qwen3.8:27b`). Anthropic, Gemini and DeepSeek are not yet verified against their real services. See the [final section](#wkr-016--wkr-017-ci-docker-and-release-readiness-2026-10-17). The sections below are kept in date order as the record of how this was reached; earlier "NOT EXECUTED" entries were superseded by later ones.
+
 Date: 2026-10-17. Environment: Linux (WSL2), Python 3.14.4, SQLite 3.46.1, Chrome (headless).
 No Docker, no Ollama, and no provider API keys were available in this environment.
 
@@ -231,3 +233,58 @@ Verdict for B and C: **B PASS (OpenAI)** and **C PASS (Ollama)**. Anthropic, Gem
 1. Docker image build and run (`docker compose up -d --build`, then health check and one real task).
 2. README `git clone <this repository>` placeholders (needs the public repository URL).
 3. Decide whether Python 3.11–3.13 must be tested before release, or state "tested on 3.14" only (current README wording is accurate).
+
+---
+
+# WKR-016 / WKR-017 CI, Docker and Release Readiness (2026-10-17)
+
+## GitHub Actions results
+
+Workflow `.github/workflows/ci.yml`, run [39067644093](https://github.com/nature-ai-corp/nature-ai-worker/actions/runs/39067644093) on commit `150d18b` (push to `main`): **success**. Runner: `ubuntu-24.04`.
+
+| Job | Interpreter / tool | Result |
+|---|---|---|
+| Tests (Python 3.11) | CPython 3.11.17 | **PASS**: 104 passed, `pip check` clean |
+| Tests (Python 3.12) | CPython 3.12.15 | **PASS**: 104 passed, `pip check` clean |
+| Tests (Python 3.13) | CPython 3.13.16 | **PASS**: 104 passed, `pip check` clean |
+| Tests (Python 3.14) | CPython 3.14.8 | **PASS**: 104 passed, `pip check` clean |
+| Docker build and runtime | Docker Compose v2.38.2 | **PASS**: all checks below |
+
+Each test job installs `requirements.lock` and `requirements-dev.lock`, then the package itself (non-editable). The tests use a local fake model server; the workflow references no secrets and contacts no AI provider.
+
+Docker checks (`scripts/docker-smoke.sh`, run through the documented `docker compose` setup with `NATURE_WORKER_UID`/`GID` set to the runner user):
+
+- `/api/health` returns `{"ok":true,"version":"0.1.0"}`, and the image `HEALTHCHECK` reports `healthy`.
+- The container runs as the host user (1001:1001), not root, and cannot write to `/app`.
+- A host file in `./workspace` is listed and readable. A file uploaded through the API appears on the host, owned by the host user.
+- `data/` is mode 700, `credentials.enc` and `master.key` are mode 600, `worker.db` is owned by the host user, and the dummy key is not stored in plain text.
+- After `docker compose down` and `up` (a new container), the conversation, settings, the stored key and the workspace files are still there.
+- The key does not appear in the container logs. The provider endpoint is unreachable, so no model is contacted.
+
+Not covered: the default container user (1000) on a host whose user ID differs, Ollama on the host reached from the container, and Docker Desktop on macOS or Windows.
+
+## Provider verification summary
+
+| Provider | Verification |
+|---|---|
+| OpenAI (`gpt-4.1-mini`) | Real acceptance run; all checks PASS (F after the WKR-011 fix) |
+| Ollama (`qwen3.8:27b`) | Real acceptance run; all checks PASS |
+| Anthropic, Gemini, DeepSeek | Wire-format tests with the real SDKs against a fake server only. **Not verified against the real services** |
+| Other OpenAI-compatible servers | Covered by the OpenAI-format tests; no specific server verified |
+
+## Support scope
+
+- **Linux first.** Verified on Ubuntu 24.04 (CI) and WSL2 (development). macOS and native Windows are untested.
+- **Single user on localhost.** No authentication and no user separation. The port must not be exposed to a network without an authenticating reverse proxy. See `SECURITY.md`.
+
+## Final open-source audit
+
+| Area | Result |
+|---|---|
+| Git history (4 commits) | No private addresses, local paths or real credentials in any commit or message. All `sk-…` strings are labelled dummies in tests and `scripts/docker-smoke.sh`. Author and committer use a GitHub noreply address. The history was rewritten once before the first push (WKR-014) and not since. |
+| Tracked files | Source, tests, docs, scripts, lockfiles, CI workflow and five screenshots of demo data. No acceptance transcripts, databases, keys or `.env` files; nothing tracked matches `.gitignore`. |
+| License | Apache-2.0 (`LICENSE`, full text). All 38 runtime dependencies match `requirements.lock` and `THIRD_PARTY.md` exactly, and all are permissive (MIT, MIT-0, BSD, Apache-2.0, PSF-2.0) except `certifi` (MPL-2.0, unmodified). The source repository bundles no third-party code. A published Docker image would contain these packages, and their license files are installed with them. |
+| Security reporting | `SECURITY.md` points to GitHub private vulnerability reporting. That feature is not available while the repository is private and must be enabled after it becomes public. The organization profile lists no contact address. |
+| Docker | Non-root user, `127.0.0.1`-only port, volumes for data and workspace, pinned Python dependencies. The base image is pinned by tag (`python:3.14-slim`), not by digest. |
+| GitHub Actions | `permissions: contents: read`; triggers `push` (main), `pull_request` and `workflow_dispatch` (no `pull_request_target`); `persist-credentials: false`; third-party actions pinned by commit SHA; no secrets; job timeouts. |
+| Package version | `0.1.0` in `pyproject.toml`, `nature_worker.__version__`, the compose image tag, and the health response. |

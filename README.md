@@ -17,7 +17,7 @@ You do not need to write code, create agents, or design workflows. There is one 
 
 ## Installation
 
-### Option A: Python (3.11+; tested on 3.14)
+### Option A: Python 3.11–3.14
 
 ```bash
 git clone https://github.com/nature-ai-corp/nature-ai-worker.git
@@ -41,7 +41,7 @@ mkdir -p data workspace            # create these first so they are owned by you
 NATURE_WORKER_UID=$(id -u) NATURE_WORKER_GID=$(id -g) docker compose up -d --build
 ```
 
-Requires Docker Compose v2.24 or later (for the optional `.env` file). Without `NATURE_WORKER_UID`/`NATURE_WORKER_GID`, the container runs as user 1000. If your user ID differs, `./data` must be writable by that user.
+Requires Docker Compose v2.24 or later (for the optional `.env` file). CI builds the image and checks this exact setup on every push (see [Verification status](#verification-status)). Without `NATURE_WORKER_UID`/`NATURE_WORKER_GID`, the container runs as user 1000. If your user ID differs, `./data` must be writable by that user.
 
 Open **http://127.0.0.1:8080**. Put files for the agent in `./workspace`.
 
@@ -177,16 +177,32 @@ scripts/acceptance.py   Real-provider acceptance check
 
 ---
 
+## Verification status
+
+v0.1.0 was checked as follows. Details and evidence are in [docs/VERIFICATION.md](docs/VERIFICATION.md).
+
+| Area | How it was verified |
+|---|---|
+| Python 3.11, 3.12, 3.13, 3.14 | Full test suite (104 tests) in GitHub Actions on Ubuntu 24.04, with pinned dependencies |
+| Docker image and Compose setup | GitHub Actions builds the image, starts it with `docker compose`, and checks health, the workspace mount, file ownership and permissions, and persistence after the container is replaced |
+| OpenAI | Real acceptance run with `gpt-4.1-mini`: tool calling, report generation, workspace escape, delete approval and denial, error handling, persistence |
+| Ollama | Real acceptance run with `qwen3.8:27b`: the same checks, all passed |
+| Anthropic, Google Gemini, DeepSeek, other OpenAI-compatible servers | **Not yet verified against the real services.** The adapters are tested with the real SDKs against a local fake server that speaks each API's format. Please report problems. |
+
+The automated tests never contact a real AI provider. To check a provider yourself, see [docs/REAL_TESTING.md](docs/REAL_TESTING.md).
+
+---
+
 ## Known limitations
 
-- **Single user, local use.** There is no login. The server listens on localhost only. Do not expose it to a network without putting an authenticating reverse proxy in front.
+- **Single user, local use only.** There is no login and no user separation: anyone who can reach the port can use the agent, read the workspace and use your configured provider. The server listens on `127.0.0.1` by default, and Docker Compose publishes the port on `127.0.0.1` only. Do not bind to `0.0.0.0` or expose the port to a network without an authenticating reverse proxy in front. See [SECURITY.md](SECURITY.md) for the security model and residual risks.
 - **Text files only.** The agent reads UTF-8 text, CSV/TSV and JSON. PDF, Word, Excel and images are not supported.
 - **No streaming.** Replies appear when each step finishes. The UI polls for progress every second.
 - **No context management.** The whole conversation is sent to the model on every step. Very long conversations eventually exceed the model's context window. The app reports this clearly; start a new conversation.
 - **One run at a time per conversation.** Runs happen inside the HTTP request. If the server stops in the middle of a task, the task is not resumed. Unanswered tool calls are closed out the next time you send a message.
 - **Tool-calling quality depends on the model.** Small local models may call tools poorly. Use **Test connection** to check.
 - The web fetch tool returns text only (HTML, plain text, JSON, XML). It does not run JavaScript.
-- Tested on Linux with Python 3.14. macOS and Windows have not been tested yet.
+- **Linux first.** Tested on Linux (Ubuntu 24.04 in CI, and WSL2 during development). macOS and native Windows have not been tested; on Windows, use WSL2 or Docker.
 
 ## License
 

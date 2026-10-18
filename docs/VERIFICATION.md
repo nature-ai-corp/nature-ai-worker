@@ -292,3 +292,30 @@ Not covered: the default container user (1000) on a host whose user ID differs, 
 ## WKR-018: security reporting correction
 
 `SECURITY.md` referred to a contact address "listed in the repository profile", but the organization profile lists none. That reference was removed. GitHub Private Vulnerability Reporting is now documented as the only reporting channel, with the direct advisory link and a supported-versions note. It must be enabled when the repository is made public; GitHub does not offer it for private repositories.
+
+## WKR-022: usability fixes from user testing
+
+Four problems found while installing and using v0.1.0 on a second WSL computer. The agent loop, provider adapters, tools, approval enforcement and history storage are unchanged; the fixes are in the web UI, the file preview endpoint, startup, and the README.
+
+| Issue | Fix |
+|---|---|
+| UX-001 New chat kept the previous draft | **New chat** clears the message box. Unsent text is kept per conversation in the open page and comes back when you return to that chat. A chat that finishes loading after you switched away no longer replaces the one on screen, and the "Working" indicator and request errors only show in the chat they belong to. History and workspace files are not touched. |
+| UX-002 No clear file preview | Clicking a file name in **Workspace files** opens a read-only preview for `.md`, `.txt`, `.csv` and `.json` files up to 1 MB. Other types and larger files show a message with a **Download** link instead. The ⬇ download link is unchanged. The preview endpoint (`GET /api/files/content`, used only by the UI) enforces the type and size limits and the same workspace path checks as before. |
+| UX-003 `venv` failed on Ubuntu | README: Ubuntu and WSL prerequisites (`python3-venv` or the version-specific `python3.X-venv`), the Python version on Ubuntu 22.04/24.04, and recovery steps when `ensurepip` is missing. No dependency changes. |
+| UX-004 Port 8080 already in use | `nature-worker --port N` (or `NATURE_WORKER_PORT`). Default stays 8080 on `127.0.0.1`. If the port is taken, startup stops with a message naming the port and suggesting `--port`; invalid values are rejected with a usage error. Nothing else is stopped or changed. |
+
+### Automated tests
+
+`tests/test_usability.py` adds 24 tests: preview of each supported type, refusal of other types and oversized files (download still works), missing files and folders, path traversal, absolute paths and an escaping symlink, binary content with a text extension, `--port`, the unchanged default, a busy port (the other listener keeps working and no data folder is created), and invalid port values. Two of them drive the real server in headless Chrome over the DevTools protocol: one checks New chat and per-chat drafts and messages, the other the read-only preview and the Download links. They skip when Chrome is not installed.
+
+Against the v0.1.0 code, 20 of the 24 fail; with the fixes all pass. Full suite locally (Python 3.14.4): **128 passed**. Docker is not installed on this machine; the Docker job in GitHub Actions covers the container.
+
+### Manual verification
+
+Start the app in an empty folder with the [sales report demo](../examples/sales-report/) files in `./workspace` and any configured model.
+
+1. **New chat:** open an existing conversation and type text without sending it. Click **+ New chat**: the box is empty and the old conversation is still in the sidebar. Type something else, then open the old conversation: its own unsent text is back and only its messages are shown. Click **+ New chat** again: the box is empty.
+2. **Preview:** open **Workspace files** and click `sales.csv`: the rows appear under "Read-only preview" with a **Download** link. Upload any `.docx` or `.png` and click it: a message says preview is available for `.md`, `.txt`, `.csv` and `.json`, and Download still works. A text file over 1 MB shows "too large to preview".
+3. **Ubuntu install:** on a fresh Ubuntu 24.04 or WSL without `python3-venv`, `python3 -m venv .venv` fails with "ensurepip is not available"; follow the README recovery steps.
+4. **Port:** with something already on 8080 (for example `python3 -m http.server 8080 --bind 127.0.0.1`), run `nature-worker`: it exits with "Port 8080 is already in use" and the other server keeps running. `nature-worker --port 8081` starts at `http://127.0.0.1:8081`.
+5. **Unchanged security:** ask the agent to delete a file and deny it: the file stays. `curl 'http://127.0.0.1:8081/api/files/content?path=../README.md'` returns 400.

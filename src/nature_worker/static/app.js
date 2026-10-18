@@ -1,7 +1,9 @@
 "use strict";
 
 const $ = (sel) => document.querySelector(sel);
-const state = { settings: null, conversations: [], current: null, busy: false, poll: null };
+// drafts: unsent composer text per conversation id ("" is the new, unsaved chat).
+// busyId: the conversation the agent is working on for this page.
+const state = { settings: null, conversations: [], current: null, busy: false, busyId: null, poll: null, drafts: {}, nav: 0 };
 
 const MODEL_HINTS = {
   openai: "e.g. gpt-5-mini",
@@ -103,18 +105,36 @@ async function loadConversations() {
   }
 }
 
+function currentId() {
+  return state.current ? state.current.id : "";
+}
+
+// Keep the unsent text with the conversation it was typed in, and show the target's own draft.
+function switchDraft(toId) {
+  const text = $("#input").value;
+  if (text) state.drafts[currentId()] = text; else delete state.drafts[currentId()];
+  $("#input").value = state.drafts[toId] || "";
+}
+
 async function openConversation(id) {
+  switchDraft(id);
+  const nav = ++state.nav;
+  let conv = null;
   try {
-    state.current = await api("GET", `/api/conversations/${id}`);
-  } catch (e) {
-    state.current = null;
-  }
+    conv = await api("GET", `/api/conversations/${id}`);
+  } catch (e) { /* not found: show a new chat */ }
+  if (nav !== state.nav) return;  // the user opened another chat meanwhile
+  state.current = conv;
   history.replaceState(null, "", state.current ? "#" + state.current.id : "#");
   render();
   loadConversations();
 }
 
 function newChat() {
+  state.nav++;
+  switchDraft("");
+  delete state.drafts[""];
+  $("#input").value = "";
   state.current = null;
   history.replaceState(null, "", "#");
   render();
@@ -124,8 +144,11 @@ function newChat() {
 
 async function refreshCurrent() {
   if (!state.current) return;
+  const id = state.current.id;
   try {
-    state.current = await api("GET", `/api/conversations/${state.current.id}`);
+    const conv = await api("GET", `/api/conversations/${id}`);
+    if (currentId() !== id) return;  // the user switched chats while this was loading
+    state.current = conv;
     render();
   } catch (e) { /* keep showing what we have */ }
 }
@@ -211,7 +234,7 @@ function render() {
       }
     }
   }
-  if (state.busy || (conv && conv.running)) box.append(el("div", { class: "working" }, "Working"));
+  if ((state.busy && conv && state.busyId === conv.id) || (conv && conv.running)) box.append(el("div", { class: "working" }, "Working"));
   box.scrollTop = box.scrollHeight;
   $("#send").disabled = state.busy;
 }
@@ -239,7 +262,9 @@ function showError(message) {
 // ---------------------------------------------------------------- Sending
 
 async function runWithPolling(fn) {
+  const id = currentId();
   state.busy = true;
+  state.busyId = id;
   render();
   state.poll = setInterval(refreshCurrent, 1000);
   try {
@@ -248,7 +273,7 @@ async function runWithPolling(fn) {
     clearInterval(state.poll);
     state.busy = false;
     await refreshCurrent();
-    showError(e.message);
+    if (currentId() === id) showError(e.message);  // never show it in a different chat
     return;
   }
   clearInterval(state.poll);
@@ -261,8 +286,10 @@ async function runWithPolling(fn) {
 async function send(text) {
   if (!state.settings || !state.settings.configured) { openSettings(true); return; }
   if (!state.current) {
+    const nav = state.nav;
     try {
       const conv = await api("POST", "/api/conversations");
+      if (nav !== state.nav) return;  // the user switched chats before it was created
       state.current = { ...conv, messages: [], approvals: [], running: false };
       history.replaceState(null, "", "#" + conv.id);
     } catch (e) { showError(e.message); return; }
@@ -282,11 +309,11 @@ async function loadFiles() {
     if (data.files.length === 0) list.append(el("li", { class: "muted" }, "The workspace is empty. Upload a file or ask the agent to create one."));
     for (const f of data.files) {
       if (f.type === "dir") { list.append(el("li", { class: "dir" }, el("span", { class: "fname" }, f.path + "/"))); continue; }
-      const name = el("span", { class: "fname", title: "Preview" }, f.path);
+      const name = el("button", { type: "button", class: "fname", title: "Preview " + f.path }, f.path);
       name.addEventListener("click", () => previewFile(f.path));
       list.append(el("li", {}, name,
         el("span", { class: "muted small" }, formatSize(f.size)),
-        el("a", { href: "/api/files/download?path=" + encodeURIComponent(f.path), title: "Download" }, "⬇")));
+        el("a", { href: downloadUrl(f.path), title: "Download " + f.path }, "⬇")));
     }
   } catch (e) {
     list.replaceChildren(el("li", { class: "muted" }, e.message));
@@ -299,15 +326,30 @@ function formatSize(n) {
   return (n / 1048576).toFixed(1) + " MB";
 }
 
+function downloadUrl(path) {
+  return "/api/files/download?path=" + encodeURIComponent(path);
+}
+
+// Read-only preview. The server decides what can be previewed (type and size) and explains why not.
 async function previewFile(path) {
+  const content = $("#preview-content"), message = $("#preview-message");
   $("#preview-name").textContent = path;
+  $("#preview-download").href = downloadUrl(path);
+  content.textContent = "";
+  content.hidden = $("#preview-label").hidden = true;
+  message.textContent = "Loading…";
+  message.hidden = false;
+  $("#file-preview").hidden = false;
   try {
     const data = await api("GET", "/api/files/content?path=" + encodeURIComponent(path));
-    $("#preview-content").textContent = data.content + (data.truncated ? "\n\n[Preview truncated]" : "");
+    if ($("#preview-name").textContent !== path) return;  // another file was clicked meanwhile
+    content.textContent = data.content || "(empty file)";
+    content.hidden = $("#preview-label").hidden = false;
+    message.hidden = true;
   } catch (e) {
-    $("#preview-content").textContent = e.message;
+    if ($("#preview-name").textContent !== path) return;
+    message.textContent = e.message;
   }
-  $("#file-preview").hidden = false;
 }
 
 async function uploadFile(file) {

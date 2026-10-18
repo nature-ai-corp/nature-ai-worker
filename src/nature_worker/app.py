@@ -26,6 +26,8 @@ from .tools.workspace import Workspace
 log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 DEFAULT_MAX_STEPS = 20
+PREVIEW_EXTENSIONS = (".md", ".txt", ".csv", ".json")
+MAX_PREVIEW_BYTES = 1_000_000
 
 
 class SettingsIn(BaseModel):
@@ -276,12 +278,22 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/api/files/content")
     def file_content(path: str):
-        resolve_or_400(path)
+        """Read-only text preview for the web UI. Other files can still be downloaded."""
+        full = resolve_or_400(path)
+        if not full.is_file():
+            raise HTTPException(404, "File not found.")
+        if full.suffix.lower() not in PREVIEW_EXTENSIONS:
+            raise HTTPException(415, "Preview is available for .md, .txt, .csv and .json files. Use Download to open this file.")
+        size = full.stat().st_size
+        if size > MAX_PREVIEW_BYTES:
+            raise HTTPException(
+                413, f"This file is too large to preview ({size / 1_000_000:.1f} MB; the limit is 1 MB). Use Download to open it."
+            )
         try:
             text = workspace.read_text(path)
         except ToolError as e:
             raise HTTPException(400, str(e)) from None
-        return {"path": path, "content": text[:200_000], "truncated": len(text) > 200_000}
+        return {"path": path, "content": text}
 
     @app.get("/api/files/download")
     def download(path: str):

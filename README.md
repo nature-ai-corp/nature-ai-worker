@@ -22,7 +22,7 @@ Connect the model you already use, describe a task in plain language, and approv
 
 ## Quick start
 
-Requires Python 3.11–3.14 and a model that supports tool calling (for example, a tool-capable model in Ollama).
+Requires Python 3.11–3.14 and a model that supports tool calling (for example, a tool-capable model in Ollama). On Ubuntu or WSL, install the venv package first: `sudo apt install python3-venv` (see [Ubuntu and WSL prerequisites](#ubuntu-and-wsl-prerequisites)).
 
 ```bash
 git clone https://github.com/nature-ai-corp/nature-ai-worker.git
@@ -32,7 +32,7 @@ pip install .
 nature-worker
 ```
 
-Open **http://127.0.0.1:8080**, pick your provider and model, click **Test connection**, then **Save**. Put files in `./workspace` and describe a task.
+Open **http://127.0.0.1:8080** (port taken? run `nature-worker --port 8081`), pick your provider and model, click **Test connection**, then **Save**. Put files in `./workspace` and describe a task.
 
 Want something to try? The [sales report demo](examples/sales-report/) has a synthetic dataset, a ready-made task and the correct answers to check against. To run with Docker instead, see [Option B](#option-b-docker-compose).
 
@@ -43,6 +43,32 @@ Want something to try? The [sales report demo](examples/sales-report/) has a syn
 ## Installation
 
 ### Option A: Python 3.11–3.14
+
+#### Ubuntu and WSL prerequisites
+
+Ubuntu's Python does not include `venv` and `ensurepip` by default; they come in a separate package. Install it, plus `git`, once:
+
+```bash
+python3 --version                      # must be 3.11 or newer
+sudo apt update
+sudo apt install git python3-venv
+```
+
+`python3-venv` matches the default `python3`. If you run a specific version instead (for example `python3.13 -m venv .venv`), install that version's package: `sudo apt install python3.13-venv`. Ubuntu 24.04 ships Python 3.12, which works. Ubuntu 22.04 ships Python 3.10, which is too old: install Python 3.11 or newer, or use [Docker](#option-b-docker-compose). You do not need the system `python3-pip` package; `pip` comes with the virtual environment.
+
+**If `python3 -m venv .venv` fails** with *"ensurepip is not available"* or *"The virtual environment was not created successfully"*:
+
+```bash
+rm -rf .venv                           # the failed attempt leaves a broken .venv folder
+sudo apt install python3-venv          # or python3.X-venv, the exact package named in the error
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip --version                # should print a pip inside .venv
+```
+
+If `pip install .` reports *"externally-managed-environment"* or `pip: command not found`, the virtual environment is not active: run `source .venv/bin/activate` and try again.
+
+#### Install and start
 
 ```bash
 git clone https://github.com/nature-ai-corp/nature-ai-worker.git
@@ -57,6 +83,16 @@ Open **http://127.0.0.1:8080** in your browser.
 
 By default, data is stored in `./data` and the workspace folder is `./workspace`, both relative to the folder you start from.
 
+#### Use a different port
+
+The server listens on port 8080 by default. To use another port, for example because 8080 is already taken:
+
+```bash
+nature-worker --port 8081                  # or: NATURE_WORKER_PORT=8081 nature-worker
+```
+
+Then open **http://127.0.0.1:8081**. The address stays `127.0.0.1`, so the port is still reachable only from this computer. If the port is in use, the app stops with a message such as *"Port 8080 is already in use"* and suggests another port to try. It never stops the other program; to see what is using a port, run `ss -ltnp 'sport = :8080'`.
+
 ### Option B: Docker Compose
 
 ```bash
@@ -70,7 +106,7 @@ Requires Docker Compose v2.24 or later (for the optional `.env` file). CI builds
 
 Open **http://127.0.0.1:8080**. Put files for the agent in `./workspace`.
 
-The port is published on `127.0.0.1` only, so other machines cannot reach it.
+The port is published on `127.0.0.1` only, so other machines cannot reach it. To use a different host port, set `NATURE_WORKER_PORT`, for example `NATURE_WORKER_PORT=8081` before `docker compose up -d --build` (or in `.env`), and open **http://127.0.0.1:8081**.
 
 ---
 
@@ -113,7 +149,7 @@ You can change these later under **Settings**. Settings also includes:
    - *"Search my notes for anything about invoices and summarize it."*
    - *"Turn meeting-notes.txt into a list of action items in actions.md."*
 3. Tool calls appear in the chat as they happen; click a tool card to see its details. When the agent wants to overwrite or delete a file or fetch a web page, an **Approval needed** card appears. Nothing happens until you click **Approve** or **Deny**.
-4. Results are saved in the workspace. You can preview and download them from **Workspace files**.
+4. Results are saved in the workspace. In **Workspace files**, click a file name to preview it (read-only; `.md`, `.txt`, `.csv` and `.json` files up to 1 MB), or click ⬇ to download any file.
 
 Conversations are saved and listed in the sidebar. They are kept after restarts.
 
@@ -141,7 +177,7 @@ All settings are optional environment variables (see `.env.example`):
 | Variable | Default | Purpose |
 |---|---|---|
 | `NATURE_WORKER_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` inside Docker) |
-| `NATURE_WORKER_PORT` | `8080` | Port |
+| `NATURE_WORKER_PORT` | `8080` | Listen port. `nature-worker --port N` overrides it. With Docker Compose, the host port |
 | `NATURE_WORKER_DATA_DIR` | `./data` | SQLite database and encrypted credentials |
 | `NATURE_WORKER_WORKSPACE` | `./workspace` | The only folder the agent can access |
 | `NATURE_WORKER_ALLOWED_HOSTS` | `localhost,127.0.0.1,[::1]` | Accepted `Host` headers (DNS-rebinding protection) |

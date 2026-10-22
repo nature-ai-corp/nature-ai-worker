@@ -154,7 +154,7 @@ You can change these later under **Settings**. Settings also includes:
    - **Results**: files this work created or overwrote, with **Preview** (read-only; `.md`, `.txt`, `.csv` and `.json` up to 1 MB) and **Download**. Files it only read are listed separately as inputs.
    - **Work activity**: every tool call with its time and result; click one to see the details.
    - **Communication**: your messages and the agent's replies. Send follow-up instructions here.
-4. **My Work** lists all work with its status. Work is kept after restarts, and the browser's address keeps the open work, so a page refresh returns to it.
+4. **My Work** lists all work with its status. The **Work Center** in the sidebar also shows **Work In Progress** (running now), **Needs My Attention** (waiting for approval, failed, stopped or interrupted) and **Finished Work**; **Recent Work** below it opens a piece of work directly. Work is kept after restarts, and the browser's address keeps the open work, so a page refresh returns to it.
 
 Statuses describe how the agent's last run ended, not whether your goal was met. **Finished** means the agent ended its run with a reply; check the results. **Interrupted** means the run ended without a reply, for example because the app was closed; send a message such as "continue" to start a new run. A result file is marked if it was changed after this work wrote it, or is no longer in the workspace.
 

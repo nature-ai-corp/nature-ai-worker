@@ -97,10 +97,17 @@ function renderMarkdown(text) {
 
 // ---------------------------------------------------------------- Formatting
 
-const STATUS_FILTERS = [
-  ["all", "All"], ["needs_approval", "Needs your approval"], ["working", "Working"],
-  ["finished", "Finished"], ["problem", "Failed, stopped or interrupted"],
-];
+// Work Center views. Each groups statuses derived from the records (see work.py).
+const WORK_VIEWS = {
+  all: { title: "My Work", text: "All work, newest activity first.", empty: "No work yet." },
+  "in-progress": { title: "Work In Progress", statuses: ["working"],
+    text: "Work the agent is running now.", empty: "Nothing is running right now." },
+  attention: { title: "Needs My Attention", statuses: ["needs_approval", "failed", "stopped", "interrupted"],
+    text: "Work waiting for your approval, or that failed, stopped or was interrupted.",
+    empty: "Nothing needs your attention." },
+  finished: { title: "Finished Work", statuses: ["finished"],
+    text: "Work where the agent ended its run with a reply. Check the results.", empty: "No finished work yet." },
+};
 
 function formatTime(ts) {
   if (!ts) return "";
@@ -138,6 +145,8 @@ function formatClock(ts) {
 function parseRoute() {
   const h = location.hash.replace(/^#/, "");
   if (h === "/new") return { view: "new" };
+  const f = h.match(/^\/(in-progress|attention|finished)$/);
+  if (f) return { view: "list", filter: f[1] };
   const m = h.match(/^\/work\/([0-9a-f]+)$/) || h.match(/^([0-9a-f]{32})$/);
   if (m) return { view: "work", id: m[1] };
   return { view: "list" };
@@ -165,6 +174,7 @@ async function route() {
     if (conv.running) startPolling();
   } else {
     state.current = null;
+    state.filter = r.filter || "all";
     show(r.view);
     if (r.view === "new") renderNew(); else await loadWork();
   }
@@ -173,7 +183,10 @@ async function route() {
 
 function show(view) {
   for (const v of ["list", "new", "work"]) $("#view-" + v).hidden = v !== view;
-  $("#nav-my-work").classList.toggle("active", view === "list");
+  for (const a of document.querySelectorAll("#work-center .nav-item")) {
+    if (view === "list" && a.dataset.filter === state.filter) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  }
   const heading = { list: "#list-heading", new: "#new-heading", work: "#work-title" }[view];
   $(heading).focus({ preventScroll: true });
   $("#main").scrollTop = 0;
@@ -207,32 +220,24 @@ async function loadWork(navOnly = false) {
 function renderNav() {
   const nav = $("#work-nav");
   nav.replaceChildren();
-  $("#my-work-count").textContent = state.work.length ? String(state.work.length) : "";
   for (const w of state.work.slice(0, 15)) {
     const a = el("a", { href: "#/work/" + w.id, title: workTitle(w) },
-      el("span", { class: "dot s-" + w.status, "aria-hidden": "true" }),
       el("span", { class: "label" }, workTitle(w)),
       el("span", { class: "visually-hidden" }, ", " + w.status_label));
-    if (state.current && state.current.id === w.id) a.classList.add("active");
+    if (state.current && state.current.id === w.id) a.setAttribute("aria-current", "page");
     nav.append(a);
   }
 }
 
 function matchesFilter(w, key) {
-  if (key === "all") return true;
-  if (key === "problem") return ["failed", "stopped", "interrupted"].includes(w.status);
-  return w.status === key;
+  const statuses = WORK_VIEWS[key].statuses;
+  return !statuses || statuses.includes(w.status);
 }
 
 function renderList() {
-  const box = $("#status-filter");
-  box.replaceChildren();
-  for (const [key, label] of STATUS_FILTERS) {
-    const n = state.work.filter((w) => matchesFilter(w, key)).length;
-    const b = el("button", { type: "button", "aria-pressed": String(state.filter === key) }, `${label} (${n})`);
-    b.addEventListener("click", () => { state.filter = key; renderList(); });
-    box.append(b);
-  }
+  const view = WORK_VIEWS[state.filter];
+  $("#list-heading").textContent = view.title;
+  $("#list-description").textContent = view.text;
   const list = $("#work-list");
   list.replaceChildren();
   if (state.work.length === 0) {
@@ -243,7 +248,7 @@ function renderList() {
     return;
   }
   const shown = state.work.filter((w) => matchesFilter(w, state.filter));
-  if (shown.length === 0) list.append(el("li", { class: "empty muted" }, "No work with this status."));
+  if (shown.length === 0) list.append(el("li", { class: "empty muted" }, view.empty));
   for (const w of shown) {
     const meta = [`Last activity ${formatTime(w.updated_at)}`];
     if (w.deliverables) meta.push(plural(w.deliverables, "result file"));
@@ -501,7 +506,7 @@ function renderCommunication(conv) {
     if (m.role === "user") {
       box.append(el("div", { class: "msg user" }, el("div", { class: "who" }, "You"), el("div", { class: "text" }, m.content)));
     } else if (m.role === "assistant" && m.content) {
-      const div = el("div", { class: "msg assistant" }, el("div", { class: "who" }, "Agent"));
+      const div = el("div", { class: "msg assistant" }, el("div", { class: "who" }, "General Agent"));
       const body = el("div", { class: "md" });
       body.innerHTML = renderMarkdown(m.content);
       div.append(body);

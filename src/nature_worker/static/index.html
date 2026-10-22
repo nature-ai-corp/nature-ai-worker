@@ -10,41 +10,48 @@
   <a class="skip-link" href="#main">Skip to content</a>
   <div id="app">
     <aside id="sidebar" aria-label="Navigation">
-      <div class="brand">Nature AI Worker</div>
-      <button id="new-work" class="primary">+ New Work</button>
-      <nav aria-label="Work">
-        <a id="nav-my-work" href="#/">My Work <span id="my-work-count" class="count"></span></a>
+      <div class="brand"><span class="logo" aria-hidden="true">N</span><span class="brand-name">NATURE AI</span><span class="brand-product">Worker</span></div>
+      <button id="new-work" class="new-work">+ New Work</button>
+      <nav id="work-center" aria-labelledby="work-center-heading">
+        <div id="work-center-heading" class="nav-group">Work Center</div>
+        <a id="nav-my-work" class="nav-item" href="#/" data-filter="all">My Work</a>
+        <a class="nav-item" href="#/in-progress" data-filter="in-progress">Work In Progress</a>
+        <a class="nav-item" href="#/attention" data-filter="attention">Needs My Attention</a>
+        <a class="nav-item" href="#/finished" data-filter="finished">Finished Work</a>
       </nav>
-      <h2 class="nav-heading">Recent work</h2>
-      <nav id="work-nav" aria-label="Recent work"></nav>
+      <h2 class="nav-heading" id="recent-heading">Recent Work</h2>
+      <nav id="work-nav" aria-labelledby="recent-heading"></nav>
       <div class="sidebar-footer">
-        <button id="open-files">Workspace files</button>
-        <button id="open-settings">Settings</button>
-        <div id="model-label" class="muted small"></div>
+        <button id="open-files" class="nav-item">Workspace files</button>
+        <button id="open-settings" class="nav-item">Settings</button>
+        <div id="model-label" class="small"></div>
       </div>
     </aside>
 
     <main id="main" tabindex="-1">
       <header id="topbar">
         <button id="toggle-sidebar" class="icon" aria-label="Show navigation">☰</button>
-        <span class="brand">Nature AI Worker</span>
+        <span class="brand"><span class="logo" aria-hidden="true">N</span><span class="brand-name">NATURE AI</span><span class="brand-product">Worker</span></span>
       </header>
 
       <!-- My Work: the list of work records (existing conversations) -->
       <section id="view-list" class="view" aria-labelledby="list-heading" hidden>
-        <div class="view-header">
+        <header class="page-header">
           <h1 id="list-heading" tabindex="-1">My Work</h1>
           <button id="list-new-work" class="primary">+ New Work</button>
+        </header>
+        <div class="page-body">
+          <p id="list-description" class="muted"></p>
+          <ul id="work-list" class="work-list"></ul>
         </div>
-        <div id="status-filter" class="filters" role="group" aria-label="Filter by status"></div>
-        <ul id="work-list" class="work-list"></ul>
       </section>
 
       <!-- New Work: assign a piece of work in plain language -->
       <section id="view-new" class="view" aria-labelledby="new-heading" hidden>
-        <div class="view-header">
+        <header class="page-header">
           <h1 id="new-heading" tabindex="-1">New Work</h1>
-        </div>
+        </header>
+        <div class="page-body">
         <form id="new-form" class="card">
           <label for="new-input" class="field-label">What should the agent do?</label>
           <textarea id="new-input" rows="5" placeholder="For example: Read sales.csv and write report.md with revenue totals per region."></textarea>
@@ -57,18 +64,20 @@
         </form>
         <h2 class="section-title">Examples</h2>
         <div id="new-examples" class="examples"></div>
+        </div>
       </section>
 
       <!-- Work detail: one conversation shown as a piece of work -->
       <section id="view-work" class="view" aria-labelledby="work-title" hidden>
-        <a href="#/" class="back">← My Work</a>
-        <div class="view-header work-header">
+        <header class="page-header">
           <div class="work-heading">
             <h1 id="work-title" tabindex="-1"></h1>
             <span id="work-status" class="status"></span>
           </div>
           <button id="delete-work" class="danger">Delete</button>
-        </div>
+        </header>
+        <div class="page-body">
+        <a href="#/" class="back">← My Work</a>
 
         <section class="block" aria-labelledby="facts-heading">
           <h2 id="facts-heading" class="section-title">Execution facts</h2>
@@ -100,6 +109,7 @@
           </form>
           <p id="composer-hint" class="muted small">Enter to send, Shift+Enter for a new line.</p>
         </section>
+        </div>
       </section>
     </main>
 

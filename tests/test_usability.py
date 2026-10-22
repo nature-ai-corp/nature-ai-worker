@@ -275,12 +275,12 @@ def test_new_work_clears_the_draft_and_keeps_drafts_per_work(ui, fake_model):
     _open_work(b, "second work")
     assert b.eval("document.querySelector('#input').value") == ""
     assert b.eval("[...document.querySelectorAll('#messages .msg')].map(m => m.textContent)") == \
-        ["Yousecond work", "Agentreply to second work"]
+        ["Yousecond work", "General Agentreply to second work"]
 
     _open_work(b, "first work")
     assert b.eval("document.querySelector('#input').value") == "unsent draft for the first work"
     assert b.eval("[...document.querySelectorAll('#messages .msg')].map(m => m.textContent)") == \
-        ["Youfirst work", "Agentreply to first work"]
+        ["Youfirst work", "General Agentreply to first work"]
 
     b.click("#new-work")
     b.wait("!document.querySelector('#view-new').hidden")

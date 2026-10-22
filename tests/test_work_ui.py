@@ -54,7 +54,7 @@ def test_empty_my_work_is_the_entry_point(app):
     assert b.text("#list-heading") == "My Work"
     assert "No work yet" in b.text("#work-list")
     b.click("#work-list button", "+ New Work")
-    b.wait("!document.querySelector('#view-new').hidden")
+    b.wait("!document.querySelector('#view-new').hidden && document.querySelector('#new-files-hint').textContent")
     assert "sales.csv" not in b.text("#new-files-hint") and "1 file" in b.text("#new-files-hint")
 
 
@@ -94,7 +94,7 @@ def test_new_work_report_generation_and_results(app, fake_model):
     # Activity and communication come from the stored records.
     assert b.eval("[...document.querySelectorAll('#work-activity .tool .name')].map(x => x.textContent)") == ["read_file", "write_file"]
     assert b.eval("[...document.querySelectorAll('#work-activity .tool .state')].map(x => x.textContent)") == ["done", "done"]
-    assert b.eval("[...document.querySelectorAll('#messages .msg .who')].map(x => x.textContent)") == ["You", "Agent"]
+    assert b.eval("[...document.querySelectorAll('#messages .msg .who')].map(x => x.textContent)") == ["You", "General Agent"]
     b.click("#nav-my-work")
     b.wait("document.querySelectorAll('#work-list .work-row').length === 1")
     assert "Finished" in b.text("#work-list") and "1 result file" in b.text("#work-list")
@@ -231,3 +231,46 @@ def test_my_work_list_follows_running_work(app, fake_model):
     b.click("#work-list .work-row", "Slow work")
     b.wait("document.querySelector('#work-status').textContent === 'Finished'")
     assert b.text("#work-update").count("Done.") == 1
+
+
+def test_work_center_views_and_platform_style(app, fake_model):
+    """Work Center groups existing work by derived status; selection and colors follow the Platform reference."""
+    b, base = app["browser"], app["base"]
+    def add(text, *responses):
+        conv = httpx.post(base + "/api/conversations").json()["id"]
+        fake_model.queue(*responses)
+        httpx.post(f"{base}/api/conversations/{conv}/messages", json={"text": text}, timeout=30)
+    add("Finished one", openai_text("Done."))
+    add("Failed one", openai_error(500, "boom"))
+    add("Approval one", openai_tool_call(("delete_file", {"path": "sales.csv"})))
+    b.eval("loadWork()")
+    b.wait("document.querySelectorAll('#work-nav a').length === 3")
+
+    def view(label):
+        b.click("#work-center .nav-item", label)
+        b.wait(f"document.querySelector('#list-heading').textContent === {json.dumps(label)}")
+        current = b.eval("[...document.querySelectorAll('#sidebar [aria-current=page]')].map(x => x.textContent)")
+        assert current == [label]  # exactly one selected item
+        return b.eval("[...document.querySelectorAll('#work-list .row-title')].map(x => x.textContent)")
+
+    assert view("My Work") == ["Approval one", "Failed one", "Finished one"]
+    assert view("Needs My Attention") == ["Approval one", "Failed one"]
+    assert view("Finished Work") == ["Finished one"]
+    assert view("Work In Progress") == []
+    assert "Nothing is running right now." in b.text("#work-list")
+    assert b.eval("location.hash") == "#/in-progress"
+    b.eval("location.reload()")  # the selected view survives a refresh
+    b.wait("document.querySelector('#list-heading') && document.querySelector('#list-heading').textContent === 'Work In Progress'")
+
+    # Opening work selects it under Recent Work; no Work Center item stays selected.
+    b.click("#work-nav a", "Failed one")
+    b.wait("document.querySelector('#work-title').textContent === 'Failed one'")
+    assert b.eval("[...document.querySelectorAll('#sidebar [aria-current=page]')].map(x => x.textContent)") == ["Failed one, Failed"]
+
+    css = lambda sel, prop: b.eval(f"getComputedStyle(document.querySelector({json.dumps(sel)}))[{json.dumps(prop)}]")
+    assert css("#sidebar", "backgroundColor") == "rgb(19, 22, 30)"          # dark navy (#13161e)
+    assert css("#work-nav a[aria-current=page]", "backgroundColor") == "rgb(35, 38, 46)"  # selection (#23262e)
+    assert css("#new-work", "backgroundColor") == "rgb(26, 28, 41)"         # New Work button (#1a1c29)
+    assert css("#main", "backgroundColor") in ("rgba(0, 0, 0, 0)", "rgb(255, 255, 255)")
+    assert css("body", "backgroundColor") == "rgb(255, 255, 255)"           # light working area
+    assert b.text("#sidebar .brand-name") == "NATURE AI"

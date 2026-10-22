@@ -372,3 +372,29 @@ These have no truthful source in Standalone Worker, so they are not shown:
 Full suite locally (Python 3.14.4): **152 passed**. Docker is not installed on this machine; the Docker job in GitHub Actions covers the container.
 
 Screenshots `docs/screenshots/10-my-work.png`, `11-work-detail.png` and `12-work-approval.png` show the new UI with a scripted test model, not a real AI model. The earlier screenshots are kept as the v0.1.0 record.
+
+## WKR-024: Platform visual alignment
+
+The reference was a screenshot of the NATURE AI Platform task page, supplied by the owner: 633×628 px, sidebar and the top of the main area. Its colors and spacing were measured from the image pixels, not estimated: sidebar `#13161e`, New Task button `#1a1c29` with border `#2a2d37`, selected item `#23262e`, logo blue about `#2b5bdc`, white main area with `#d9d9d9` dividers, message card `#f7f6f9`. The layout is a 240 px sidebar with 12 px padding, a 44 px header bar, and items on a 36–38 px pitch.
+
+Applied to Worker (presentation only; routes, data and agent behavior unchanged):
+
+- Dark navy sidebar with the "N" logo and **NATURE AI** wordmark, a dark **+ New Work** button, the **Work Center** group (My Work, Work In Progress, Needs My Attention, Finished Work), and **Recent Work** with the reference's selection style. Workspace files and Settings sit at the bottom of the sidebar.
+- A light working area with a header bar holding each page's title, and agent replies in the reference's card style, labelled "General Agent".
+- Work Center views are filters over the statuses derived in WKR-023 (`#/in-progress`, `#/attention`, `#/finished`):
+  - **Needs My Attention:** waiting for approval, failed, stopped or interrupted.
+  - **Finished Work:** runs that ended with a reply.
+
+  Nothing new is recorded.
+- A crop at the reference size, measured with the same script, puts every sidebar row within 1–2 px of the reference relative to the New Work button.
+
+Remaining differences, kept on purpose or not verifiable:
+
+- **Wording.** "Work" instead of "Task", and "Finished Work" instead of "Completed Tasks", following WKR-023's rule not to claim completion. "Recent Work" instead of "Conversations".
+- **Product name.** A small "Worker" after "NATURE AI", so Standalone Worker is not mistaken for the Platform.
+- **Fonts.** The font stack prefers Segoe UI, as in the reference, which was captured on Windows. The Linux test machine renders a fallback font, so text widths in these screenshots differ slightly.
+- **Main area content.** Not visible in the reference beyond the header and one message card. Buttons and links use the logo blue; the reference does not show the Platform's button or link colors.
+- **Dark mode.** The main area is now always light, as in the reference; the operating system's dark setting no longer changes it.
+- **Not in the reference, kept from WKR-023.** Work list status badges, the "← My Work" link, the Delete action.
+
+Tests: `test_work_center_views_and_platform_style` checks each Work Center view's contents, exactly one selected sidebar item (`aria-current="page"`), that the selected view survives a refresh, and the reference colors. Existing tests were updated for the "General Agent" label. A WKR-023 test that read the New Work file hint before it loaded now waits for it. Full suite locally: **153 passed**. The README screenshots `10`–`12` now show this style.

@@ -53,6 +53,16 @@
         </header>
         <div class="page-body">
         <form id="new-form" class="card">
+          <div class="template-picker">
+            <span id="template-label" class="field-label">Template</span>
+            <button type="button" id="template-button" aria-haspopup="listbox" aria-expanded="false"
+                    aria-labelledby="template-label template-name">
+              <span id="template-name">General Work</span><span class="chevron" aria-hidden="true">▾</span>
+            </button>
+            <ul id="template-list" role="listbox" aria-labelledby="template-label" tabindex="-1" hidden></ul>
+            <p id="template-description" class="muted small"></p>
+            <div id="template-notice" class="template-notice small" role="status" hidden></div>
+          </div>
           <label for="new-input" class="field-label">What should the agent do?</label>
           <textarea id="new-input" rows="5" placeholder="For example: Read sales.csv and write report.md with revenue totals per region."></textarea>
           <p id="new-files-hint" class="muted small"></p>

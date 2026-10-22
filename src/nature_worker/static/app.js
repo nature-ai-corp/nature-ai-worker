@@ -7,6 +7,8 @@ const state = {
   settings: null, work: [], current: null, filter: "all",
   busy: false, busyId: null, poll: null, drafts: {}, nav: 0,
   openTools: new Set(), listTimer: null,
+  // New Work templates, the selected one, and an open "keep your text?" question with the template to restore.
+  templates: [], template: null, onKeep: null, keptTemplate: null,
 };
 
 const MODEL_HINTS = {
@@ -268,11 +270,168 @@ const EXAMPLES = [
   "Read sales.csv and write report.md with revenue totals per region.",
 ];
 
+// ---------------------------------------------------------------- New Work templates
+// A template only prepares editable text in the assignment field. Text the user typed is never
+// replaced without an explicit click; the New Work draft survives a page refresh (this tab only).
+
+const DRAFT_KEY = "nature-worker-new-work";
+
+function storedDraft() {
+  try { return JSON.parse(sessionStorage.getItem(DRAFT_KEY) || "null"); } catch (e) { return null; }
+}
+
+function saveNewDraft() {
+  try {
+    // While a template question is open, the template that matches the field is the previous one.
+    const t = state.keptTemplate || state.template;
+    sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ template: t && t.id, text: $("#new-input").value }));
+  } catch (e) { /* storage unavailable: the draft just won't survive a refresh */ }
+}
+
+function clearNewDraft() {
+  try { sessionStorage.removeItem(DRAFT_KEY); } catch (e) { /* ignore */ }
+}
+
+async function loadTemplates() {
+  if (state.templates.length) return;
+  try {
+    const data = await api("GET", "/api/templates");
+    state.templates = data.templates;
+  } catch (e) {
+    state.templates = [{ id: "general", name: "General Work", description: "", instruction: "" }];
+  }
+}
+
+function templateById(id) {
+  return state.templates.find((t) => t.id === id) || state.templates[0];
+}
+
+// The field holds only template text (or nothing), so replacing it loses nothing the user wrote.
+function fieldIsUntouched() {
+  const value = $("#new-input").value;
+  return !value.trim() || (state.template && value === state.template.instruction);
+}
+
+function showTemplate(t) {
+  state.template = t;
+  $("#template-name").textContent = t.name;
+  $("#template-description").textContent = t.description;
+  for (const li of $("#template-list").children) li.setAttribute("aria-selected", String(li.dataset.id === t.id));
+}
+
+function hideNotice() {
+  state.onKeep = state.keptTemplate = null;
+  $("#template-notice").hidden = true;
+  $("#template-notice").replaceChildren();
+}
+
+// Ask before touching the user's text: insert above it, replace it, or keep it.
+// onKeep runs when the user keeps their text (or sends it while the question is open).
+function offerText(label, text, onKeep) {
+  const box = $("#template-notice");
+  const input = $("#new-input");
+  const done = () => { hideNotice(); saveNewDraft(); input.focus(); };
+  const actions = el("div", { class: "notice-actions" },
+    el("button", { type: "button", onclick: () => { input.value = text + "\n\n" + input.value; done(); } },
+      `Insert ${label} above my text`),
+    el("button", { type: "button", onclick: () => { input.value = text; done(); } }, "Replace my text"),
+    el("button", { type: "button", onclick: () => { keepUserText(); input.focus(); } }, "Keep my text"));
+  box.replaceChildren(el("p", {}, `Your text was kept. You can add the ${label} or replace your text with them.`), actions);
+  box.hidden = false;
+  state.onKeep = onKeep || null;
+}
+
+function keepUserText() {
+  if (state.onKeep) state.onKeep();
+  hideNotice();
+  saveNewDraft();
+}
+
+function selectTemplate(t) {
+  if (state.onKeep) keepUserText();  // an unanswered question counts as "keep"
+  const previous = state.template;
+  if (fieldIsUntouched()) {
+    showTemplate(t);
+    $("#new-input").value = t.instruction;
+  } else if (!t.instruction) {
+    showTemplate(t);  // nothing to insert, and the user's text stays as it is
+  } else {
+    // The selection only changes once the template's text is actually in the field.
+    showTemplate(t);
+    offerText(`"${t.name}" instructions`, t.instruction, () => showTemplate(previous));
+    state.keptTemplate = previous;
+  }
+  saveNewDraft();
+}
+
+function renderTemplateList() {
+  const list = $("#template-list");
+  list.replaceChildren();
+  for (const t of state.templates) {
+    const li = el("li", { role: "option", id: "tpl-" + t.id, "aria-selected": "false" },
+      el("span", { class: "tpl-name" }, t.name), el("span", { class: "tpl-desc" }, t.description));
+    li.dataset.id = t.id;
+    li.addEventListener("click", () => { selectTemplate(t); closeTemplateList(true); });
+    list.append(li);
+  }
+}
+
+function openTemplateList() {
+  const list = $("#template-list");
+  list.hidden = false;
+  $("#template-button").setAttribute("aria-expanded", "true");
+  setActiveOption(state.template.id);
+  list.focus();
+}
+
+function closeTemplateList(focusButton) {
+  $("#template-list").hidden = true;
+  $("#template-button").setAttribute("aria-expanded", "false");
+  if (focusButton) $("#template-button").focus();
+}
+
+function setActiveOption(id) {
+  const list = $("#template-list");
+  list.setAttribute("aria-activedescendant", "tpl-" + id);
+  for (const li of list.children) li.classList.toggle("active", li.dataset.id === id);
+  const li = $("#tpl-" + id);
+  if (li) li.scrollIntoView({ block: "nearest" });
+}
+
+function templateListKeys(e) {
+  const ids = state.templates.map((t) => t.id);
+  const active = ($("#template-list").getAttribute("aria-activedescendant") || "").replace(/^tpl-/, "");
+  let i = Math.max(ids.indexOf(active), 0);
+  if (e.key === "ArrowDown") i = Math.min(i + 1, ids.length - 1);
+  else if (e.key === "ArrowUp") i = Math.max(i - 1, 0);
+  else if (e.key === "Home") i = 0;
+  else if (e.key === "End") i = ids.length - 1;
+  else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectTemplate(templateById(ids[i])); closeTemplateList(true); return; }
+  else if (e.key === "Escape") { e.preventDefault(); closeTemplateList(true); return; }
+  else if (e.key === "Tab") { closeTemplateList(false); return; }
+  else return;
+  e.preventDefault();
+  setActiveOption(ids[i]);
+}
+
 async function renderNew() {
+  await loadTemplates();
+  if (!$("#template-list").children.length) renderTemplateList();
+  const draft = storedDraft();
+  if (draft && !$("#new-input").value) {
+    showTemplate(templateById(draft.template));
+    $("#new-input").value = draft.text || "";
+  } else if (!state.template) {
+    showTemplate(state.templates[0]);
+  }
   const ex = $("#new-examples");
   ex.replaceChildren();
   for (const text of EXAMPLES) {
-    ex.append(el("button", { type: "button", class: "example", onclick: () => { $("#new-input").value = text; $("#new-input").focus(); } }, text));
+    ex.append(el("button", { type: "button", class: "example", onclick: () => {
+      if (state.onKeep) keepUserText();
+      if (fieldIsUntouched()) { $("#new-input").value = text; hideNotice(); saveNewDraft(); $("#new-input").focus(); }
+      else offerText("example", text);
+    } }, text));
   }
   try {
     const data = await api("GET", "/api/files");
@@ -284,7 +443,11 @@ async function renderNew() {
 }
 
 function newWork() {
-  $("#new-input").value = "";  // a fresh assignment every time
+  // A fresh assignment every time: General Work and an empty field.
+  clearNewDraft();
+  hideNotice();
+  if (state.templates.length) showTemplate(state.templates[0]);
+  $("#new-input").value = state.templates.length ? state.templates[0].instruction : "";
   go("#/new");
 }
 
@@ -297,6 +460,9 @@ async function startWork(text) {
   } catch (e) { alert(e.message); return; }
   if (nav !== state.nav) return;
   $("#new-input").value = "";
+  clearNewDraft();
+  hideNotice();
+  if (state.templates.length) showTemplate(state.templates[0]);
   state.current = { ...conv, messages: [{ role: "user", content: text }], approvals: [], running: true, work: { instruction: text } };
   history.replaceState(null, "", "#/work/" + conv.id);
   state.nav++;
@@ -756,12 +922,24 @@ async function init() {
   submitOnEnter($("#input"), $("#composer"));
   $("#new-form").addEventListener("submit", (e) => {
     e.preventDefault();
+    if (state.onKeep) keepUserText();  // sending answers an open template question with "keep"
     const text = $("#new-input").value.trim();
     if (!text) { $("#new-input").focus(); return; }
     if (state.busy) { alert("The agent is still working on other work. Wait until it finishes."); return; }
     startWork(text);
   });
   $("#new-work").addEventListener("click", newWork);
+  $("#new-input").addEventListener("input", saveNewDraft);
+  $("#template-button").addEventListener("click", () => {
+    if ($("#template-list").hidden) openTemplateList(); else closeTemplateList(true);
+  });
+  $("#template-button").addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); openTemplateList(); }
+  });
+  $("#template-list").addEventListener("keydown", templateListKeys);
+  document.addEventListener("click", (e) => {
+    if (!$("#template-list").hidden && !e.target.closest(".template-picker")) closeTemplateList(false);
+  });
   $("#list-new-work").addEventListener("click", newWork);
   $("#new-manage-files").addEventListener("click", () => { $("#files-panel").hidden = false; loadFiles(); });
   $("#toggle-sidebar").addEventListener("click", () => $("#sidebar").classList.toggle("open"));

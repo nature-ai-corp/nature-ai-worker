@@ -1,0 +1,40 @@
+{
+  "_comment": "New Work templates. Each prepares editable instructions only; it grants no tools or permissions. Fields: id (stable, lowercase), name, description, instruction (text placed in the assignment field), enabled. The first enabled template is the default.",
+  "templates": [
+    {
+      "id": "general",
+      "name": "General Work",
+      "description": "Describe any task in your own words. The agent can list, read, search and write text files in your workspace, summarize tables and do exact arithmetic.",
+      "instruction": "",
+      "enabled": true
+    },
+    {
+      "id": "research-summary",
+      "name": "Research & Summary",
+      "description": "Find what the files in your workspace say about a topic and write a summary that names its sources. Uses workspace files only (text, Markdown, CSV, JSON).",
+      "instruction": "Topic: \n\nFind the files in my workspace that cover this topic, read them, and write summary.md with:\n- a short overview (3 to 5 sentences)\n- the key findings as bullet points, each naming the file it came from\n- open questions the files do not answer\n\nOnly use information from the files. If they do not contain enough information, say so instead of guessing.",
+      "enabled": true
+    },
+    {
+      "id": "data-analysis",
+      "name": "Data Analysis",
+      "description": "Analyze a CSV, TSV or JSON table in your workspace: totals, averages, comparisons and unusual values, calculated exactly. Excel files are not supported; save them as CSV first.",
+      "instruction": "File: \nQuestion: \n\nSummarize the table's columns and rows, then answer the question. Calculate totals, averages and comparisons exactly, and write the results to analysis.md with a short note on how each number was calculated. Point out missing or unusual values.",
+      "enabled": true
+    },
+    {
+      "id": "document-report",
+      "name": "Document & Report",
+      "description": "Draft a structured document or report as a Markdown (.md) file, optionally based on files in your workspace. Word and PDF output are not supported.",
+      "instruction": "Document: \nAudience: \nBased on these files (optional): \n\nWrite the document as report.md in Markdown with a title, a short summary at the top, clear section headings, and a conclusion or next steps. When you use information from my files, name the file it came from. If report.md already exists, use a new file name instead.",
+      "enabled": true
+    },
+    {
+      "id": "file-organization",
+      "name": "File Organization",
+      "description": "Review the files in your workspace and propose how to organize them. The agent cannot move or rename files: it writes a plan you can follow. Deleting a file always needs your approval.",
+      "instruction": "Folder (leave empty for the whole workspace): \n\nList the files, read enough of each text file to understand what it is, and write file-plan.md with:\n- a table of every file: name, size, what it contains, and a suggested folder\n- a proposed folder structure\n- likely duplicates or outdated files, with the reason\n\nDo not delete or overwrite any files.",
+      "enabled": true
+    }
+  ]
+}

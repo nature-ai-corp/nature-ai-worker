@@ -398,3 +398,34 @@ Remaining differences, kept on purpose or not verifiable:
 - **Not in the reference, kept from WKR-023.** Work list status badges, the "← My Work" link, the Delete action.
 
 Tests: `test_work_center_views_and_platform_style` checks each Work Center view's contents, exactly one selected sidebar item (`aria-current="page"`), that the selected view survives a refresh, and the reference colors. Existing tests were updated for the "General Agent" label. A WKR-023 test that read the New Work file hint before it loaded now waits for it. Full suite locally: **153 passed**. The README screenshots `10`–`12` now show this style.
+
+## WKR-025: New Work templates
+
+New Work has a **Template** selector at the top of the form: General Work (default), Research & Summary, Data Analysis, Document & Report and File Organization. Selecting one shows its description and places its instructions in the assignment field, where they can be edited. **Start work** sends exactly the text in that field through the existing conversation API. Nothing else is sent or stored.
+
+- **Data.** Templates are defined in `src/nature_worker/work_templates.json`. Each has `id`, `name`, `description`, `instruction` and `enabled`. `templates.py` checks the file when the app starts: id format, required text fields, length limits, unique ids, at least one enabled template. A read-only `GET /api/templates` returns the enabled ones; the first is the default. The file ships in the package (`pyproject.toml` package data).
+- **User text.** A template replaces the field only when it is empty or still holds the previous template's unchanged text. Otherwise the text is kept and a notice offers *Insert above my text*, *Replace my text* or *Keep my text*. Keeping, or sending while the notice is open, restores the previous selection so the label matches the text. The example buttons follow the same rule.
+- **Refresh.** The unsent New Work text and template survive a page refresh in the same tab (`sessionStorage`). **+ New Work** starts fresh with General Work.
+- **Accessibility.** The selector is a button with a listbox. It supports arrow keys, Home, End, Enter, Space and Escape, `aria-expanded`, `aria-selected` and `aria-activedescendant`.
+- **Capabilities.** Templates are text only. They grant no tools, permissions or approvals. Their wording stays within what Worker can do: workspace text, CSV/TSV and JSON files, Markdown output, no Excel, Word or PDF. File Organization says the agent cannot move or rename files and asks it not to delete anything.
+
+Tests:
+- `tests/test_templates.py` (14): the packaged templates and the API; disabled templates are left out; invalid files are rejected; no template text promises email, browsing, code execution, Office or PDF output, scheduling, departments or modules.
+- `tests/test_templates_ui.py` (8, headless Chrome against the real server process):
+  - the General Work default
+  - switching templates
+  - editing, with keep, insert and replace
+  - the example buttons
+  - keyboard selection
+  - submission, checking that the request the model received contains exactly the field text
+  - refresh, including a refresh while the notice is open
+  - a templated work that tries to delete a file: it still needs approval, and Deny leaves the file unchanged
+  - the work history listing
+  - the open selector at 390 px
+
+Existing work history, preview and download, and approval tests run unchanged. Full suite locally: **175 passed**.
+
+Known limitations:
+- Which template was used is not stored with the work; only the submitted text is.
+- Templates are edited in the packaged JSON file. There is no in-app editor and no per-user file; a package reinstall replaces local edits.
+- No Platform New Task reference was available, so the selector follows the WKR-024 style rather than a verified Platform design.

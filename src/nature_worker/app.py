@@ -22,6 +22,7 @@ from .db import Database
 from .providers import PROVIDERS, ProviderError, effective_endpoint, make_provider
 from .tools import TOOLS, ToolContext, ToolError
 from .tools.workspace import Workspace
+from .templates import load_templates
 from .work import summarize
 
 log = logging.getLogger(__name__)
@@ -236,6 +237,13 @@ def create_app(config: Config | None = None) -> FastAPI:
             "running": agent.is_running(conv_id),
             "work": work_summary(conv, messages),
         }
+
+    templates = load_templates()  # checked at startup, so a broken file fails early and clearly
+
+    @app.get("/api/templates")
+    def list_templates():
+        """New Work templates (enabled only). The first one is the default."""
+        return {"templates": templates, "default": templates[0]["id"]}
 
     @app.get("/api/work")
     def list_work():

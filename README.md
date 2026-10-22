@@ -9,7 +9,7 @@ Connect the model you already use, describe a task in plain language, and approv
 
 ![A finished piece of work in Nature AI Worker: status, execution facts, the agent's update, the report.md result with Preview and Download, the input file it read, the tool activity and the conversation](docs/screenshots/11-work-detail.png)
 
-<sub>The real web UI. This screenshot was taken during automated UI testing with a scripted test model, not a real AI model; see [Verification status](#verification-status) for real-model results. More: [My Work](docs/screenshots/10-my-work.png), [approval request](docs/screenshots/12-work-approval.png).</sub>
+<sub>The real web UI. This screenshot was taken during automated UI testing with a scripted test model, not a real AI model; see [Verification status](#verification-status) for real-model results. More: [My Work](docs/screenshots/10-my-work.png), [approval request](docs/screenshots/12-work-approval.png), [New Work templates](docs/screenshots/13-new-work-templates.png).</sub>
 
 ## Highlights
 
@@ -144,7 +144,7 @@ You can change these later under **Settings**. Settings also includes:
 ## Using it
 
 1. Put the files you want to work with in the workspace folder. You can also use **Workspace files → Upload file**.
-2. Click **+ New Work** and describe the task, for example:
+2. Click **+ New Work**, optionally choose a **Template**, and describe the task. A template only fills the box with starting instructions that you can edit; it does not give the agent any extra abilities, and approvals still apply. If you have already typed something, switching templates keeps your text and asks whether to insert or replace. Built-in templates: General Work, Research & Summary, Data Analysis, Document & Report, File Organization. They are defined in `src/nature_worker/work_templates.json` (set `"enabled": false` to hide one). Examples of tasks:
    - *"Read sales.csv and write a report.md with totals per region."*
    - *"Search my notes for anything about invoices and summarize it."*
    - *"Turn meeting-notes.txt into a list of action items in actions.md."*
@@ -232,6 +232,7 @@ src/nature_worker/
   app.py            FastAPI routes, security middleware
   agent.py          The General Agent: bounded model/tool loop, approval pause/resume
   work.py           My Work view: status, facts and results derived from the stored records
+  templates.py      Loads and checks the New Work templates (work_templates.json)
   db.py             SQLite: conversations, messages, approvals, settings
   credentials.py    Encrypted API key storage, log redaction
   config.py         Environment configuration

@@ -29,7 +29,7 @@ nature-worker = "nature_worker.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-nature_worker = ["static/*"]
+nature_worker = ["static/*", "work_templates.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

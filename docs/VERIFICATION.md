@@ -319,3 +319,56 @@ Start the app in an empty folder with the [sales report demo](../examples/sales-
 3. **Ubuntu install:** on a fresh Ubuntu 24.04 or WSL without `python3-venv`, `python3 -m venv .venv` fails with "ensurepip is not available"; follow the README recovery steps.
 4. **Port:** with something already on 8080 (for example `python3 -m http.server 8080 --bind 127.0.0.1`), run `nature-worker`: it exits with "Port 8080 is already in use" and the other server keeps running. `nature-worker --port 8081` starts at `http://127.0.0.1:8081`.
 5. **Unchanged security:** ask the agent to delete a file and deny it: the file stays. `curl 'http://127.0.0.1:8081/api/files/content?path=../README.md'` returns 400.
+
+## WKR-023: work-oriented interface (My Work)
+
+The web UI was reorganized from a chat into a work interface, following the NATURE AI Platform's Task Interface concepts as named in the ticket. **No Platform Task UI source or screenshots were available** (the Platform repository is not accessible from this environment), so this follows the concept hierarchy only and does not claim visual parity with the Platform.
+
+No new records, tables or engines. A piece of work *is* an existing conversation; everything on the work page is derived on request from existing messages, tool results, approvals and workspace files (`src/nature_worker/work.py`, read-only). The agent loop, providers, tools, approval enforcement, credentials and the conversation API are unchanged; `GET /api/conversations/{id}` gains a `work` field and there is a new read-only `GET /api/work`.
+
+| Platform concept | Standalone Worker |
+|---|---|
+| My Tasks / My Work | **My Work** (home page): all conversations, newest activity first, with status filter |
+| New Task / New Work | **+ New Work**: describe the work, then **Start work** creates a conversation and sends the first message |
+| Task header and execution facts | Title (first instruction), status, started, last activity, agent steps, tool calls (failed / not approved), approvals (waiting / approved / denied), result files |
+| Current Task Update | Running step, approval request, the agent's latest reply, or the error / stop / interruption message |
+| Results / Work | Files this work created or overwrote with a successful `write_file`, with Preview and Download; files it read listed separately as inputs |
+| Work activity | Every tool call with time and result, plus error notices |
+| Communication | Your messages and the agent's replies, with the message box |
+| User Action / Approval | The existing approval card, shown in Current work update |
+
+Status is derived from the last records: **Working** (a run is active), **Needs your approval**, **Finished** (the run ended with a reply), **Failed** (provider or setup error), **Stopped** (step limit), **Interrupted** (the run ended without a reply, for example after a restart), **Not started**.
+
+### Platform elements not mapped
+
+These have no truthful source in Standalone Worker, so they are not shown:
+
+- **"Completed" / goal completion.** The records show only that the agent ended its run with a reply. The status is "Finished", and the page says to check the results.
+- **Progress percentage.** Never recorded.
+- **Task ID, assignee, priority, due date, department or Module.** Not part of Worker's records; single user.
+- **Model or agent per work.** The model is not stored per conversation; only the current model appears in the sidebar.
+- **Cancel / pause work.** Worker has no cancel operation for a running agent.
+- **Task recovery.** An interrupted run is shown as Interrupted. It continues only when the user sends a message, as before.
+- **Recording, approver identity and audit trail.** Not present in Standalone Worker.
+- **Deliverable versions.** Only a "changed since this work wrote it" flag, from the file's modification time.
+- **Platform-connected (S-C) mode.** Not implemented; no Platform API is used or assumed.
+
+### Tests
+
+- `tests/test_work.py` (16): each status, facts, deliverables vs inputs (`./sales.csv` and `sales.csv` are one file), failed and denied writes are not results, approved overwrite is, a file changed or removed later is flagged, a file the work deleted is not a result, uploads are not results, records pointing outside the workspace (`..`, absolute path, escaping symlink) never show a size or content, and the My Work list returns only derived fields.
+- `tests/test_work_ui.py` (8, headless Chrome against the real server process with the scripted fake model):
+  - empty My Work
+  - New Work through report generation with a Working state, results, preview and download
+  - approval denial (file unchanged) and approved overwrite
+  - failed work
+  - returning to earlier work, browser refresh, and an application restart with an interrupted run
+  - model and file text never rendered as HTML
+  - every control has an accessible name, one `h1` per view, focus moves to it, status as text
+  - no horizontal scrolling at 390, 768 and 1280 px
+  - the live update region only changes when its content changes
+  - My Work follows a running work to Finished
+- `tests/test_usability.py`: the WKR-022 draft and preview browser tests were updated to the new layout. New Work always starts empty; unsent text stays with its own work.
+
+Full suite locally (Python 3.14.4): **152 passed**. Docker is not installed on this machine; the Docker job in GitHub Actions covers the container.
+
+Screenshots `docs/screenshots/10-my-work.png`, `11-work-detail.png` and `12-work-approval.png` show the new UI with a scripted test model, not a real AI model. The earlier screenshots are kept as the v0.1.0 record.

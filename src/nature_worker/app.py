@@ -22,6 +22,7 @@ from .db import Database
 from .providers import PROVIDERS, ProviderError, effective_endpoint, make_provider
 from .tools import TOOLS, ToolContext, ToolError
 from .tools.workspace import Workspace
+from .work import summarize
 
 log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
@@ -221,15 +222,31 @@ def create_app(config: Config | None = None) -> FastAPI:
     def create_conversation():
         return db.create_conversation()
 
+    def work_summary(conv: dict, messages: list[dict]) -> dict:
+        return summarize(conv, messages, db.list_approvals(conv["id"]), agent.is_running(conv["id"]), workspace)
+
     @app.get("/api/conversations/{conv_id}")
     def get_conversation(conv_id: str):
         conv = conversation_or_404(conv_id)
+        messages = db.get_messages(conv_id)
         return {
             **conv,
-            "messages": db.get_messages(conv_id),
+            "messages": messages,
             "approvals": db.pending_approvals(conv_id),
             "running": agent.is_running(conv_id),
+            "work": work_summary(conv, messages),
         }
+
+    @app.get("/api/work")
+    def list_work():
+        """My Work: every conversation with its derived status, newest activity first."""
+        out = []
+        for conv in db.list_conversations():
+            w = work_summary(conv, db.get_messages(conv["id"]))
+            out.append({**conv, "status": w["status"], "status_label": w["status_label"],
+                        "instruction": w["instruction"], "deliverables": len(w["deliverables"]),
+                        "approvals_pending": w["facts"]["approvals_pending"]})
+        return out
 
     @app.delete("/api/conversations/{conv_id}")
     def delete_conversation(conv_id: str):

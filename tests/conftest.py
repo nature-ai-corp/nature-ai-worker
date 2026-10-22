@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -25,6 +26,7 @@ class FakeModelServer:
     def __init__(self):
         self.responses: list[tuple[int, dict]] = []
         self.requests: list[dict] = []
+        self.delay = 0.0  # seconds to wait before each reply, to observe a run in progress
         server = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -42,6 +44,7 @@ class FakeModelServer:
                     self._reply(500, {"error": {"message": "fake server: no scripted response left"}})
                     return
                 status, payload = server.responses.pop(0)
+                time.sleep(server.delay)
                 self._reply(status, payload)
 
             def _reply(self, status, payload):

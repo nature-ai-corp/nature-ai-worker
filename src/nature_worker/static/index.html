@@ -7,11 +7,16 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
   <div id="app">
-    <aside id="sidebar">
+    <aside id="sidebar" aria-label="Navigation">
       <div class="brand">Nature AI Worker</div>
-      <button id="new-chat" class="primary">+ New chat</button>
-      <nav id="conversations" aria-label="Conversation history"></nav>
+      <button id="new-work" class="primary">+ New Work</button>
+      <nav aria-label="Work">
+        <a id="nav-my-work" href="#/">My Work <span id="my-work-count" class="count"></span></a>
+      </nav>
+      <h2 class="nav-heading">Recent work</h2>
+      <nav id="work-nav" aria-label="Recent work"></nav>
       <div class="sidebar-footer">
         <button id="open-files">Workspace files</button>
         <button id="open-settings">Settings</button>
@@ -19,39 +24,106 @@
       </div>
     </aside>
 
-    <main id="chat">
-      <header id="chat-header">
-        <button id="toggle-sidebar" class="icon" aria-label="Show conversations">☰</button>
-        <h1 id="chat-title">New chat</h1>
-        <button id="delete-chat" class="danger" title="Delete conversation" hidden>Delete</button>
+    <main id="main" tabindex="-1">
+      <header id="topbar">
+        <button id="toggle-sidebar" class="icon" aria-label="Show navigation">☰</button>
+        <span class="brand">Nature AI Worker</span>
       </header>
-      <section id="messages" aria-live="polite"></section>
-      <form id="composer">
-        <textarea id="input" rows="2" placeholder="Describe a task… (Enter to send, Shift+Enter for a new line)"></textarea>
-        <button id="send" class="primary" type="submit">Send</button>
-      </form>
+
+      <!-- My Work: the list of work records (existing conversations) -->
+      <section id="view-list" class="view" aria-labelledby="list-heading" hidden>
+        <div class="view-header">
+          <h1 id="list-heading" tabindex="-1">My Work</h1>
+          <button id="list-new-work" class="primary">+ New Work</button>
+        </div>
+        <div id="status-filter" class="filters" role="group" aria-label="Filter by status"></div>
+        <ul id="work-list" class="work-list"></ul>
+      </section>
+
+      <!-- New Work: assign a piece of work in plain language -->
+      <section id="view-new" class="view" aria-labelledby="new-heading" hidden>
+        <div class="view-header">
+          <h1 id="new-heading" tabindex="-1">New Work</h1>
+        </div>
+        <form id="new-form" class="card">
+          <label for="new-input" class="field-label">What should the agent do?</label>
+          <textarea id="new-input" rows="5" placeholder="For example: Read sales.csv and write report.md with revenue totals per region."></textarea>
+          <p id="new-files-hint" class="muted small"></p>
+          <div class="form-actions">
+            <button type="button" id="new-manage-files">Workspace files</button>
+            <span class="spacer"></span>
+            <button id="new-start" class="primary" type="submit">Start work</button>
+          </div>
+        </form>
+        <h2 class="section-title">Examples</h2>
+        <div id="new-examples" class="examples"></div>
+      </section>
+
+      <!-- Work detail: one conversation shown as a piece of work -->
+      <section id="view-work" class="view" aria-labelledby="work-title" hidden>
+        <a href="#/" class="back">← My Work</a>
+        <div class="view-header work-header">
+          <div class="work-heading">
+            <h1 id="work-title" tabindex="-1"></h1>
+            <span id="work-status" class="status"></span>
+          </div>
+          <button id="delete-work" class="danger">Delete</button>
+        </div>
+
+        <section class="block" aria-labelledby="facts-heading">
+          <h2 id="facts-heading" class="section-title">Execution facts</h2>
+          <dl id="work-facts" class="facts"></dl>
+        </section>
+
+        <section class="block" aria-labelledby="update-heading">
+          <h2 id="update-heading" class="section-title">Current work update</h2>
+          <div id="work-update" aria-live="polite"></div>
+        </section>
+
+        <section class="block" aria-labelledby="results-heading">
+          <h2 id="results-heading" class="section-title">Results</h2>
+          <div id="work-results"></div>
+        </section>
+
+        <section class="block" aria-labelledby="activity-heading">
+          <h2 id="activity-heading" class="section-title">Work activity</h2>
+          <ol id="work-activity" class="activity"></ol>
+        </section>
+
+        <section class="block" aria-labelledby="comm-heading">
+          <h2 id="comm-heading" class="section-title">Communication</h2>
+          <div id="messages"></div>
+          <form id="composer">
+            <label for="input" class="visually-hidden">Message about this work</label>
+            <textarea id="input" rows="2" placeholder="Message about this work…" aria-describedby="composer-hint"></textarea>
+            <button id="send" class="primary" type="submit">Send</button>
+          </form>
+          <p id="composer-hint" class="muted small">Enter to send, Shift+Enter for a new line.</p>
+        </section>
+      </section>
     </main>
 
-    <aside id="files-panel" hidden>
-      <header><h2>Workspace</h2><button id="close-files" class="icon" aria-label="Close">✕</button></header>
+    <aside id="files-panel" aria-labelledby="files-heading" hidden>
+      <header><h2 id="files-heading">Workspace files</h2><button id="close-files" class="icon" aria-label="Close">✕</button></header>
       <p id="workspace-path" class="muted small"></p>
       <div class="files-actions">
         <label class="button">Upload file<input id="upload" type="file" hidden></label>
         <button id="refresh-files">Refresh</button>
       </div>
       <ul id="file-list"></ul>
-      <div id="file-preview" hidden>
-        <header>
-          <strong id="preview-name"></strong>
-          <a id="preview-download" class="small">Download</a>
-          <button id="close-preview" class="icon" aria-label="Close preview">✕</button>
-        </header>
-        <p id="preview-label" class="muted small" hidden>Read-only preview</p>
-        <p id="preview-message" class="small" role="status" hidden></p>
-        <pre id="preview-content" hidden></pre>
-      </div>
     </aside>
   </div>
+
+  <dialog id="preview-dialog" aria-labelledby="preview-name">
+    <header>
+      <strong id="preview-name"></strong>
+      <a id="preview-download" class="small">Download</a>
+      <button id="close-preview" class="icon" aria-label="Close preview">✕</button>
+    </header>
+    <p id="preview-label" class="muted small" hidden>Read-only preview</p>
+    <p id="preview-message" class="small" role="status" hidden></p>
+    <pre id="preview-content" hidden></pre>
+  </dialog>
 
   <dialog id="settings-dialog">
     <form id="settings-form" method="dialog">
@@ -73,7 +145,7 @@
       <details>
         <summary>Advanced</summary>
         <label class="check"><input id="s-web" type="checkbox"> Allow web fetching (each request still needs your approval)</label>
-        <label>Max steps per task <input id="s-steps" type="number" min="1" max="100"></label>
+        <label>Max agent steps per run <input id="s-steps" type="number" min="1" max="100"></label>
       </details>
       <div id="settings-result" role="status"></div>
       <div class="dialog-actions">

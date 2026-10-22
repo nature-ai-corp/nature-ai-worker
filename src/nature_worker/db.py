@@ -177,10 +177,11 @@ class Database:
         return a
 
     def pending_approvals(self, conv_id: str) -> list[dict[str, Any]]:
-        rows = self._all(
-            "SELECT * FROM approvals WHERE conversation_id = ? AND status = 'pending' ORDER BY created_at",
-            (conv_id,),
-        )
+        return [a for a in self.list_approvals(conv_id) if a["status"] == "pending"]
+
+    def list_approvals(self, conv_id: str) -> list[dict[str, Any]]:
+        """All approval requests of a conversation, any status, oldest first."""
+        rows = self._all("SELECT * FROM approvals WHERE conversation_id = ? ORDER BY created_at", (conv_id,))
         out = []
         for r in rows:
             a = dict(r)

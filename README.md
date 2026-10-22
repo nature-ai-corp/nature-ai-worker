@@ -7,9 +7,9 @@ Connect the model you already use, describe a task in plain language, and approv
 [![Release](https://img.shields.io/github/v/release/nature-ai-corp/nature-ai-worker)](https://github.com/nature-ai-corp/nature-ai-worker/releases/tag/v0.1.0)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-![Nature AI Worker after a finished task: the agent listed the files, summarized sales.csv and wrote report.md](docs/screenshots/03-task-done.png)
+![A finished piece of work in Nature AI Worker: status, execution facts, the agent's update, the report.md result with Preview and Download, the input file it read, the tool activity and the conversation](docs/screenshots/11-work-detail.png)
 
-<sub>The real web UI. This screenshot was taken during automated UI testing with a scripted test model, not a real AI model; see [Verification status](#verification-status) for real-model results. More: [approval prompt](docs/screenshots/05-approval-prompt.png), [workspace files](docs/screenshots/08-files-panel.png).</sub>
+<sub>The real web UI. This screenshot was taken during automated UI testing with a scripted test model, not a real AI model; see [Verification status](#verification-status) for real-model results. More: [My Work](docs/screenshots/10-my-work.png), [approval request](docs/screenshots/12-work-approval.png).</sub>
 
 ## Highlights
 
@@ -32,7 +32,7 @@ pip install .
 nature-worker
 ```
 
-Open **http://127.0.0.1:8080** (port taken? run `nature-worker --port 8081`), pick your provider and model, click **Test connection**, then **Save**. Put files in `./workspace` and describe a task.
+Open **http://127.0.0.1:8080** (port taken? run `nature-worker --port 8081`), pick your provider and model, click **Test connection**, then **Save**. Put files in `./workspace`, click **+ New Work** and describe the task.
 
 Want something to try? The [sales report demo](examples/sales-report/) has a synthetic dataset, a ready-made task and the correct answers to check against. To run with Docker instead, see [Option B](#option-b-docker-compose).
 
@@ -144,14 +144,19 @@ You can change these later under **Settings**. Settings also includes:
 ## Using it
 
 1. Put the files you want to work with in the workspace folder. You can also use **Workspace files → Upload file**.
-2. Describe a task in the chat, for example:
+2. Click **+ New Work** and describe the task, for example:
    - *"Read sales.csv and write a report.md with totals per region."*
    - *"Search my notes for anything about invoices and summarize it."*
    - *"Turn meeting-notes.txt into a list of action items in actions.md."*
-3. Tool calls appear in the chat as they happen; click a tool card to see its details. When the agent wants to overwrite or delete a file or fetch a web page, an **Approval needed** card appears. Nothing happens until you click **Approve** or **Deny**.
-4. Results are saved in the workspace. In **Workspace files**, click a file name to preview it (read-only; `.md`, `.txt`, `.csv` and `.json` files up to 1 MB), or click ⬇ to download any file.
+3. The work page shows, from top to bottom:
+   - **Status and execution facts**: when it started, the last activity, and counts of agent steps, tool calls, approvals and result files.
+   - **Current work update**: what is happening now, the agent's latest reply, or what went wrong. When the agent wants to overwrite or delete a file or fetch a web page, a **Your action needed** card appears here. Nothing happens until you click **Approve** or **Deny**.
+   - **Results**: files this work created or overwrote, with **Preview** (read-only; `.md`, `.txt`, `.csv` and `.json` up to 1 MB) and **Download**. Files it only read are listed separately as inputs.
+   - **Work activity**: every tool call with its time and result; click one to see the details.
+   - **Communication**: your messages and the agent's replies. Send follow-up instructions here.
+4. **My Work** lists all work with its status. Work is kept after restarts, and the browser's address keeps the open work, so a page refresh returns to it.
 
-Conversations are saved and listed in the sidebar. They are kept after restarts.
+Statuses describe how the agent's last run ended, not whether your goal was met. **Finished** means the agent ended its run with a reply; check the results. **Interrupted** means the run ended without a reply, for example because the app was closed; send a message such as "continue" to start a new run. A result file is marked if it was changed after this work wrote it, or is no longer in the workspace.
 
 ### Built-in tools
 
@@ -226,6 +231,7 @@ It writes a Markdown report (`acceptance-<provider>.md`) containing transcripts 
 src/nature_worker/
   app.py            FastAPI routes, security middleware
   agent.py          The General Agent: bounded model/tool loop, approval pause/resume
+  work.py           My Work view: status, facts and results derived from the stored records
   db.py             SQLite: conversations, messages, approvals, settings
   credentials.py    Encrypted API key storage, log redaction
   config.py         Environment configuration

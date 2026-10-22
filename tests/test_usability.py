@@ -199,6 +199,27 @@ class Browser:
             time.sleep(0.1)
         raise AssertionError(f"timed out waiting for: {condition}")
 
+    def send(self, method: str, params: dict | None = None):
+        self.ids += 1
+        self.ws.send(json.dumps({"id": self.ids, "method": method, "params": params or {}}))
+        while True:
+            msg = json.loads(self.ws.recv(timeout=30))
+            if msg.get("id") == self.ids:
+                return msg.get("result")
+
+    def viewport(self, width: int, height: int, mobile: bool = False):
+        self.send("Emulation.setDeviceMetricsOverride",
+                  {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": mobile})
+
+    def click(self, selector: str, text: str | None = None):
+        """Click the first element matching the selector (and starting with the text, if given)."""
+        match = f"x.textContent.trim().startsWith({json.dumps(text)})" if text else "true"
+        self.wait(f"[...document.querySelectorAll({json.dumps(selector)})].some(x => {match})")
+        self.eval(f"[...document.querySelectorAll({json.dumps(selector)})].find(x => {match}).click()")
+
+    def text(self, selector: str) -> str:
+        return self.eval(f"(document.querySelector({json.dumps(selector)}) || {{}}).textContent || ''")
+
     def close(self):
         if getattr(self, "ws", None):
             self.ws.close()
@@ -229,61 +250,59 @@ def ui(tmp_path, fake_model):
         _stop(proc)
 
 
-def _open_chat(b, title):
-    b.eval(f"[...document.querySelectorAll('#conversations a')].find(a => a.title === {json.dumps(title)}).click()")
-    b.wait(f"document.querySelector('#chat-title').textContent === {json.dumps(title)}")
+def _open_work(b, title):
+    b.click("#work-nav a", title)
+    b.wait(f"!document.querySelector('#view-work').hidden && document.querySelector('#work-title').textContent === {json.dumps(title)}")
 
 
-def test_new_chat_clears_the_draft_and_keeps_drafts_per_chat(ui, fake_model):
+def test_new_work_clears_the_draft_and_keeps_drafts_per_work(ui, fake_model):
     b, base, tmp_path = ui
-    for text in ("first chat", "second chat"):
+    for text in ("first work", "second work"):
         conv = httpx.post(base + "/api/conversations").json()["id"]
         fake_model.queue(openai_text(f"reply to {text}"))
         httpx.post(f"{base}/api/conversations/{conv}/messages", json={"text": text}, timeout=30)
-    b.eval("loadConversations()")
-    b.wait("document.querySelectorAll('#conversations a').length === 2")
+    b.eval("loadWork()")
+    b.wait("document.querySelectorAll('#work-nav a').length === 2")
 
-    _open_chat(b, "first chat")
-    b.eval("document.querySelector('#input').value = 'unsent draft for the first chat'")
-    b.eval("document.querySelector('#new-chat').click()")
-    b.wait("document.querySelector('#chat-title').textContent === 'New chat'")
-    assert b.eval("document.querySelector('#input').value") == ""
-    assert b.eval("document.querySelectorAll('#messages .msg').length") == 0
-    assert b.eval("document.querySelectorAll('#conversations a').length") == 2  # history kept
+    _open_work(b, "first work")
+    b.eval("document.querySelector('#input').value = 'unsent draft for the first work'")
+    b.click("#new-work")
+    b.wait("!document.querySelector('#view-new').hidden")
+    assert b.eval("document.querySelector('#new-input').value") == ""
+    assert len(httpx.get(base + "/api/conversations").json()) == 2  # history kept
 
-    b.eval("document.querySelector('#input').value = 'draft for the new chat'")
-    _open_chat(b, "second chat")
+    b.eval("document.querySelector('#new-input').value = 'half-written new work'")
+    _open_work(b, "second work")
     assert b.eval("document.querySelector('#input').value") == ""
     assert b.eval("[...document.querySelectorAll('#messages .msg')].map(m => m.textContent)") == \
-        ["second chat", "reply to second chat"]
+        ["Yousecond work", "Agentreply to second work"]
 
-    _open_chat(b, "first chat")
-    assert b.eval("document.querySelector('#input').value") == "unsent draft for the first chat"
+    _open_work(b, "first work")
+    assert b.eval("document.querySelector('#input').value") == "unsent draft for the first work"
     assert b.eval("[...document.querySelectorAll('#messages .msg')].map(m => m.textContent)") == \
-        ["first chat", "reply to first chat"]
+        ["Youfirst work", "Agentreply to first work"]
 
-    b.eval("document.querySelector('#new-chat').click()")
-    b.wait("document.querySelector('#chat-title').textContent === 'New chat'")
-    assert b.eval("document.querySelector('#input').value") == ""  # cleared, not the earlier new-chat draft
-
-    assert len(httpx.get(base + "/api/conversations").json()) == 2
+    b.click("#new-work")
+    b.wait("!document.querySelector('#view-new').hidden")
+    assert b.eval("document.querySelector('#new-input').value") == ""  # cleared, not the earlier draft
     assert (tmp_path / "workspace" / "sales.csv").exists()
 
 
 def test_clicking_a_file_shows_a_read_only_preview(ui):
     b, _, tmp_path = ui
-    b.eval("document.querySelector('#open-files').click()")
+    b.click("#open-files")
     b.wait("document.querySelectorAll('#file-list button.fname').length === 2")
-    b.eval("[...document.querySelectorAll('#file-list button.fname')].find(x => x.textContent === 'sales.csv').click()")
+    b.click("#file-list button.fname", "sales.csv")
     b.wait("!document.querySelector('#preview-content').hidden")
-    assert b.eval("document.querySelector('#preview-content').textContent") == "region,revenue\nNorth,170\n"
+    assert b.eval("document.querySelector('#preview-dialog').open") is True
+    assert b.text("#preview-content") == "region,revenue\nNorth,170\n"
     assert b.eval("document.querySelector('#preview-content').isContentEditable") is False
     assert b.eval("document.querySelector('#preview-label').hidden") is False
-    assert b.eval("document.querySelector('#file-preview textarea, #file-preview input')") is None
+    assert b.eval("document.querySelector('#preview-dialog textarea, #preview-dialog input')") is None
     assert b.eval("document.querySelector('#preview-download').getAttribute('href')") == \
         "/api/files/download?path=sales.csv"
 
-    b.eval("[...document.querySelectorAll('#file-list button.fname')].find(x => x.textContent === 'report.docx').click()")
+    b.click("#file-list button.fname", "report.docx")
     b.wait("document.querySelector('#preview-message').textContent.includes('Preview is available')")
     assert b.eval("document.querySelector('#preview-content').hidden") is True
     assert b.eval("document.querySelector('#preview-label').hidden") is True

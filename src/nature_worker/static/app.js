@@ -1,9 +1,13 @@
 "use strict";
 
 const $ = (sel) => document.querySelector(sel);
-// drafts: unsent composer text per conversation id ("" is the new, unsaved chat).
-// busyId: the conversation the agent is working on for this page.
-const state = { settings: null, conversations: [], current: null, busy: false, busyId: null, poll: null, drafts: {}, nav: 0 };
+// drafts: unsent Communication text per work id. busyId: the work the agent is running for this page.
+// nav: increases on every navigation so late responses for a previous view are ignored.
+const state = {
+  settings: null, work: [], current: null, filter: "all",
+  busy: false, busyId: null, poll: null, drafts: {}, nav: 0,
+  openTools: new Set(), listTimer: null,
+};
 
 const MODEL_HINTS = {
   openai: "e.g. gpt-5-mini",
@@ -91,69 +95,212 @@ function renderMarkdown(text) {
   return out.join("");
 }
 
-// ---------------------------------------------------------------- Conversations
+// ---------------------------------------------------------------- Formatting
 
-async function loadConversations() {
-  state.conversations = await api("GET", "/api/conversations");
-  const nav = $("#conversations");
+const STATUS_FILTERS = [
+  ["all", "All"], ["needs_approval", "Needs your approval"], ["working", "Working"],
+  ["finished", "Finished"], ["problem", "Failed, stopped or interrupted"],
+];
+
+function formatTime(ts) {
+  if (!ts) return "";
+  return new Date(ts * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+function formatSize(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+  return (n / 1048576).toFixed(1) + " MB";
+}
+
+function plural(n, word) {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+function statusBadge(status, label) {
+  return el("span", { class: "status s-" + status }, label);
+}
+
+// The first instruction in full; the stored title is cut at 60 characters.
+function workTitle(w) {
+  const text = (w.instruction || (w.work && w.work.instruction) || "").trim();
+  if (text) return text.split("\n")[0];
+  return w.title && w.title !== "New conversation" ? w.title : "Untitled work";
+}
+
+function formatClock(ts) {
+  return new Date(ts * 1000).toLocaleTimeString(undefined, { timeStyle: "short" });
+}
+
+// ---------------------------------------------------------------- Routing
+
+// "#/" My Work, "#/new" New Work, "#/work/<id>" one piece of work. "#<id>" links from v0.1.0 still work.
+function parseRoute() {
+  const h = location.hash.replace(/^#/, "");
+  if (h === "/new") return { view: "new" };
+  const m = h.match(/^\/work\/([0-9a-f]+)$/) || h.match(/^([0-9a-f]{32})$/);
+  if (m) return { view: "work", id: m[1] };
+  return { view: "list" };
+}
+
+function go(hash) {
+  if (location.hash === hash) route(); else location.hash = hash;
+}
+
+async function route() {
+  const r = parseRoute();
+  const nav = ++state.nav;
+  saveDraft();
+  stopPolling();
+  $("#sidebar").classList.remove("open");
+  if (r.view === "work") {
+    let conv = null;
+    try { conv = await api("GET", `/api/conversations/${r.id}`); } catch (e) { /* not found */ }
+    if (nav !== state.nav) return;  // the user navigated elsewhere meanwhile
+    if (!conv) { go("#/"); return; }
+    state.current = conv;
+    $("#input").value = state.drafts[conv.id] || "";
+    show("work");
+    renderWork();
+    if (conv.running) startPolling();
+  } else {
+    state.current = null;
+    show(r.view);
+    if (r.view === "new") renderNew(); else await loadWork();
+  }
+  loadWork(true);
+}
+
+function show(view) {
+  for (const v of ["list", "new", "work"]) $("#view-" + v).hidden = v !== view;
+  $("#nav-my-work").classList.toggle("active", view === "list");
+  const heading = { list: "#list-heading", new: "#new-heading", work: "#work-title" }[view];
+  $(heading).focus({ preventScroll: true });
+  $("#main").scrollTop = 0;
+}
+
+function saveDraft() {
+  if (!state.current) return;
+  const text = $("#input").value;
+  if (text) state.drafts[state.current.id] = text; else delete state.drafts[state.current.id];
+}
+
+// ---------------------------------------------------------------- My Work
+
+async function loadWork(navOnly = false) {
+  let items;
+  try {
+    items = await api("GET", "/api/work");
+  } catch (e) {
+    if (!navOnly) $("#work-list").replaceChildren(el("li", { class: "empty" }, e.message));
+    return;
+  }
+  state.work = items;
+  renderNav();
+  if (!navOnly || !$("#view-list").hidden) renderList();
+  clearTimeout(state.listTimer);
+  if (!$("#view-list").hidden && items.some((w) => w.status === "working")) {
+    state.listTimer = setTimeout(() => loadWork(true), 2000);
+  }
+}
+
+function renderNav() {
+  const nav = $("#work-nav");
   nav.replaceChildren();
-  for (const c of state.conversations) {
-    const a = el("a", { href: "#" + c.id, title: c.title }, c.title);
-    if (state.current && state.current.id === c.id) a.classList.add("active");
-    a.addEventListener("click", (e) => { e.preventDefault(); openConversation(c.id); $("#sidebar").classList.remove("open"); });
+  $("#my-work-count").textContent = state.work.length ? String(state.work.length) : "";
+  for (const w of state.work.slice(0, 15)) {
+    const a = el("a", { href: "#/work/" + w.id, title: workTitle(w) },
+      el("span", { class: "dot s-" + w.status, "aria-hidden": "true" }),
+      el("span", { class: "label" }, workTitle(w)),
+      el("span", { class: "visually-hidden" }, ", " + w.status_label));
+    if (state.current && state.current.id === w.id) a.classList.add("active");
     nav.append(a);
   }
 }
 
-function currentId() {
-  return state.current ? state.current.id : "";
+function matchesFilter(w, key) {
+  if (key === "all") return true;
+  if (key === "problem") return ["failed", "stopped", "interrupted"].includes(w.status);
+  return w.status === key;
 }
 
-// Keep the unsent text with the conversation it was typed in, and show the target's own draft.
-function switchDraft(toId) {
-  const text = $("#input").value;
-  if (text) state.drafts[currentId()] = text; else delete state.drafts[currentId()];
-  $("#input").value = state.drafts[toId] || "";
+function renderList() {
+  const box = $("#status-filter");
+  box.replaceChildren();
+  for (const [key, label] of STATUS_FILTERS) {
+    const n = state.work.filter((w) => matchesFilter(w, key)).length;
+    const b = el("button", { type: "button", "aria-pressed": String(state.filter === key) }, `${label} (${n})`);
+    b.addEventListener("click", () => { state.filter = key; renderList(); });
+    box.append(b);
+  }
+  const list = $("#work-list");
+  list.replaceChildren();
+  if (state.work.length === 0) {
+    list.append(el("li", { class: "empty" },
+      el("h2", {}, "No work yet"),
+      el("p", { class: "muted" }, "Assign a task in plain language. The agent can read, search and write files in your workspace folder, summarize data and produce reports."),
+      el("button", { class: "primary", onclick: () => go("#/new") }, "+ New Work")));
+    return;
+  }
+  const shown = state.work.filter((w) => matchesFilter(w, state.filter));
+  if (shown.length === 0) list.append(el("li", { class: "empty muted" }, "No work with this status."));
+  for (const w of shown) {
+    const meta = [`Last activity ${formatTime(w.updated_at)}`];
+    if (w.deliverables) meta.push(plural(w.deliverables, "result file"));
+    list.append(el("li", {},
+      el("a", { href: "#/work/" + w.id, class: "work-row" },
+        el("span", { class: "row-title" }, workTitle(w)),
+        statusBadge(w.status, w.status_label),
+        el("span", { class: "row-meta muted small" }, meta.join(" · ")))));
+  }
 }
 
-async function openConversation(id) {
-  switchDraft(id);
-  const nav = ++state.nav;
-  let conv = null;
+// ---------------------------------------------------------------- New Work
+
+const EXAMPLES = [
+  "List the files in my workspace and describe what they contain.",
+  "Read the files in my workspace and write a summary report to report.md.",
+  "Read sales.csv and write report.md with revenue totals per region.",
+];
+
+async function renderNew() {
+  const ex = $("#new-examples");
+  ex.replaceChildren();
+  for (const text of EXAMPLES) {
+    ex.append(el("button", { type: "button", class: "example", onclick: () => { $("#new-input").value = text; $("#new-input").focus(); } }, text));
+  }
   try {
-    conv = await api("GET", `/api/conversations/${id}`);
-  } catch (e) { /* not found: show a new chat */ }
-  if (nav !== state.nav) return;  // the user opened another chat meanwhile
-  state.current = conv;
-  history.replaceState(null, "", state.current ? "#" + state.current.id : "#");
-  render();
-  loadConversations();
+    const data = await api("GET", "/api/files");
+    const files = data.files.filter((f) => f.type === "file").length;
+    $("#new-files-hint").textContent = files
+      ? `The agent can use the ${plural(files, "file")} in your workspace folder.`
+      : "Your workspace folder is empty. Upload files the agent should work with, or ask it to create new ones.";
+  } catch (e) { $("#new-files-hint").textContent = ""; }
 }
 
-function newChat() {
+function newWork() {
+  $("#new-input").value = "";  // a fresh assignment every time
+  go("#/new");
+}
+
+async function startWork(text) {
+  if (!state.settings || !state.settings.configured) { openSettings(true); return; }
+  const nav = state.nav;
+  let conv;
+  try {
+    conv = await api("POST", "/api/conversations");
+  } catch (e) { alert(e.message); return; }
+  if (nav !== state.nav) return;
+  $("#new-input").value = "";
+  state.current = { ...conv, messages: [{ role: "user", content: text }], approvals: [], running: true, work: { instruction: text } };
+  history.replaceState(null, "", "#/work/" + conv.id);
   state.nav++;
-  switchDraft("");
-  delete state.drafts[""];
-  $("#input").value = "";
-  state.current = null;
-  history.replaceState(null, "", "#");
-  render();
-  loadConversations();
-  $("#input").focus();
+  show("work");
+  renderWork();
+  await runWithPolling(() => api("POST", `/api/conversations/${conv.id}/messages`, { text }));
 }
 
-async function refreshCurrent() {
-  if (!state.current) return;
-  const id = state.current.id;
-  try {
-    const conv = await api("GET", `/api/conversations/${id}`);
-    if (currentId() !== id) return;  // the user switched chats while this was loading
-    state.current = conv;
-    render();
-  } catch (e) { /* keep showing what we have */ }
-}
-
-// ---------------------------------------------------------------- Rendering
+// ---------------------------------------------------------------- Work detail
 
 function argsSummary(args) {
   return Object.entries(args || {})
@@ -161,18 +308,21 @@ function argsSummary(args) {
     .join(" ");
 }
 
-function toolCard(call, result) {
+function toolCard(call, result, time) {
   let stateText = "running", cls = "";
   if (result) {
     const meta = result.meta || {};
     if (meta.denied) { stateText = "not approved"; cls = "err"; }
     else if (meta.error) { stateText = "failed"; cls = "err"; }
     else { stateText = "done"; cls = "ok"; }
+  } else if (!state.current.running && !(state.busy && state.busyId === state.current.id)) {
+    stateText = "no result"; cls = "err";
   }
   const details = el("details", { class: "tool" },
     el("summary", {},
       el("span", { class: "name" }, call.name),
       el("span", { class: "args" }, argsSummary(call.arguments)),
+      time ? el("time", { class: "time muted small", datetime: new Date(time * 1000).toISOString(), title: formatTime(time) }, formatClock(time)) : null,
       el("span", { class: "state " + cls }, stateText)));
   const body = [];
   if (call.name === "write_file" && call.arguments && typeof call.arguments.content === "string") {
@@ -180,6 +330,10 @@ function toolCard(call, result) {
   }
   if (result) body.push("Result:\n" + result.content);
   if (body.length) details.append(el("pre", {}, body.join("\n\n")));
+  details.open = state.openTools.has(call.id);
+  details.addEventListener("toggle", () => {
+    if (details.open) state.openTools.add(call.id); else state.openTools.delete(call.id);
+  });
   return details;
 }
 
@@ -196,106 +350,216 @@ function approvalCard(a) {
   };
   approve.addEventListener("click", () => decide(true));
   deny.addEventListener("click", () => decide(false));
-  return el("div", { class: "approval" },
-    el("h3", {}, "Approval needed: " + a.reason),
+  return el("div", { class: "approval", role: "group", "aria-label": "Approval needed" },
+    el("h3", {}, "Your action needed: " + a.reason),
     el("div", { class: "muted small" }, `The agent wants to run ${a.tool_name}. Nothing happens until you decide.`),
     pre,
     el("div", { class: "actions" }, approve, deny));
 }
 
-function render() {
+function renderWork() {
   const conv = state.current;
-  const box = $("#messages");
-  box.replaceChildren();
-  $("#chat-title").textContent = conv ? conv.title : "New chat";
-  $("#delete-chat").hidden = !conv;
-  if (!conv || conv.messages.length === 0) {
-    box.append(emptyState());
-  } else {
-    const results = {};
-    for (const m of conv.messages) if (m.role === "tool") results[m.tool_call_id] = m;
-    const approvals = {};
-    for (const a of conv.approvals) approvals[a.tool_call_id] = a;
-    for (const m of conv.messages) {
-      if (m.role === "user") box.append(el("div", { class: "msg user" }, m.content));
-      else if (m.role === "assistant") {
-        if (m.content) {
-          const div = el("div", { class: "msg assistant" });
-          div.innerHTML = renderMarkdown(m.content);
-          box.append(div);
-        }
-        for (const call of m.tool_calls || []) {
-          if (approvals[call.id]) box.append(approvalCard(approvals[call.id]));
-          else box.append(toolCard(call, results[call.id]));
-        }
-      } else if (m.role === "notice") {
-        const info = (m.meta || {}).error === "step_limit";
-        box.append(el("div", { class: "msg notice" + (info ? " info" : "") }, m.content));
-      }
-    }
+  if (!conv) return;
+  const w = conv.work && conv.work.facts ? conv.work : null;
+  const working = conv.running || (state.busy && state.busyId === conv.id);
+  const status = working ? "working" : (w ? w.status : "working");
+  const label = working ? "Working" : (w ? w.status_label : "Working");
+  $("#work-title").textContent = workTitle(conv);
+  $("#work-status").replaceWith(Object.assign(statusBadge(status, label), { id: "work-status" }));
+  $("#delete-work").disabled = working;
+
+  // Execution facts: only counts and times taken from the records.
+  const facts = $("#work-facts");
+  facts.replaceChildren();
+  const f = w ? w.facts : null;
+  const rows = [["Started", formatTime(conv.created_at)], ["Last activity", formatTime(conv.updated_at)]];
+  if (f) {
+    rows.push(["Agent steps", String(f.agent_steps)]);
+    let tools = String(f.tool_calls);
+    const extra = [];
+    if (f.tool_failures) extra.push(`${f.tool_failures} failed`);
+    if (f.denied) extra.push(`${f.denied} not approved`);
+    if (extra.length) tools += ` (${extra.join(", ")})`;
+    rows.push(["Tool calls", tools]);
+    const appr = [];
+    if (f.approvals_pending) appr.push(`${f.approvals_pending} waiting`);
+    if (f.approvals_approved) appr.push(`${f.approvals_approved} approved`);
+    if (f.approvals_denied) appr.push(`${f.approvals_denied} denied`);
+    rows.push(["Approvals", appr.join(", ") || "None requested"]);
+    rows.push(["Result files", String(w.deliverables.length)]);
   }
-  if ((state.busy && conv && state.busyId === conv.id) || (conv && conv.running)) box.append(el("div", { class: "working" }, "Working"));
-  box.scrollTop = box.scrollHeight;
+  for (const [k, v] of rows) facts.append(el("div", {}, el("dt", {}, k), el("dd", {}, v)));
+
+  renderUpdate(conv, w, status);
+  renderResults(w);
+  renderActivity(conv);
+  renderCommunication(conv);
   $("#send").disabled = state.busy;
+  renderNav();
 }
 
-function emptyState() {
-  const tpl = el("div", { id: "empty-state" },
-    el("h2", {}, "What should I work on?"),
-    el("p", { class: "muted" }, "I can read, search and write files in your workspace, summarize data, and produce reports."));
-  const ex = el("div", { class: "examples" });
-  for (const text of [
-    "List the files in my workspace and describe what they contain.",
-    "Read the files in my workspace and write a summary report to report.md.",
-  ]) {
-    ex.append(el("button", { class: "example", onclick: () => { $("#input").value = text; $("#input").focus(); } }, text));
+// Rebuilt on every poll, but only swapped in when it changed, so screen readers announce real updates only.
+function renderUpdate(conv, w, status) {
+  const target = $("#work-update");
+  const box = el("div");
+  buildUpdate(box, conv, w, status);
+  if (box.innerHTML !== target.innerHTML) target.replaceChildren(...box.childNodes);
+}
+
+function buildUpdate(box, conv, w, status) {
+  if (status === "working") {
+    const calls = conv.messages.filter((m) => m.role === "assistant").flatMap((m) => m.tool_calls || []);
+    const last = calls[calls.length - 1];
+    box.append(el("div", { class: "update working-box" },
+      el("span", { class: "working" }, "Working"),
+      el("p", { class: "muted small" }, last ? `Latest step: ${last.name} ${argsSummary(last.arguments)}` : "Waiting for the model's first step.")));
+    return;
   }
-  tpl.append(ex);
-  return tpl;
+  if (status === "needs_approval") {
+    for (const a of conv.approvals) box.append(approvalCard(a));
+    return;
+  }
+  const text = w ? w.update : "";
+  const cls = { failed: "update error", stopped: "update warn", interrupted: "update warn", finished: "update" }[status] || "update";
+  const div = el("div", { class: cls });
+  if (status === "finished") {
+    div.append(el("p", { class: "muted small" }, "The agent ended its run with this reply. Check the results before relying on them."));
+    const body = el("div", { class: "md" });
+    body.innerHTML = renderMarkdown(text || "(no text)");
+    div.append(body);
+  } else if (status === "not_started") {
+    div.append(el("p", {}, "No instructions yet. Describe the work in Communication below."));
+  } else {
+    div.append(el("p", {}, text));
+    if (status === "failed") div.append(el("p", { class: "muted small" }, "Fix the cause (for example in Settings), then send a message such as \"try again\"."));
+  }
+  box.append(div);
+}
+
+function fileRow(f, kind) {
+  const notes = [];
+  if (kind === "deliverable") notes.push(f.action === "Overwrote" ? "Overwritten by this work" : "Created by this work");
+  else notes.push("Read by this work");
+  if (f.available && f.size !== undefined) notes.push(formatSize(f.size));
+  if (f.changed_since) notes.push("changed since this work wrote it");
+  if (!f.available) notes.push("no longer in the workspace");
+  const actions = el("span", { class: "file-actions" });
+  if (f.available) {
+    actions.append(
+      el("button", { type: "button", onclick: () => previewFile(f.path), "aria-label": "Preview " + f.path }, "Preview"),
+      el("a", { class: "button", href: downloadUrl(f.path), "aria-label": "Download " + f.path }, "Download"));
+  }
+  return el("li", { class: f.available ? "" : "gone" },
+    el("span", { class: "fname" }, f.path),
+    el("span", { class: "muted small" }, notes.join(" · ")),
+    actions);
+}
+
+function renderResults(w) {
+  const box = $("#work-results");
+  box.replaceChildren();
+  if (!w) return;
+  if (w.deliverables.length) {
+    box.append(el("ul", { class: "files deliverables", "aria-label": "Result files" }, ...w.deliverables.map((f) => fileRow(f, "deliverable"))));
+  } else {
+    box.append(el("p", { class: "muted" }, "No files created by this work yet. Results appear here when the agent writes a file."));
+  }
+  if (w.inputs.length) {
+    box.append(el("h3", { class: "sub-title" }, "Input files used"),
+      el("ul", { class: "files inputs", "aria-label": "Input files used" }, ...w.inputs.map((f) => fileRow(f, "input"))));
+  }
+}
+
+function renderActivity(conv) {
+  const list = $("#work-activity");
+  list.replaceChildren();
+  const results = {};
+  for (const m of conv.messages) if (m.role === "tool") results[m.tool_call_id] = m;
+  const pending = new Set(conv.approvals.map((a) => a.tool_call_id));
+  for (const m of conv.messages) {
+    if (m.role === "assistant") {
+      for (const call of m.tool_calls || []) {
+        if (pending.has(call.id)) {
+          list.append(el("li", { class: "event warn" }, `${call.name}: waiting for your approval (see Current work update).`));
+        } else {
+          list.append(el("li", {}, toolCard(call, results[call.id], (results[call.id] || m).created_at)));
+        }
+      }
+    } else if (m.role === "notice") {
+      const info = (m.meta || {}).error === "step_limit";
+      list.append(el("li", { class: "event " + (info ? "warn" : "error") },
+        el("span", { class: "muted small" }, formatTime(m.created_at) + " "), m.content));
+    }
+  }
+  if (!list.children.length) list.append(el("li", { class: "muted" }, "No tool activity yet."));
+}
+
+function renderCommunication(conv) {
+  const box = $("#messages");
+  box.replaceChildren();
+  for (const m of conv.messages) {
+    if (m.role === "user") {
+      box.append(el("div", { class: "msg user" }, el("div", { class: "who" }, "You"), el("div", { class: "text" }, m.content)));
+    } else if (m.role === "assistant" && m.content) {
+      const div = el("div", { class: "msg assistant" }, el("div", { class: "who" }, "Agent"));
+      const body = el("div", { class: "md" });
+      body.innerHTML = renderMarkdown(m.content);
+      div.append(body);
+      box.append(div);
+    }
+  }
+  if (!box.children.length) box.append(el("p", { class: "muted" }, "No messages yet."));
+}
+
+async function refreshCurrent() {
+  if (!state.current) return;
+  const id = state.current.id;
+  try {
+    const conv = await api("GET", `/api/conversations/${id}`);
+    if (!state.current || state.current.id !== id) return;  // the user moved to other work meanwhile
+    state.current = conv;
+    renderWork();
+  } catch (e) { /* keep showing what we have */ }
 }
 
 function showError(message) {
-  $("#messages").append(el("div", { class: "msg notice" }, message));
-  $("#messages").scrollTop = $("#messages").scrollHeight;
+  if ($("#view-work").hidden) { alert(message); return; }
+  $("#work-update").prepend(el("div", { class: "update error", role: "alert" }, message));
 }
 
-// ---------------------------------------------------------------- Sending
+function startPolling() {
+  stopPolling();
+  state.poll = setInterval(refreshCurrent, 1000);
+}
+
+function stopPolling() {
+  if (state.poll) clearInterval(state.poll);
+  state.poll = null;
+}
 
 async function runWithPolling(fn) {
-  const id = currentId();
+  const id = state.current ? state.current.id : null;
   state.busy = true;
   state.busyId = id;
-  render();
-  state.poll = setInterval(refreshCurrent, 1000);
-  try {
-    await fn();
-  } catch (e) {
-    clearInterval(state.poll);
-    state.busy = false;
-    await refreshCurrent();
-    if (currentId() === id) showError(e.message);  // never show it in a different chat
-    return;
-  }
-  clearInterval(state.poll);
+  renderWork();
+  startPolling();
+  let error = null;
+  try { await fn(); } catch (e) { error = e; }
+  stopPolling();
   state.busy = false;
+  state.busyId = null;
   await refreshCurrent();
-  loadConversations();
-  if ($("#files-panel").hidden === false) loadFiles();
+  if (error && state.current && state.current.id === id) showError(error.message);  // never in other work
+  loadWork(true);
+  if (!$("#files-panel").hidden) loadFiles();
 }
 
 async function send(text) {
   if (!state.settings || !state.settings.configured) { openSettings(true); return; }
-  if (!state.current) {
-    const nav = state.nav;
-    try {
-      const conv = await api("POST", "/api/conversations");
-      if (nav !== state.nav) return;  // the user switched chats before it was created
-      state.current = { ...conv, messages: [], approvals: [], running: false };
-      history.replaceState(null, "", "#" + conv.id);
-    } catch (e) { showError(e.message); return; }
-  }
+  if (!state.current) return;
   state.current.messages.push({ role: "user", content: text });
-  await runWithPolling(() => api("POST", `/api/conversations/${state.current.id}/messages`, { text }));
+  const id = state.current.id;
+  await runWithPolling(() => api("POST", `/api/conversations/${id}/messages`, { text }));
 }
 
 // ---------------------------------------------------------------- Files
@@ -313,17 +577,11 @@ async function loadFiles() {
       name.addEventListener("click", () => previewFile(f.path));
       list.append(el("li", {}, name,
         el("span", { class: "muted small" }, formatSize(f.size)),
-        el("a", { href: downloadUrl(f.path), title: "Download " + f.path }, "⬇")));
+        el("a", { href: downloadUrl(f.path), title: "Download " + f.path, "aria-label": "Download " + f.path }, "⬇")));
     }
   } catch (e) {
     list.replaceChildren(el("li", { class: "muted" }, e.message));
   }
-}
-
-function formatSize(n) {
-  if (n < 1024) return n + " B";
-  if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
-  return (n / 1048576).toFixed(1) + " MB";
 }
 
 function downloadUrl(path) {
@@ -339,10 +597,10 @@ async function previewFile(path) {
   content.hidden = $("#preview-label").hidden = true;
   message.textContent = "Loading…";
   message.hidden = false;
-  $("#file-preview").hidden = false;
+  if (!$("#preview-dialog").open) $("#preview-dialog").showModal();
   try {
     const data = await api("GET", "/api/files/content?path=" + encodeURIComponent(path));
-    if ($("#preview-name").textContent !== path) return;  // another file was clicked meanwhile
+    if ($("#preview-name").textContent !== path) return;  // another file was opened meanwhile
     content.textContent = data.content || "(empty file)";
     content.hidden = $("#preview-label").hidden = false;
     message.hidden = true;
@@ -364,6 +622,7 @@ async function uploadFile(file) {
     try { await api("PUT", url(true), undefined, file); } catch (e2) { alert(e2.message); return; }
   }
   loadFiles();
+  if (!$("#view-new").hidden) renderNew();
 }
 
 // ---------------------------------------------------------------- Settings
@@ -475,6 +734,12 @@ function updateModelLabel() {
 
 // ---------------------------------------------------------------- Wiring
 
+function submitOnEnter(textarea, form) {
+  textarea.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); }
+  });
+}
+
 async function init() {
   $("#composer").addEventListener("submit", (e) => {
     e.preventDefault();
@@ -483,14 +748,27 @@ async function init() {
     $("#input").value = "";
     send(text);
   });
-  $("#input").addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("#composer").requestSubmit(); }
+  submitOnEnter($("#input"), $("#composer"));
+  $("#new-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const text = $("#new-input").value.trim();
+    if (!text) { $("#new-input").focus(); return; }
+    if (state.busy) { alert("The agent is still working on other work. Wait until it finishes."); return; }
+    startWork(text);
   });
-  $("#new-chat").addEventListener("click", newChat);
+  $("#new-work").addEventListener("click", newWork);
+  $("#list-new-work").addEventListener("click", newWork);
+  $("#new-manage-files").addEventListener("click", () => { $("#files-panel").hidden = false; loadFiles(); });
   $("#toggle-sidebar").addEventListener("click", () => $("#sidebar").classList.toggle("open"));
-  $("#delete-chat").addEventListener("click", async () => {
-    if (!state.current || !confirm("Delete this conversation? Workspace files are not affected.")) return;
-    try { await api("DELETE", `/api/conversations/${state.current.id}`); newChat(); } catch (e) { showError(e.message); }
+  $(".skip-link").addEventListener("click", (e) => { e.preventDefault(); $("#main").focus(); });
+  $("#delete-work").addEventListener("click", async () => {
+    if (!state.current || !confirm("Delete this work and its conversation? Workspace files are not affected.")) return;
+    try {
+      await api("DELETE", `/api/conversations/${state.current.id}`);
+      delete state.drafts[state.current.id];
+      state.current = null;
+      go("#/");
+    } catch (e) { showError(e.message); }
   });
   $("#open-settings").addEventListener("click", () => openSettings(false));
   $("#s-provider").addEventListener("change", () => { $("#s-endpoint").value = ""; updateProviderFields(); });
@@ -502,19 +780,19 @@ async function init() {
   $("#open-files").addEventListener("click", () => { $("#files-panel").hidden = false; loadFiles(); });
   $("#close-files").addEventListener("click", () => { $("#files-panel").hidden = true; });
   $("#refresh-files").addEventListener("click", loadFiles);
-  $("#close-preview").addEventListener("click", () => { $("#file-preview").hidden = true; });
+  $("#close-preview").addEventListener("click", () => $("#preview-dialog").close());
   $("#upload").addEventListener("change", (e) => { if (e.target.files[0]) uploadFile(e.target.files[0]); e.target.value = ""; });
+  window.addEventListener("hashchange", route);
 
   try {
     state.settings = await api("GET", "/api/settings");
   } catch (e) {
-    showError(e.message);
+    $("#view-list").hidden = false;
+    $("#work-list").replaceChildren(el("li", { class: "empty" }, e.message));
     return;
   }
   updateModelLabel();
-  await loadConversations();
-  const id = location.hash.slice(1);
-  if (id) await openConversation(id); else render();
+  await route();
   if (!state.settings.configured) openSettings(true);
 }
 

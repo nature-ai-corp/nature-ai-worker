@@ -6,6 +6,7 @@ area, sessions and OS credentials. Never remove the user's Standalone files.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Callable
 
@@ -41,7 +42,17 @@ def attempt_platform_transition(
     require_no_failed_sc_residue(data_dir)
     marker = data_dir / FAILED_CLEANUP_MARKER
     # Write before prepare: interruption leaves evidence for next launch.
-    marker.write_text("S-C transition pending: inspect and clean staging\n", encoding="utf-8")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(marker, flags, 0o600)
+    except FileExistsError as exc:
+        raise ModeError("S-C transition already pending or cleanup required.") from exc
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        stream.write("S-C transition pending: inspect and clean staging\\n")
+        stream.flush()
+        os.fsync(stream.fileno())
     try:
         if prepare() is not True:
             raise ModeError("S-C preparation unsuccessful.")

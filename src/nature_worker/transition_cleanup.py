@@ -50,7 +50,7 @@ def attempt_platform_transition(
     except FileExistsError as exc:
         raise ModeError("S-C transition already pending or cleanup required.") from exc
     with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        stream.write("S-C transition pending: inspect and clean staging\\n")
+        stream.write("S-C transition pending: inspect and clean staging\n")
         stream.flush()
         os.fsync(stream.fileno())
     try:

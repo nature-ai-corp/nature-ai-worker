@@ -110,3 +110,17 @@ def test_commit_without_mode_change_is_failure_and_cleans_staging(tmp_path):
         )
     assert called == ["cleanup"]
     assert read_mode(tmp_path) == "standalone"
+
+
+def test_existing_recovery_marker_cannot_be_overwritten(tmp_path):
+    initialize_standalone(tmp_path)
+    marker = tmp_path / FAILED_CLEANUP_MARKER
+    marker.write_text("prior interrupted enterprise transition")
+    with pytest.raises(ModeError):
+        attempt_platform_transition(
+            tmp_path, prepare=lambda: pytest.fail("should not prepare"),
+            cleanup_and_verify=lambda: pytest.fail("should not clean prior attempt"),
+            commit=lambda: pytest.fail("should not commit"),
+        )
+    assert marker.read_text() == "prior interrupted enterprise transition"
+    assert read_mode(tmp_path) == "standalone"

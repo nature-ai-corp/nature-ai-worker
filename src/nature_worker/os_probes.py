@@ -55,10 +55,15 @@ def inspect_known_local_paths(paths: tuple[Path, ...]) -> ProbeFinding:
 def local_os_diagnostics(paths: tuple[Path, ...] = ()) -> tuple[ProbeFinding, ...]:
     process = (inspect_processes_linux() if sys.platform.startswith("linux")
                else ProbeFinding("running_processes", None, "OS-specific process probe unavailable"))
+    if sys.platform == "win32":
+        from .windows_probes import inspect_windows_uninstall_registry
+        packages = inspect_windows_uninstall_registry()
+    else:
+        packages = ProbeFinding("installed_packages", None, "Installer inventory not verified")
     return (
         process,
         inspect_known_local_paths(paths),
         ProbeFinding("os_credentials", None, "OS vault enumeration not implemented"),
-        ProbeFinding("installed_packages", None, "Installer inventory not verified"),
+        packages,
         ProbeFinding("device_policy", None, "Enterprise device policy cannot be verified locally"),
     )

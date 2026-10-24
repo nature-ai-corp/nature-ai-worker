@@ -67,7 +67,8 @@ class EncryptedPlatformStore:
         ciphertext = self._cipher.encrypt(value)
         fd, tmp = tempfile.mkstemp(prefix=".cache-", dir=self.root)
         try:
-            os.fchmod(fd, 0o600)
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)  # POSIX only; Windows ACL is an installer requirement
             with os.fdopen(fd, "wb") as stream:
                 stream.write(ciphertext)
                 stream.flush()

@@ -1,5 +1,6 @@
 import pytest
 from nature_worker.installation_mode import ModeError, initialize_standalone, read_mode
+from nature_worker.mode_transition import commit_platform_transition
 from nature_worker.transition_cleanup import (
     FAILED_CLEANUP_MARKER, attempt_platform_transition, require_no_failed_sc_residue
 )
@@ -53,7 +54,8 @@ def test_success_does_not_invoke_cleanup(tmp_path):
     called = []
     attempt_platform_transition(tmp_path, prepare=lambda: True,
                                 cleanup_and_verify=lambda: called.append(1) or True,
-                                commit=lambda: None)
+                                commit=lambda: commit_platform_transition(tmp_path, verify_ready=lambda: True))
+    assert read_mode(tmp_path) == "platform_client"
     assert called == []
     assert not (tmp_path / FAILED_CLEANUP_MARKER).exists()
 
@@ -79,3 +81,32 @@ def test_unresolved_transition_does_not_initialize_new_workspace(tmp_path):
     with pytest.raises(ModeError):
         create_app(Config(data_dir=data_dir, workspace_dir=workspace))
     assert not workspace.exists()
+
+
+def test_exception_after_commit_does_not_cleanup_enterprise_data(tmp_path):
+    initialize_standalone(tmp_path)
+    called = []
+    def commit_then_raise():
+        commit_platform_transition(tmp_path, verify_ready=lambda: True)
+        raise RuntimeError("interrupted just after commit")
+    with pytest.raises(ModeError, match="mode committed"):
+        attempt_platform_transition(
+            tmp_path, prepare=lambda: True,
+            cleanup_and_verify=lambda: called.append("deleted") or True,
+            commit=commit_then_raise,
+        )
+    assert read_mode(tmp_path) == "platform_client"
+    assert called == []
+
+
+def test_commit_without_mode_change_is_failure_and_cleans_staging(tmp_path):
+    initialize_standalone(tmp_path)
+    called = []
+    with pytest.raises(ModeError, match="did not activate"):
+        attempt_platform_transition(
+            tmp_path, prepare=lambda: True,
+            cleanup_and_verify=lambda: called.append("cleanup") or True,
+            commit=lambda: None,
+        )
+    assert called == ["cleanup"]
+    assert read_mode(tmp_path) == "standalone"

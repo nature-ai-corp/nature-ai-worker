@@ -44,13 +44,6 @@ def commit_platform_transition(data_dir: Path, *, verify_ready: Callable[[], boo
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp, path)
-        # Directory fsync for durability on supported systems.
-        if os.name == "posix":
-            directory_fd = os.open(data_dir, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
     finally:
         if os.path.exists(temp):
             os.unlink(temp)

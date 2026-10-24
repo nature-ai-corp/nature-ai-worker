@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from . import __version__
 from .agent import Agent, ConversationBusy
 from .config import Config
+from .installation_mode import initialize_standalone
 from .credentials import CredentialStore
 from .db import Database
 from .providers import PROVIDERS, ProviderError, effective_endpoint, make_provider
@@ -69,6 +70,9 @@ def _validate_endpoint(endpoint: str | None) -> str | None:
 def create_app(config: Config | None = None) -> FastAPI:
     config = config or Config.from_env()
     config.ensure_dirs()
+    # Deny local Agent/API startup for an installation marked Platform Client.
+    # This local guard is a defense-in-depth check, not an enterprise sandbox.
+    initialize_standalone(config.data_dir)
     db = Database(config.data_dir / "worker.db")
     creds = CredentialStore(config.data_dir)
     workspace = Workspace(config.workspace_dir)

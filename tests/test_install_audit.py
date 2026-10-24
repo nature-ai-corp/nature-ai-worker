@@ -65,3 +65,14 @@ def test_cli_cannot_grant_install_with_forged_positive_evidence(tmp_path, capsys
     assert out["reported_checks_clean"] is True
     assert out["installation_authorized"] is False
     assert out["clean"] is False
+
+
+def test_cli_host_diagnostics_never_authorize_install(tmp_path, capsys):
+    code = main(["--sc-root", str(tmp_path / "sc"),
+                 "--mode-marker", str(tmp_path / "mode.json"),
+                 "--host-diagnostics"])
+    result = json.loads(capsys.readouterr().out)
+    assert code == 2
+    assert result["installation_authorized"] is False
+    assert result["clean"] is False
+    assert len(result["os_diagnostics"]) == 5

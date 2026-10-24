@@ -1,8 +1,7 @@
-"""Windows S-C session lifecycle boundary.
+"""Platform session state; real transport must use the existing S-C contract.
 
-Only authenticated Platform client adapters may create a session. This module
-does not implement or guess Platform endpoints. It intentionally never exposes
-a local Agent, local task database or provider credentials.
+In-memory only. Durable revocation recovery and OS-protected credential
+persistence are mandatory before connecting to real enterprise sessions.
 """
 from __future__ import annotations
 
@@ -24,31 +23,51 @@ class PlatformTransport(Protocol):
 class PlatformSession:
     transport: PlatformTransport
     session: str | None = None
+    pending_revoke: str | None = None
+
+    def _revoke_or_mark_pending(self, token: str) -> bool:
+        self.pending_revoke = token
+        try:
+            if self.transport.revoke_session(token) is not True:
+                return False
+        except Exception:
+            return False
+        self.pending_revoke = None
+        return True
 
     def sign_in(self) -> None:
-        if self.session is not None:
-            raise PlatformSessionError("Already signed in")
+        if self.session is not None or self.pending_revoke is not None:
+            raise PlatformSessionError("Existing or unrevoked Platform session")
         token = self.transport.authenticate()
         if not isinstance(token, str) or not token:
             raise PlatformSessionError("Platform authentication did not provide a session")
         try:
             valid = self.transport.validate_session(token) is True
-        except BaseException:
-            try:
-                self.transport.revoke_session(token)
-            finally:
-                raise
+        except Exception as exc:
+            if not self._revoke_or_mark_pending(token):
+                raise PlatformSessionError("Validation failed; session revocation pending") from exc
+            raise
         if not valid:
-            try:
-                self.transport.revoke_session(token)
-            finally:
-                raise PlatformSessionError("Platform session validation failed")
+            if not self._revoke_or_mark_pending(token):
+                raise PlatformSessionError("Invalid session; server revocation pending")
+            raise PlatformSessionError("Platform session validation failed")
         self.session = token
 
     def sign_out(self) -> None:
         if self.session is None:
+            if self.pending_revoke is not None:
+                self.retry_revocation()
             return
         token = self.session
-        if self.transport.revoke_session(token) is not True:
+        if not self._revoke_or_mark_pending(token):
             raise PlatformSessionError("Server session revocation unconfirmed")
         self.session = None
+
+    def retry_revocation(self) -> None:
+        if self.pending_revoke is None:
+            return
+        token = self.pending_revoke
+        if not self._revoke_or_mark_pending(token):
+            raise PlatformSessionError("Server session revocation still unconfirmed")
+        if self.session == token:
+            self.session = None

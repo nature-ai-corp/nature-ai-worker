@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 from .install_gate import CleanEvidence, standalone_install_decision
+from .os_probes import local_os_diagnostics
 
 
 def audit(sc_root: Path, mode_marker: Path, evidence_path: Path | None) -> dict:
@@ -51,11 +52,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read-only Platform Client residue audit.")
     parser.add_argument("--sc-root", type=Path, required=True)
     parser.add_argument("--mode-marker", type=Path, required=True)
+    parser.add_argument("--host-diagnostics", action="store_true",
+                        help="Add read-only best-effort OS diagnostics; never authorizes install.")
     parser.add_argument("--evidence", type=Path,
                         help="OS checks JSON from a trusted installer probe.")
     args = parser.parse_args(argv)
     try:
         result = audit(args.sc_root, args.mode_marker, args.evidence)
+        if args.host_diagnostics:
+            results = local_os_diagnostics((args.sc_root, args.mode_marker))
+            result["os_diagnostics"] = [
+                {"check": f.check, "clean": f.clean, "detail": f.detail}
+                for f in results
+            ]
+            result["installation_authorized"] = False
+            result["clean"] = False
     except (OSError, ValueError, TypeError) as exc:
         print(json.dumps({"clean": False, "error": str(exc)}), file=sys.stdout)
         return 3

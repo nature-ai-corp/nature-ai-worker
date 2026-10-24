@@ -39,3 +39,29 @@ def test_failed_revoke_keeps_session_for_recovery():
     with pytest.raises(PlatformSessionError):
         state.sign_out()
     assert state.session == "temporary-token"
+
+
+def test_failed_validation_and_failed_revoke_blocks_future_login():
+    transport = FakeTransport(valid=False, revoke=False)
+    state = PlatformSession(transport)
+    with pytest.raises(PlatformSessionError, match="revocation pending"):
+        state.sign_in()
+    assert state.pending_revoke == "temporary-token"
+    with pytest.raises(PlatformSessionError, match="unrevoked"):
+        state.sign_in()
+    transport.revoke = True
+    state.retry_revocation()
+    assert state.pending_revoke is None
+
+
+def test_failed_logout_revocation_can_be_retried():
+    transport = FakeTransport(revoke=False)
+    state = PlatformSession(transport)
+    state.sign_in()
+    with pytest.raises(PlatformSessionError):
+        state.sign_out()
+    assert state.pending_revoke == "temporary-token"
+    transport.revoke = True
+    state.retry_revocation()
+    assert state.pending_revoke is None
+    assert state.session is None

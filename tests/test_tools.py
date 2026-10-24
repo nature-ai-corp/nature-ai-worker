@@ -1,5 +1,6 @@
 """Built-in data tools and web fetch safeguards."""
 
+import os
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -138,6 +139,9 @@ def test_dns_rebinding_and_redirect_to_private_are_blocked(ws, local_http, monke
 
 
 def _online() -> bool:
+    # Real internet tests are opt-in: DNS/TCP reachability does not guarantee HTTP 200.
+    if os.environ.get("NATURE_WORKER_LIVE_WEB_TEST") != "1":
+        return False
     try:
         socket.create_connection(("example.com", 443), timeout=3).close()
         return True

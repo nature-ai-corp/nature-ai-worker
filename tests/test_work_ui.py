@@ -52,6 +52,7 @@ def test_empty_my_work_is_the_entry_point(app):
     b = app["browser"]
     b.wait("!document.querySelector('#view-list').hidden")
     assert b.text("#list-heading") == "My Work"
+    b.wait("'No work yet' in document.querySelector('#work-list').textContent")
     assert "No work yet" in b.text("#work-list")
     b.click("#work-list button", "+ New Work")
     b.wait("!document.querySelector('#view-new').hidden && document.querySelector('#new-files-hint').textContent")

@@ -23,13 +23,16 @@ class WindowsPlatformCredentialStore:
             raise PlatformCredentialError("Windows S-C credential store requires Windows")
         if root.is_symlink() or not root.is_dir():
             raise PlatformCredentialError("Enterprise secure storage must be pre-provisioned")
-        self.root = root
+        self.root = root.resolve(strict=True)
+        self._root_input = root
 
     def _file(self, name: str) -> Path:
         if not name or not name.isascii() or not all(
             c.isalnum() or c in "_-" for c in name
         ):
             raise PlatformCredentialError("Invalid enterprise credential identifier")
+        if self._root_input.is_symlink() or not self.root.is_dir():
+            raise PlatformCredentialError("Unsafe enterprise credential root")
         path = self.root / (name + ".dpapi")
         if path.is_symlink():
             raise PlatformCredentialError("Unsafe enterprise credential path")
@@ -39,6 +42,8 @@ class WindowsPlatformCredentialStore:
         if not isinstance(secret, bytes):
             raise PlatformCredentialError("Credential must be bytes")
         path = self._file(name)
+        if path.exists():
+            raise PlatformCredentialError("Existing credentials require explicit rotation")
         ciphertext = protect_for_current_user(secret)
         fd, tmp = tempfile.mkstemp(prefix=".sc-credential-", dir=self.root)
         try:
@@ -46,7 +51,10 @@ class WindowsPlatformCredentialStore:
                 stream.write(ciphertext)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(tmp, path)
+            # Fail closed against unintended overwrite of an existing token.
+            if path.exists() or path.is_symlink():
+                raise PlatformCredentialError("Concurrent credential update refused")
+            os.rename(tmp, path)
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)

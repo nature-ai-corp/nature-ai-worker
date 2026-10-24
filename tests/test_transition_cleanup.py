@@ -56,3 +56,14 @@ def test_success_does_not_invoke_cleanup(tmp_path):
                                 commit=lambda: None)
     assert called == []
     assert not (tmp_path / FAILED_CLEANUP_MARKER).exists()
+
+
+def test_failed_transition_marker_blocks_application_startup(tmp_path):
+    from nature_worker.app import create_app
+    from nature_worker.config import Config
+    initialize_standalone(tmp_path / "data")
+    (tmp_path / "data" / FAILED_CLEANUP_MARKER).write_text("unresolved")
+    config = Config(data_dir=tmp_path / "data", workspace_dir=tmp_path / "workspace")
+    with pytest.raises(ModeError, match="cleanup verification"):
+        create_app(config)
+    assert read_mode(config.data_dir) == "standalone"

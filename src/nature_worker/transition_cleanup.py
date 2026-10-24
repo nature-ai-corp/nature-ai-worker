@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from .installation_mode import ModeError, STANDALONE, read_mode
+from .installation_mode import ModeError, STANDALONE, PLATFORM_CLIENT, read_mode
 
 FAILED_CLEANUP_MARKER = "sc-transition-cleanup-required"
 
@@ -46,7 +46,13 @@ def attempt_platform_transition(
         if prepare() is not True:
             raise ModeError("S-C preparation unsuccessful.")
         commit()
+        if read_mode(data_dir) != PLATFORM_CLIENT:
+            raise ModeError("S-C commit did not activate Platform Client mode.")
     except BaseException:
+        # Atomic mode commit may have succeeded just before an exception.
+        # Never destroy committed enterprise state as if it were staging.
+        if read_mode(data_dir) == PLATFORM_CLIENT:
+            raise ModeError("Platform Client mode committed; recovery must use S-C procedures.")
         try:
             clean = cleanup_and_verify() is True
         except BaseException:

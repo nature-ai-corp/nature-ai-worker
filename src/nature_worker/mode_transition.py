@@ -38,7 +38,8 @@ def commit_platform_transition(data_dir: Path, *, verify_ready: Callable[[], boo
     payload = (json.dumps({"schema": 1, "mode": PLATFORM_CLIENT}) + "\n").encode()
     fd, temp = tempfile.mkstemp(prefix=".installation-mode-", dir=data_dir)
     try:
-        os.fchmod(fd, 0o600)
+        if hasattr(os, 'fchmod'):
+            os.fchmod(fd, 0o600)  # POSIX; Windows ACLs require installer enforcement
         with os.fdopen(fd, "wb") as stream:
             stream.write(payload)
             stream.flush()

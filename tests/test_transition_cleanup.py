@@ -67,3 +67,15 @@ def test_failed_transition_marker_blocks_application_startup(tmp_path):
     with pytest.raises(ModeError, match="cleanup verification"):
         create_app(config)
     assert read_mode(config.data_dir) == "standalone"
+
+
+def test_unresolved_transition_does_not_initialize_new_workspace(tmp_path):
+    from nature_worker.app import create_app
+    from nature_worker.config import Config
+    data_dir = tmp_path / "data"
+    initialize_standalone(data_dir)
+    (data_dir / FAILED_CLEANUP_MARKER).write_text("incomplete")
+    workspace = tmp_path / "new-workspace"
+    with pytest.raises(ModeError):
+        create_app(Config(data_dir=data_dir, workspace_dir=workspace))
+    assert not workspace.exists()

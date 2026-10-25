@@ -140,11 +140,13 @@ def test_refresh_keeps_the_new_work_draft_until_new_work_is_clicked(app):
     _type(b, T["research-summary"]["instruction"].replace("Topic: ", "Topic: tea sales"))
     b.eval("location.reload()")
     b.wait("document.querySelector('#template-name') && document.querySelector('#template-name').textContent === 'Research & Summary'")
+    b.wait("document.querySelector('#new-input').value.startsWith('Topic: tea sales')")
     assert _field(b).startswith("Topic: tea sales")
     # A question left open at refresh restores the template that matches the text.
     _choose(b, "Data Analysis")
     b.eval("location.reload()")
     b.wait("document.querySelector('#template-name') && document.querySelector('#template-name').textContent === 'Research & Summary'")
+    b.wait("document.querySelector('#new-input').value.startsWith('Topic: tea sales')")
     assert _field(b).startswith("Topic: tea sales")
     _open_new(b)
     assert b.text("#template-name") == "General Work" and _field(b) == ""

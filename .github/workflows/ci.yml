@@ -59,6 +59,8 @@ jobs:
           python -m pip install -r requirements.lock -r requirements-dev.lock
           python -m pip install --no-deps .
           python -m pip check
+      - name: Launch real installed Nature AI Worker process
+        run: python scripts/windows-real-worker-smoke.py
       - name: Test Windows mode switching and cleanup
         run: python -m pytest -q tests/test_installation_mode.py tests/test_install_gate.py tests/test_install_audit.py tests/test_os_probes.py tests/test_windows_probes.py tests/test_windows_storage.py tests/test_windows_dpapi.py tests/test_windows_credentials.py tests/test_windows_session_recovery.py tests/test_platform_http.py tests/test_platform_contract.py tests/test_platform_operations.py tests/test_platform_storage.py tests/test_platform_crypto.py tests/test_platform_runtime.py tests/test_mode_transition.py tests/test_transition_cleanup.py tests/test_platform_switch.py
 

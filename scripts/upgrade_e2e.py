@@ -57,11 +57,18 @@ def expect(condition, message: str) -> None:
 
 
 class FakeModel:
-    """OpenAI-compatible chat endpoint answering from a queue, with a delay."""
+    """OpenAI-compatible chat endpoint answering from a queue, with a delay.
+
+    With ``gate`` set, a reply is held until that file exists (the upgrader's
+    stop request) and then for ``delay`` seconds: the Agent run is provably
+    still in progress when the stop is requested, however long installing
+    the new version took.
+    """
 
     def __init__(self):
         self.queue: list[dict] = []
         self.delay = 0.0
+        self.gate: Path | None = None
         model = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -73,6 +80,9 @@ class FakeModel:
 
             def do_POST(self):
                 self.rfile.read(int(self.headers.get("content-length") or 0))
+                deadline = time.monotonic() + 600
+                while model.gate is not None and not model.gate.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
                 time.sleep(model.delay)
                 message = model.queue.pop(0) if model.queue else {"role": "assistant", "content": "ok"}
                 self._send({"id": "x", "object": "chat.completion", "created": 0, "model": "fake",
@@ -391,7 +401,8 @@ class E2E:
 
     def s_upgrade_while_agent_runs(self) -> None:
         conv = self.api("POST", "/api/conversations").json()["id"]
-        self.model.delay, self.model.queue = 20, [{"role": "assistant", "content": "slow work finished"}]
+        self.model.gate = self.data / "maintenance-request.json"
+        self.model.delay, self.model.queue = 4, [{"role": "assistant", "content": "slow work finished"}]
         reply = self._background_message(conv, "long task")
         time.sleep(1.5)
         old_worker = self.worker
@@ -399,7 +410,7 @@ class E2E:
         result = self.upgrader("upgrade", "--bundle", self.bundles["B"], "--confirm-version", "9.1.0")
         reply["thread"].join(60)
         stop_seen["done"] = True
-        self.model.delay = 0
+        self.model.delay, self.model.gate = 0, None
         expect(result.returncode == 0, f"upgrade exit {result.returncode}: {result.stdout[-1500:]}")
         expect(reply.get("r") is not None and reply["r"].status_code == 200,
                "the Agent run in progress was cut off by the upgrade")
@@ -431,7 +442,8 @@ class E2E:
 
     def s_drain_timeout_aborts(self) -> None:
         conv = self.api("POST", "/api/conversations").json()["id"]
-        self.model.delay, self.model.queue = 40, [{"role": "assistant", "content": "long work finished"}]
+        self.model.gate = self.data / "maintenance-request.json"
+        self.model.delay, self.model.queue = 20, [{"role": "assistant", "content": "long work finished"}]
         reply = self._background_message(conv, "very long task")
         time.sleep(1.5)
         result = self.upgrader("upgrade", "--bundle", self.bundles["E"], "--confirm-version", "9.4.0",
@@ -447,10 +459,10 @@ class E2E:
             time.sleep(0.3)
         expect(new.status_code == 200, "Worker still refuses new work 3 s after the abort")
         reply["thread"].join(60)
-        self.model.delay = 0
+        self.model.delay, self.model.gate = 0, None
         expect(reply["r"].status_code == 200, "running work failed after the abort")
         expect(not (self.data / "upgrade-in-progress.json").exists(), "marker left after abort")
-        self.note("drain timeout 3 s with 40 s of Agent work: exit 2 'aborted', 9.1.0 kept running, accepted "
+        self.note("drain timeout 3 s while the Agent run needed 20 s more: exit 2 'aborted', 9.1.0 kept running, accepted "
                   "new work again, the running request completed")
         self.stop_worker()
 

@@ -9,6 +9,7 @@ import pytest
 
 from conftest import configure, conversation, new_conversation, openai_error, openai_text, openai_tool_call, send
 from nature_worker.work import summarize
+from os_helpers import try_link
 
 
 def work(client, conv_id):
@@ -168,11 +169,11 @@ def test_results_never_expose_files_outside_the_workspace(client, config):
     """Even a record that claims a successful write outside the workspace is not shown as available."""
     secret = config.workspace_dir.parent / "secret.md"
     secret.write_text("TOP-SECRET")
-    os.symlink(secret, config.workspace_dir / "link.md")
+    linked = try_link(secret, config.workspace_dir / "link.md")
     db = client.app.state.db
     conv = db.create_conversation("x")
     calls = [{"id": f"c{i}", "name": "write_file", "arguments": {"path": p, "content": "x"}}
-             for i, p in enumerate(["../secret.md", str(secret), "link.md"])]
+             for i, p in enumerate(["../secret.md", str(secret), *(["link.md"] if linked else [])])]
     db.add_message(conv["id"], "assistant", "", tool_calls=calls)
     for c in calls:
         db.add_message(conv["id"], "tool", "Created.", tool_call_id=c["id"], tool_name="write_file")

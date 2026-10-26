@@ -4,6 +4,7 @@
 import pytest
 from cryptography.fernet import Fernet
 from nature_worker.platform_crypto import EncryptedPlatformStore, PlatformStorageError
+from os_helpers import make_link
 
 
 def test_roundtrip_and_no_plaintext_on_disk(tmp_path):
@@ -43,7 +44,7 @@ def test_rejects_symlinked_file(tmp_path):
     root.mkdir()
     outside = tmp_path / "outside"
     outside.write_bytes(b"untouched")
-    (root / "cache.enc").symlink_to(outside)
+    make_link(outside, root / "cache.enc")
     store = EncryptedPlatformStore(root, Fernet.generate_key())
     with pytest.raises(PlatformStorageError):
         store.write("cache", b"secret")

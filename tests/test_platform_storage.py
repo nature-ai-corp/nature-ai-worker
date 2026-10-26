@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Read-only clean-state validator tests (no enterprise data deletion)."""
 from nature_worker.platform_storage import platform_paths, validate_clean
+from os_helpers import make_link
 
 
 def test_no_enterprise_root_is_clean(tmp_path):
@@ -31,7 +32,7 @@ def test_symlink_root_blocks(tmp_path):
     target = tmp_path / "target"
     target.mkdir()
     root = tmp_path / "enterprise"
-    root.symlink_to(target, target_is_directory=True)
+    make_link(target, root, directory=True)
     assert not validate_clean(root).clean
 
 

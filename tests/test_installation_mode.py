@@ -8,6 +8,7 @@ import pytest
 from nature_worker.installation_mode import (
     MODE_FILE, ModeError, initialize_standalone, read_mode, require_standalone,
 )
+from os_helpers import make_link
 
 
 def test_new_standalone_manifest(tmp_path):
@@ -43,6 +44,6 @@ def test_invalid_mode_never_defaults_to_standalone(tmp_path, value):
 def test_marker_symlink_is_rejected(tmp_path):
     other = tmp_path / "other"
     other.write_text('{"schema":1,"mode":"standalone"}')
-    (tmp_path / MODE_FILE).symlink_to(other)
+    make_link(other, tmp_path / MODE_FILE)
     with pytest.raises(ModeError):
         initialize_standalone(tmp_path)

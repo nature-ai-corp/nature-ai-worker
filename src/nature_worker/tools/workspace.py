@@ -100,13 +100,17 @@ class Workspace:
         entries: list[dict] = []
         for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
             dirnames.sort()
+            escaping = set()
             for name in dirnames + sorted(filenames):
                 full = Path(dirpath) / name
-                if full.is_symlink():
-                    try:
-                        self.resolve(self.display(full))
-                    except ToolError:
-                        continue  # hide symlinks that point outside the workspace
+                try:
+                    self.resolve(self.display(full))
+                except ToolError:
+                    # Hide links that point outside the workspace - symbolic links and,
+                    # on Windows, NTFS junctions (which os.walk enters before Python 3.12) -
+                    # and never descend into them.
+                    escaping.add(name)
+                    continue
                 try:
                     is_dir = full.is_dir()
                     size = None if is_dir else full.stat().st_size
@@ -115,6 +119,7 @@ class Workspace:
                 entries.append({"path": self.display(full), "type": "dir" if is_dir else "file", "size": size})
                 if len(entries) >= MAX_LIST_ENTRIES:
                     return entries
+            dirnames[:] = [d for d in dirnames if d not in escaping]
             if not recursive:
                 break
         return entries

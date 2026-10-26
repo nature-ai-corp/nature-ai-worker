@@ -36,19 +36,31 @@ def _check_port_free(host: str, port: int) -> str | None:
         return f"Cannot listen on {host}: {e.strerror}. Check NATURE_WORKER_HOST."
     family, kind, proto, _, addr = infos[0]
     with socket.socket(family, kind, proto) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # as uvicorn does
+        if sys.platform != "win32":
+            # As uvicorn's server does on POSIX. On Windows it does not: there
+            # SO_REUSEADDR would let a bind succeed, or fail with WSAEACCES,
+            # on a port another program is using.
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(addr)
         except OSError as e:
+            find = (f"netstat -ano | findstr :{port}" if sys.platform == "win32"
+                    else f"ss -ltnp 'sport = :{port}'")
             if e.errno == errno.EADDRINUSE:
                 return (
                     f"Port {port} is already in use on {host}. Another program (or another copy of "
                     f"Nature AI Worker) is using it.\n"
                     f"  Start on a different port:  nature-worker --port {port + 1 if port < 65535 else 8081}\n"
-                    f"  Or find what is using it:   ss -ltnp 'sport = :{port}'"
+                    f"  Or find what is using it:   {find}"
                 )
-            if e.errno == errno.EACCES:
+            if e.errno == errno.EACCES and port < 1024 and sys.platform != "win32":
                 return f"Not allowed to listen on port {port}. Ports below 1024 need extra privileges; use --port 8080 or higher."
+            if e.errno == errno.EACCES:
+                return (f"Not allowed to listen on port {port}: it is in use by another program, or reserved "
+                        "by the operating system.\n"
+                        f"  Start on a different port:  nature-worker --port {port + 1 if port < 65535 else 8081}\n"
+                        + ("  Reserved ranges:            netsh interface ipv4 show excludedportrange protocol=tcp"
+                           if sys.platform == "win32" else f"  Or find what is using it:   {find}"))
             return f"Cannot listen on {host}:{port}: {e.strerror}."
     return None
 

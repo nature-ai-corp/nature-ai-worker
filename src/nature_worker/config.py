@@ -9,7 +9,11 @@ are stored by ``credentials.py``.
 
 from __future__ import annotations
 
+import csv
+import logging
 import os
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -41,7 +45,42 @@ class Config:
     def ensure_dirs(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
+        if sys.platform == "win32":
+            # chmod cannot protect anything on Windows: the data root (master key,
+            # encrypted API keys, backups) would inherit e.g. "Users: read" from C:\.
+            try:
+                restrict_to_owner(self.data_dir)
+            except (OSError, subprocess.SubprocessError, ValueError) as exc:
+                logging.getLogger(__name__).warning(
+                    "Could not make %s private to this user (%s). Other accounts on this computer may "
+                    "be able to read it; choose a data folder inside your user profile.", self.data_dir, exc)
+            return
         try:
             os.chmod(self.data_dir, 0o700)
         except OSError:
             pass
+
+
+# Well-known SIDs: LocalSystem, BUILTIN\Administrators, and the broad groups removed.
+_SYSTEM, _ADMINISTRATORS = "S-1-5-18", "S-1-5-32-544"
+_BROAD = ("S-1-1-0", "S-1-5-11", "S-1-5-32-545")  # Everyone, Authenticated Users, Users
+
+
+def current_user_sid() -> str:
+    out = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, text=True,
+                         check=True, timeout=30, stdin=subprocess.DEVNULL).stdout
+    sid = next(csv.reader([out.strip()]))[-1]
+    if not sid.startswith("S-1-"):
+        raise ValueError("could not determine the current user's SID")
+    return sid
+
+
+def restrict_to_owner(path: Path) -> None:
+    """Windows: an explicit, non-inherited ACL on ``path`` for this user, SYSTEM and
+    Administrators only - the same principals as the user's own profile folder,
+    and the Windows equivalent of POSIX mode 0700. Files inside inherit it."""
+    subprocess.run(["icacls", str(path), "/inheritance:r",
+                    "/grant:r", f"*{current_user_sid()}:(OI)(CI)F", f"*{_SYSTEM}:(OI)(CI)F",
+                    f"*{_ADMINISTRATORS}:(OI)(CI)F",
+                    "/remove:g", *(f"*{sid}" for sid in _BROAD)],
+                   capture_output=True, check=True, timeout=60, stdin=subprocess.DEVNULL)

@@ -86,6 +86,34 @@ def worker_running(data_dir: Path) -> bool:
     return True
 
 
+def replace_file(tmp: Path, path: Path) -> None:
+    """``os.replace`` that tolerates Windows' transient sharing violations.
+
+    On Windows, replacing a file fails while another process (a status
+    reader, an antivirus scanner) has it open; that clears within moments.
+    """
+    for attempt in range(40):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if sys.platform != "win32" or attempt == 39:
+                raise
+            time.sleep(0.05)
+
+
+def read_text(path: Path) -> str:
+    """Read a small state file; on Windows, retry while it is being replaced."""
+    for attempt in range(40):
+        try:
+            return path.read_text(encoding="utf-8")
+        except PermissionError:
+            if sys.platform != "win32" or attempt == 39:
+                raise
+            time.sleep(0.05)
+    raise AssertionError("unreachable")
+
+
 def _write_json(path: Path, record: dict) -> None:
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     with open(tmp, "w", encoding="utf-8") as stream:
@@ -93,7 +121,7 @@ def _write_json(path: Path, record: dict) -> None:
         stream.write("\n")
         stream.flush()
         os.fsync(stream.fileno())
-    os.replace(tmp, path)
+    replace_file(tmp, path)
 
 
 def request_stop(data_dir: Path, reason: str) -> None:
@@ -126,7 +154,7 @@ def read_upgrade_marker(data_dir: Path) -> dict | None:
     if path.is_symlink():
         raise ModeError("Upgrade marker must not be a symbolic link.")
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(read_text(path))
     except FileNotFoundError:
         return None
     except (OSError, ValueError) as exc:

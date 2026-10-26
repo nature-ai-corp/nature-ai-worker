@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Callable
 
 from .installation_mode import PLATFORM_CLIENT, STANDALONE, ModeError, read_mode
+from .maintenance import replace_file
 
 DB_FILE = "worker.db"
 BACKUPS_DIR = "backups"
@@ -140,7 +141,7 @@ def restore_data_root(data_dir: Path, backup: Path, aside: Path) -> None:
     for entry in sorted(data_dir.iterdir()):
         if entry.name in (BACKUPS_DIR, "upgrade-in-progress.json", "worker.lock"):
             continue
-        os.replace(entry, aside / entry.name)
+        replace_file(entry, aside / entry.name)
     for entry in sorted(backup.iterdir()):
         if entry.name != "BACKUP.json":
             _copy_private(entry, data_dir / entry.name)

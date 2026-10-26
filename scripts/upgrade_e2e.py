@@ -161,8 +161,8 @@ class E2E:
         path = self.prefix / "upgrade" / "state.json"
         try:
             return json.loads(path.read_text())
-        except (FileNotFoundError, ValueError):
-            return None
+        except (FileNotFoundError, PermissionError, ValueError):
+            return None  # absent, or being replaced at this moment (Windows)
 
     def free_port(self) -> int:
         import socket
@@ -517,19 +517,20 @@ class E2E:
         log = open(self.w / "logs" / f"interrupted-{phase}.log", "wb")
         proc = subprocess.Popen([str(c) for c in cmd], env=environment, stdout=log, stderr=subprocess.STDOUT,
                                 stdin=subprocess.DEVNULL)
-        deadline = time.monotonic() + 300
-        while time.monotonic() < deadline:
-            state = self.state()
-            if state and state.get("phase") == phase:
-                time.sleep(0.5)
-                proc.kill()
-                proc.wait()
-                return
-            if proc.poll() is not None:
-                raise Check(f"the upgrade ended before reaching {phase}")
-            time.sleep(0.05)
-        proc.kill()
-        raise Check(f"phase {phase} not reached")
+        try:
+            deadline = time.monotonic() + 300
+            while time.monotonic() < deadline:
+                state = self.state()
+                if state and state.get("phase") == phase:
+                    time.sleep(0.5)
+                    return
+                if proc.poll() is not None:
+                    raise Check(f"the upgrade ended before reaching {phase}")
+                time.sleep(0.05)
+            raise Check(f"phase {phase} not reached")
+        finally:
+            proc.kill()
+            proc.wait()
 
     def s_killed_during_migration(self) -> None:
         self._interrupt("migrating", {"E2E_MIGRATION_SLEEP": "5"})

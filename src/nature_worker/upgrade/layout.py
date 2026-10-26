@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..maintenance import RuntimeLock
+from ..maintenance import RuntimeLock, read_text, replace_file
 from .release import EDITIONS, ReleaseError, Version
 
 INSTALLATION = "installation.json"
@@ -73,7 +73,7 @@ def write_json_atomic(path: Path, record: dict, mode: int = 0o644) -> None:
         stream.write("\n")
         stream.flush()
         os.fsync(stream.fileno())
-    os.replace(tmp, path)
+    replace_file(tmp, path)
     _fsync_dir(path.parent)
 
 
@@ -149,7 +149,7 @@ class Layout:
 
     def current(self) -> str:
         try:
-            version = (self.prefix / CURRENT).read_text(encoding="utf-8").strip()
+            version = read_text(self.prefix / CURRENT).strip()
         except FileNotFoundError:
             raise LayoutError("No active version (the 'current' pointer is missing).") from None
         try:
@@ -168,7 +168,7 @@ class Layout:
             stream.write(version)  # no newline: read by `set /p` in the Windows launcher
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(tmp, self.prefix / CURRENT)
+        replace_file(tmp, self.prefix / CURRENT)
         _fsync_dir(self.prefix)
 
     # -- journal and history ------------------------------------------------------
@@ -191,7 +191,7 @@ class Layout:
 
     def state(self) -> dict | None:
         try:
-            return json.loads(self.state_file.read_text(encoding="utf-8"))
+            return json.loads(read_text(self.state_file))
         except FileNotFoundError:
             return None
         except (OSError, ValueError) as exc:

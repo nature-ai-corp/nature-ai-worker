@@ -29,7 +29,10 @@ done
 [ "$(id -u)" -eq 0 ] || { echo "run with sudo" >&2; exit 2; }
 case "$ORIGIN" in https://*) ;; *) echo "--origin must be an https:// Platform origin" >&2; exit 2 ;; esac
 [ -n "$STANDALONE" ] || { echo "--standalone-data is required (path of the Standalone data root)" >&2; exit 2; }
+[ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] || \
+  { echo "run with sudo from the account that owns the checkout" >&2; exit 2; }
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
+cd /  # never import from, or build in, the user's checkout
 STANDALONE_UID="$(stat -c %u "$STANDALONE")" || { echo "cannot read $STANDALONE" >&2; exit 2; }
 
 if [ -e "$DATA" ] && [ -n "$(ls -A "$DATA" 2>/dev/null)" ] && \
@@ -40,14 +43,27 @@ fi
 id -u "$ACCOUNT" >/dev/null 2>&1 || \
   useradd --system --user-group --home-dir "$DATA" --no-create-home --shell /usr/sbin/nologin "$ACCOUNT"
 
-# Code is root-owned and read-only for the service account.
+# Install exactly the committed HEAD, exported by the checkout's owner, into a
+# root-owned staging copy: nothing is built in (or written to) the checkout.
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+COMMIT="$(runuser -u "$SUDO_USER" -- git -C "$SRC" rev-parse HEAD)"
+runuser -u "$SUDO_USER" -- git -C "$SRC" diff --quiet HEAD -- || \
+  echo "note: uncommitted changes in $SRC are NOT installed; installing $COMMIT"
+runuser -u "$SUDO_USER" -- git -C "$SRC" archive --format=tar HEAD > "$STAGE/src.tar"
+mkdir "$STAGE/src" && tar -xf "$STAGE/src.tar" -C "$STAGE/src"
+
+# Code is root-owned and read-only for the service account. Dependencies are
+# installed from wheels only, so no third-party build code runs as root.
 install -d -o root -g root -m 0755 "$PREFIX"
 [ -x "$PREFIX/venv/bin/python" ] || python3 -m venv "$PREFIX/venv"
-"$PREFIX/venv/bin/pip" install -q -r "$SRC/requirements.lock"
-"$PREFIX/venv/bin/pip" install -q --no-deps --force-reinstall "$SRC"
+"$PREFIX/venv/bin/pip" install -q --only-binary=:all: -r "$STAGE/src/requirements.lock"
+"$PREFIX/venv/bin/pip" install -q --no-deps --force-reinstall "$STAGE/src"
+echo "$COMMIT" > "$PREFIX/COMMIT"
+echo "installed commit $COMMIT"
 
 install -d -o "$ACCOUNT" -g "$ACCOUNT" -m 0700 "$DATA"
-runuser -u "$ACCOUNT" -- env NWPC_DATA_DIR="$DATA" "$PREFIX/venv/bin/python" -m nature_worker.platform_client init
+runuser -u "$ACCOUNT" -- env NWPC_DATA_DIR="$DATA" "$PREFIX/venv/bin/python" -I -m nature_worker.platform_client init
 
 umask 027
 cat > "$ENV_FILE" <<EOF
@@ -71,7 +87,8 @@ Wants=network-online.target
 User=$ACCOUNT
 Group=$ACCOUNT
 EnvironmentFile=$ENV_FILE
-ExecStart=$PREFIX/venv/bin/python -m nature_worker.platform_client serve
+WorkingDirectory=$DATA
+ExecStart=$PREFIX/venv/bin/python -I -m nature_worker.platform_client serve
 Restart=on-failure
 UMask=0077
 LimitCORE=0
@@ -96,7 +113,7 @@ EOF
 systemctl daemon-reload
 echo "--- preflight (as $ACCOUNT)"
 if runuser -u "$ACCOUNT" -- env $(grep -v '^#' "$ENV_FILE" | xargs) \
-     "$PREFIX/venv/bin/python" -m nature_worker.platform_client preflight; then
+     "$PREFIX/venv/bin/python" -I -m nature_worker.platform_client preflight; then
   systemctl enable --now nature-worker-platform-client.service
   echo "Platform Client running: open http://127.0.0.1:$PORT/"
 else

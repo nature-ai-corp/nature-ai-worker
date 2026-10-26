@@ -167,3 +167,17 @@ def test_standalone_toolkit_refuses_root_and_foreign_owners(tmp_path):
     layout, inst = managed_install(tmp_path)
     checks = {name: ok for name, ok, _ in StandaloneToolkit(layout, inst).check_permissions()}
     assert checks == {"not_root": True, "owner": True}
+
+
+def test_prompts_treat_end_of_input_as_no(monkeypatch):
+    """Windows' NUL device reports isatty(); input() then hits end of file."""
+    class Tty:
+        def isatty(self):
+            return True
+
+        def readline(self):
+            return ""
+    monkeypatch.setattr("sys.stdin", Tty())
+    monkeypatch.setattr("builtins.input", lambda _q="": (_ for _ in ()).throw(EOFError()))
+    assert cli._ask("Type it: ") is None
+    assert cli._confirm("Proceed?", assume=False) is False

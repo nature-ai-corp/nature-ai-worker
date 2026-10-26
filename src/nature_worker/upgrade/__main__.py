@@ -42,14 +42,28 @@ def _say(message: str) -> None:
     print(message, flush=True)
 
 
+def _ask(question: str) -> str | None:
+    """The user's typed answer, or None when there is nobody to ask.
+
+    On Windows the NUL device reports isatty(), so end of input is handled too.
+    """
+    if not sys.stdin or not sys.stdin.isatty():
+        return None
+    try:
+        return input(question).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+
+
 def _confirm(prompt: str, assume: bool) -> bool:
     _say(prompt)
     if assume:
         return True
-    if not sys.stdin.isatty():
+    answer = _ask("Type yes to continue: ")
+    if answer is None:
         _say("Not confirmed: no terminal to ask on. Re-run with --confirm after reading the above.")
-        return False
-    return input("Type yes to continue: ").strip().lower() == "yes"
+    return (answer or "").lower() == "yes"
 
 
 def _show_plan(plan: Plan) -> None:
@@ -81,10 +95,10 @@ def _authorize(args) -> callable:
                 return True
             _say(f"--confirm-version {args.confirm_version} does not match {plan.to_version}: not authorized.")
             return False
-        if not sys.stdin.isatty():
+        answer = _ask(f"Type {plan.to_version} to upgrade, or press Enter to cancel: ")
+        if answer is None:
             _say(f"Not authorized: no terminal to ask on. Re-run with --confirm-version {plan.to_version}.")
-            return False
-        return input(f"Type {plan.to_version} to upgrade, or press Enter to cancel: ").strip() == plan.to_version
+        return answer == plan.to_version
     return authorize
 
 
@@ -268,8 +282,7 @@ def cmd_install(args) -> int:
     _say(f"  installation: {prefix}\n  data root:    {data_dir}" +
          (" (existing data is kept and migrated, after a backup)" if (data_dir / "worker.db").exists() else "") +
          f"\n  workspace:    {workspace}")
-    if args.confirm_version != version and not (
-            sys.stdin.isatty() and input(f"Type {version} to install, or press Enter to cancel: ").strip() == version):
+    if args.confirm_version != version and _ask(f"Type {version} to install, or press Enter to cancel: ") != version:
         _say("Not authorized; nothing was installed.")
         return 2
     # Everything that can fail happens before the installation is recorded, so

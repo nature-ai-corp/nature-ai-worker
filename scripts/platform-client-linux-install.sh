@@ -51,6 +51,15 @@ fi
 
 # Stop a running instance before replacing its code: a process must never keep
 # serving old code beside new files. It is started again only after preflight.
+# The port must be free unless this service is the one using it. (On WSL every
+# distribution shares one network: another distribution may hold the port.)
+OURS=""
+if systemctl is-active --quiet nature-worker-platform-client.service && \
+   grep -qx "NWPC_PORT=$PORT" "$ENV_FILE" 2>/dev/null; then OURS=1; fi
+if [ -z "$OURS" ] && \
+   python3 -I -c 'import socket, sys; s = socket.socket(); s.settimeout(1); sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$PORT"; then
+  echo "127.0.0.1:$PORT is already used by another program; choose another --port" >&2; exit 1
+fi
 systemctl stop nature-worker-platform-client.service 2>/dev/null || true
 
 id -u "$ACCOUNT" >/dev/null 2>&1 || \
@@ -142,8 +151,24 @@ if runuser -u "$ACCOUNT" -- env $(grep -v '^#' "$ENV_FILE" | xargs) \
      "$VDIR/venv/bin/python" -I -m nature_worker.platform_client preflight; then
   systemctl enable nature-worker-platform-client.service
   systemctl restart nature-worker-platform-client.service
-  systemctl is-active --quiet nature-worker-platform-client.service || \
-    { echo "service failed to start; see: journalctl -u nature-worker-platform-client" >&2; exit 1; }
+  # "active" only means systemd started it: wait until THIS service answers on its port.
+  if ! "$VDIR/venv/bin/python" -I - "$PORT" "$ORIGIN" <<'PY'
+import json, sys, time, urllib.request
+port, origin = sys.argv[1], sys.argv[2]
+for _ in range(60):
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status", timeout=2) as r:
+            if json.load(r).get("platform") == origin:
+                sys.exit(0)
+    except (OSError, ValueError):
+        pass
+    time.sleep(1)
+sys.exit(1)
+PY
+  then
+    echo "the service did not answer on 127.0.0.1:$PORT; see: journalctl -u nature-worker-platform-client" >&2
+    exit 1
+  fi
   # The layout before versioned installs kept one venv in $PREFIX/venv: no longer used.
   if [ -d "$PREFIX/venv" ]; then rm -rf "$PREFIX/venv"; fi
   # Keep the active build and the two most recent others (for rollback); remove older local builds.

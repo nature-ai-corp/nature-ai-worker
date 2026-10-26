@@ -36,6 +36,9 @@ class FakePlatform:
         self.conversations: dict[str, dict] = {}
         self.messages: dict[str, list] = {}
         self.tasks: dict[int, dict] = {}
+        # Task number -> {"detail", "work_history", "approvals", "results", "files"}:
+        # responses replayed exactly as recorded, for presentation tests.
+        self.recorded: dict[int, dict] = {}
         self.requests: list[tuple[str, str]] = []
         self.idempotency: dict[str, dict] = {}
         self.password = "correct horse"
@@ -133,6 +136,12 @@ class FakePlatform:
                                              "page_size": 25, "modules": []})
         if m:
             n, sub = int(m.group(1)), m.group(2) or ""
+            if n in self.recorded:
+                part = {"": "detail", "/work-history": "work_history", "/approvals": "approvals",
+                        "/results": "results", "/files": "files"}.get(sub)
+                if part is None or method != "GET":
+                    return problem(404, "Not Found")
+                return httpx.Response(200, json=self.recorded[n][part])
             t = self.tasks.get(n)
             if t is None:
                 return problem(404, "Not Found")

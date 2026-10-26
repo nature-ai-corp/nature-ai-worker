@@ -8,6 +8,7 @@ through the local port.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import hmac
 import os
 import re
@@ -21,8 +22,7 @@ from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from ..installation_mode import ModeError
@@ -39,6 +39,8 @@ from ..platform_runtime import check_platform_startup
 from ..platform_session import PlatformSession, PlatformSessionError
 
 STATIC_DIR = Path(__file__).with_name("static")
+_MEDIA = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+          ".css": "text/css; charset=utf-8"}
 UI_COOKIE = "nwpc_ui"
 LOGIN_ATTEMPTS_PER_MINUTE = 5
 _FILENAME = re.compile(r"[^A-Za-z0-9._ -]")
@@ -168,6 +170,17 @@ class DecisionIn(BaseModel):
     comment: str | None = Field(default=None, max_length=2000)
 
 
+def load_ui_assets(directory: Path = STATIC_DIR) -> tuple[dict[str, tuple[bytes, str]], str]:
+    """Read the UI once, at startup, so the page a process serves always matches
+    the code answering its API - replacing files on disk cannot mix versions."""
+    assets = {f.name: (f.read_bytes(), _MEDIA[f.suffix])
+              for f in sorted(directory.iterdir()) if f.suffix in _MEDIA}
+    digest = hashlib.sha256()
+    for name, (content, _) in assets.items():
+        digest.update(name.encode() + b"\0" + content)
+    return assets, digest.hexdigest()[:16]
+
+
 def create_app(settings: ClientSettings | None = None, *,
                transport=None, verify_startup: bool = True) -> FastAPI:
     settings = settings or ClientSettings.from_env()
@@ -245,11 +258,21 @@ def create_app(settings: ClientSettings | None = None, *,
     async def session_error(_r, exc):
         return JSONResponse({"detail": str(exc)}, status_code=502)
 
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    assets, ui_build = load_ui_assets(STATIC_DIR)
+
+    def asset(name: str) -> Response:
+        if name not in assets:
+            return JSONResponse({"detail": "Not found."}, status_code=404)
+        content, media_type = assets[name]
+        return Response(content, media_type=media_type)
 
     @app.get("/", include_in_schema=False)
     def index():
-        return FileResponse(STATIC_DIR / "index.html")
+        return asset("index.html")
+
+    @app.get("/static/{name}", include_in_schema=False)
+    def static(name: str):
+        return asset(name)
 
     @app.get("/api/status")
     def status(request: Request):
@@ -269,6 +292,7 @@ def create_app(settings: ClientSettings | None = None, *,
             "platform": settings.platform_origin,
             "client_interface": SUPPORTED_VERSION,
             "contract_sha256": contract.digest,
+            "ui_build": ui_build,
         }
 
     @app.post("/api/login")

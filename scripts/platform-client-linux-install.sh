@@ -40,6 +40,10 @@ if [ -e "$DATA" ] && [ -n "$(ls -A "$DATA" 2>/dev/null)" ] && \
   echo "$DATA exists and is not a Platform Client installation; refusing" >&2; exit 1
 fi
 
+# Stop a running instance before replacing its code: a process must never keep
+# serving old code beside new files. It is started again only after preflight.
+systemctl stop nature-worker-platform-client.service 2>/dev/null || true
+
 id -u "$ACCOUNT" >/dev/null 2>&1 || \
   useradd --system --user-group --home-dir "$DATA" --no-create-home --shell /usr/sbin/nologin "$ACCOUNT"
 
@@ -114,8 +118,11 @@ systemctl daemon-reload
 echo "--- preflight (as $ACCOUNT)"
 if runuser -u "$ACCOUNT" -- env $(grep -v '^#' "$ENV_FILE" | xargs) \
      "$PREFIX/venv/bin/python" -I -m nature_worker.platform_client preflight; then
-  systemctl enable --now nature-worker-platform-client.service
-  echo "Platform Client running: open http://127.0.0.1:$PORT/"
+  systemctl enable nature-worker-platform-client.service
+  systemctl restart nature-worker-platform-client.service
+  systemctl is-active --quiet nature-worker-platform-client.service || \
+    { echo "service failed to start; see: journalctl -u nature-worker-platform-client" >&2; exit 1; }
+  echo "Platform Client running $(cat "$PREFIX/COMMIT"): open http://127.0.0.1:$PORT/ and sign in again"
 else
   echo "Preflight blocked: the service was NOT started. Resolve the findings above." >&2
   exit 1

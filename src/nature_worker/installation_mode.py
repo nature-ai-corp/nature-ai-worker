@@ -52,6 +52,28 @@ def require_standalone(data_dir: Path) -> None:
         )
 
 
+def initialize_platform_client(data_dir: Path) -> None:
+    """Mark a *fresh, empty* data root as a Platform Client installation.
+
+    This is the fresh-install mode selection, not a transition: it refuses
+    any directory that already holds data (a Standalone installation is
+    converted only through ``mode_transition``). Never overwrites a marker.
+    """
+    if data_dir.is_symlink():
+        raise ModeError("Platform Client data root must not be a symbolic link.")
+    if read_mode(data_dir) == PLATFORM_CLIENT:
+        return
+    if data_dir.exists() and any(data_dir.iterdir()):
+        raise ModeError("A fresh Platform Client installation needs an empty data root.")
+    data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    payload = json.dumps({"schema": 1, "mode": PLATFORM_CLIENT}) + "\n"
+    fd = os.open(data_dir / MODE_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
 def initialize_standalone(data_dir: Path) -> None:
     """Atomically create a local mode marker after validating an installation.
 

@@ -24,12 +24,13 @@ dev = ["pytest>=8"]
 
 [project.scripts]
 nature-worker = "nature_worker.__main__:main"
+nature-worker-platform-client = "nature_worker.platform_client.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-nature_worker = ["static/*", "work_templates.json"]
+nature_worker = ["static/*", "work_templates.json", "contracts/*.json", "platform_client/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

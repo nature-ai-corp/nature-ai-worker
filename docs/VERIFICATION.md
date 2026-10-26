@@ -429,3 +429,13 @@ Known limitations:
 - Which template was used is not stored with the work; only the submitted text is.
 - Templates are edited in the packaged JSON file. There is no in-app editor and no per-user file; a package reinstall replaces local edits.
 - No Platform New Task reference was available, so the selector follows the WKR-024 style rather than a verified Platform design.
+
+## WKR-030: Platform Client on Client Interface v1.3 (2026-10-26)
+
+Real Platform: a private NATURE AI Platform deployment on the owner's tailnet, reached from a WSL test distribution. (Host names and addresses are not recorded in this public repository.)
+
+- **PASS:** the live `GET /openapi.json` (sha256 `dc22c471…df04e75`) has exactly 28 operations marked `x-nature-client-interface: "1.3"`. They were extracted unchanged into `src/nature_worker/contracts/`.
+- **PASS:** live unauthenticated `GET /api/v1/auth/me` returns `401 application/problem+json`, and `POST /api/v1/auth/logout` returns `204` and clears `nature_session` and `nature_csrf`.
+- **PASS:** the real `nature_worker.platform_client` process refuses to start under the Standalone account (`os-execution-isolation-unverified: member of sudo; must not share the Standalone account`).
+- **PASS:** 291 passed, 26 skipped (Windows-only). The Platform Client tests run against a contract-shaped fake and are **not** integration evidence.
+- **NOT EXECUTED:** comparison with the committed Platform contract; the HTTPS endpoint (Tailscale Serve on the Platform host answers 404 and does not proxy to `:8000`); the Linux install under `nature-pc`; and the real end-to-end Credit Task. Integration is **not** PASS. See `docs/PLATFORM_CLIENT_LINUX.md`.

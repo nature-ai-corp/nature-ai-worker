@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nature AI Worker - Platform</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar" aria-label="Navigation">
+      <div class="brand"><span class="logo" aria-hidden="true">N</span><span class="brand-name">NATURE AI</span><span class="brand-product">Worker · Platform</span></div>
+      <nav id="nav" hidden>
+        <a class="nav-item" href="#/new">+ New Task</a>
+        <a class="nav-item" href="#/chat">Chat</a>
+        <a class="nav-item" href="#/tasks">My Tasks</a>
+        <a class="nav-item" href="#/tasks/attention">Needs My Attention</a>
+      </nav>
+      <div class="sidebar-footer">
+        <div id="who" class="small"></div>
+        <div id="expiry" class="small"></div>
+        <button id="logout" class="nav-item" hidden>Sign out</button>
+        <div id="platform" class="small"></div>
+      </div>
+    </aside>
+
+    <main id="main">
+      <div id="banner" role="alert" hidden></div>
+
+      <section id="view-login" class="view" hidden>
+        <h1>Sign in to NATURE AI Platform</h1>
+        <p class="muted">Your email and password go only to the Platform. This Worker keeps the session in memory and never stores your password.</p>
+        <form id="login-form" class="card narrow" autocomplete="on">
+          <label>Email <input id="login-email" type="email" autocomplete="username" required></label>
+          <label>Password <input id="login-password" type="password" autocomplete="current-password" required></label>
+          <button class="primary" type="submit">Sign in</button>
+        </form>
+      </section>
+
+      <section id="view-new" class="view" hidden>
+        <h1>New Task</h1>
+        <p class="muted">Templates are the Platform's. A Task template always creates a Task; a Chat template is sent as a message and the Platform decides.</p>
+        <div id="template-list" class="cards"></div>
+        <form id="template-form" class="card" hidden>
+          <h2 id="template-name"></h2>
+          <p id="template-desc" class="muted"></p>
+          <div id="template-areas"></div>
+          <label><span id="additional-label">Additional instructions</span><textarea id="template-additional" rows="3"></textarea></label>
+          <div class="row"><button class="primary" type="submit">Submit</button><button type="button" id="template-cancel">Cancel</button></div>
+        </form>
+      </section>
+
+      <section id="view-chat" class="view" hidden>
+        <h1>Chat</h1>
+        <div class="split">
+          <div id="conversation-list" class="list"></div>
+          <div class="chat">
+            <div id="chat-task" class="small muted"></div>
+            <div id="messages" class="messages" aria-live="polite"></div>
+            <form id="chat-form" class="row">
+              <textarea id="chat-input" rows="2" placeholder="Message the Platform"></textarea>
+              <button class="primary" type="submit">Send</button>
+            </form>
+            <button id="chat-new" type="button">New conversation</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-tasks" class="view" hidden>
+        <h1 id="tasks-heading">My Tasks</h1>
+        <form id="task-search" class="row"><input id="task-query" placeholder="Search my Tasks"><button>Search</button></form>
+        <table class="tasks"><thead><tr><th>#</th><th>Title</th><th>Status</th><th>Work</th><th>Last activity</th></tr></thead><tbody id="task-rows"></tbody></table>
+      </section>
+
+      <section id="view-task" class="view" hidden>
+        <h1 id="task-title"></h1>
+        <div id="task-progress" class="card progress"></div>
+        <div class="row">
+          <button id="task-continue" type="button">Continue in Chat</button>
+          <button id="task-close" type="button" class="danger">Close Task</button>
+        </div>
+        <h2>Approvals</h2><div id="task-approvals"></div>
+        <h2>Results</h2><div id="task-results"></div>
+        <h2>Files</h2><div id="task-files"></div>
+        <h2>Work history</h2><div id="task-history"></div>
+        <h2>Conversation</h2><div id="task-conversation" class="messages"></div>
+      </section>
+    </main>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

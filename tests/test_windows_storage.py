@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 import sys
 from nature_worker.windows_storage import inspect_windows_storage_permissions
 

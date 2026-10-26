@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """HTTP transport for the existing Platform S-C Client Interface.
 
 The endpoint paths, parameters and authentication come from the Platform's

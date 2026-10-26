@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Encrypted Platform Client cache primitive; no Standalone credential reuse.
 
 The caller must obtain a dedicated Fernet key from an OS-protected store. This

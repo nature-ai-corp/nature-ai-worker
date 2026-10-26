@@ -34,7 +34,31 @@ nature-worker            # http://127.0.0.1:8080
 ## Pull requests
 
 1. Fork and create a branch.
-2. Make your change with tests; run `pytest`.
-3. Open a PR describing what changed and why, and how it was tested.
+2. Make your change with tests; run `pytest` and `python scripts/repo_checks.py`.
+3. Sign off every commit (`git commit -s`, see below).
+4. Open a PR describing what changed and why, and how it was tested.
 
-By contributing, you agree that your contributions are licensed under the Apache License 2.0.
+## Intellectual property of contributions
+
+**License of contributions.** Under Section 5 of the [Apache License 2.0](LICENSE), anything you intentionally submit for inclusion is licensed under the Apache License 2.0, without additional terms. You keep the copyright in your contribution. The project does not ask you to assign it.
+
+**Developer Certificate of Origin.** Each commit must carry a `Signed-off-by: Your Name <email>` line (`git commit -s`). By adding it you certify the [Developer Certificate of Origin 1.1](https://developercertificate.org/), in summary:
+
+- you wrote the contribution, or have the right to submit it under the Apache License 2.0;
+- if it is based on other work, that work is under a compatible open-source license, and you say which;
+- you understand that the contribution and your sign-off are public and kept permanently.
+
+If you contribute as part of your job, make sure your employer allows it.
+
+**What you must not contribute:**
+
+- Code, documents or assets you do not have the right to license under Apache-2.0, including code copied from projects under incompatible licenses (GPL, AGPL, LGPL, SSPL, "source-available" or non-commercial licenses).
+- Any part of the proprietary NATURE AI Platform server: its source, configuration, database schemas, internal documentation, or business rules beyond the published Client Interface contract. The Worker talks to the Platform only through that interface.
+- Credentials of any kind (API keys, tokens, passwords, private keys, certificates), customer data, internal host names, IP addresses or network details, and screenshots that show any of these.
+- Binaries, build outputs, release bundles or packaged dependencies.
+
+`scripts/repo_checks.py` (run in CI) checks for many of these. It catches accidents; it is not a substitute for care. If you committed a secret, treat it as exposed: revoke it first, then report it as described in [SECURITY.md](SECURITY.md). Removing it in a later commit does not remove it from git history.
+
+**New dependencies** must have an Apache-2.0-compatible license. State the license in the PR, and add the package to `THIRD_PARTY.md`.
+
+**Names and logo.** Contributions are welcome under the project's name, but forks and modified distributions must follow [TRADEMARKS.md](TRADEMARKS.md).

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """My Work interface in a real browser (WKR-023), driven against the real server process.
 
 The model is the local fake server with scripted responses, so these tests check

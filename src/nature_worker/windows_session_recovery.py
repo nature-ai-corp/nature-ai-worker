@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Windows S-C session recovery journal backed by the separate DPAPI vault.
 
 The journal is conservative: it records a token *before* validation and treats

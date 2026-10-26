@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Task page regression tests: the page script and the server's Task view must agree.
 
 Real Task #77 failed to render ("ex is undefined") because the installed

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Installer orchestration for a guarded Standalone to Platform Client transition.
 
 Trusted adapters supply real Platform login, S-C contract and OS checks.

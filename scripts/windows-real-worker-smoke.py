@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Launch the actual installed Worker process on a Windows runner.
 
 This is a real local Worker startup smoke test, NOT real Platform integration.

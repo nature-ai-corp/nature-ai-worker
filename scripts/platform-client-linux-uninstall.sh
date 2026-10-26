@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 # Remove the Linux Platform Client installation. Local S-C data is deleted only
 # with --delete-local-data, after the manifest below is shown. Platform server
 # data is never touched. The Standalone installation is not touched.

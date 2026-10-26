@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Usability fixes from user testing (WKR-022): new chat drafts, file preview, listen port."""
 
 import json

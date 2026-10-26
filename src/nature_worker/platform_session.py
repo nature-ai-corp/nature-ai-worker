@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Platform session state; real transport must use the existing S-C contract.
 
 In-memory only. Durable revocation recovery and OS-protected credential

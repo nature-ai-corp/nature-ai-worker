@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Standalone -> S-C transition commit primitive.
 
 This is NOT an enterprise installer. The caller must perform connection,

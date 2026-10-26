@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """New Work templates: reusable starting instructions loaded from a local JSON file.
 
 A template only fills the assignment field with editable text. It is not sent

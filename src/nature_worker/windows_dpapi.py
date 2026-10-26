@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Windows-only DPAPI data protection through native CryptProtectData APIs.
 
 A per-user DPAPI token is not an isolation boundary against code executing

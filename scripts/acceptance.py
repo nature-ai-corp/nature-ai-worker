@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Real-provider acceptance check for Nature AI Worker.
 
 Starts the real server in a temporary directory, configures it with a REAL

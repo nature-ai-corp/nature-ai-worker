@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Local Platform Client path inventory and read-only clean-install checks.
 
 This module deliberately does NOT create S-C storage, decrypt enterprise data,

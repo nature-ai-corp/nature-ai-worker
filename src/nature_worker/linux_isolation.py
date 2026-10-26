@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Linux Platform Client execution-boundary probe (read-only).
 
 The Platform Client must run as its own unprivileged OS account, separate

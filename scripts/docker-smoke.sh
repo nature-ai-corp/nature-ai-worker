@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 # Docker verification for the documented Compose deployment (README, Option B).
 #
 # Builds the image and checks: /api/health and the container HEALTHCHECK, the

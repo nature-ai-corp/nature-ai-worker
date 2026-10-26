@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Agent execution through the real application (acceptance D, multi-step runs)."""
 
 from conftest import configure, conversation, new_conversation, openai_text, openai_tool_call, send

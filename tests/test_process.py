@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Runs the real server process (acceptance H and I).
 
 Starts ``python -m nature_worker`` as a subprocess, drives it over HTTP,

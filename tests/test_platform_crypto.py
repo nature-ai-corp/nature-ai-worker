@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Encrypted Platform Client store tests; no real enterprise data."""
 import pytest
 from cryptography.fernet import Fernet

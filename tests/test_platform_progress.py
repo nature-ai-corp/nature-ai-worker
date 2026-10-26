@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 from datetime import datetime, timedelta, timezone
 
 from nature_worker.platform_progress import QUEUED, RUNNING, STOPPED, describe, poll_interval

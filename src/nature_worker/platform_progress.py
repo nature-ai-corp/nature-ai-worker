@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Present a Platform Task's progress from recorded Platform state only.
 
 Three independent facts are reported separately and never merged into one

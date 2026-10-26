@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Windows enterprise storage permission probe (read-only).
 
 Never claims isolation merely because a path exists or data is encrypted.

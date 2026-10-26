@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Runtime configuration read from environment variables.
 
 Only deployment settings live here (paths, bind address). User-facing

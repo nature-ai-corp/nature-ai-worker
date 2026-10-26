@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 import pytest
 from nature_worker.platform_contract import ContractError, PlatformClientContract
 from nature_worker.platform_http import PlatformHttpClient, PlatformInterfaceError, SessionCookies, SessionExpired

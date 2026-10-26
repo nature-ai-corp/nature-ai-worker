@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Best-effort, read-only host probes for installer diagnostics.
 
 These probes are deliberately NOT authority to approve Standalone installation.

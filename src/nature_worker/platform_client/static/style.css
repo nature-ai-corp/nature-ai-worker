@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+ * SPDX-License-Identifier: Apache-2.0 */
 :root {
   --bg: #ffffff; --surface: #f7f7f9; --text: #1f2328; --muted: #6b7280; --border: #d9d9d9;
   --accent: #2b5bdc; --ok: #2f7d4f; --user: #eef3fd; --agent: #f3f4f6;

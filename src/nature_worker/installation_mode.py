@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Persistent installation-mode guard for a Standalone Worker installation.
 
 This is a local fail-closed mode marker, NOT a security boundary. An enterprise

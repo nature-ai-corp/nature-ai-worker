@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Built-in tools and the execution layer that enforces approval.
 
 The approval policy is enforced here, not in the model prompt:

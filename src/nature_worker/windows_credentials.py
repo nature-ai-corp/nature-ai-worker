@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Windows S-C token vault using DPAPI; never shares Standalone credentials.
 
 Not an OS isolation boundary: same-user processes may decrypt these values.

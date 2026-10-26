@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """In-process stand-in shaped by the Client Interface contract, for unit tests.
 
 It enforces the contract's authentication rules (session cookie, CSRF header

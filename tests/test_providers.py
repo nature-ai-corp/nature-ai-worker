@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Provider adapters and failure reporting (acceptance G).
 
 Each adapter is driven through the real application and the real SDK against

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Installer-facing clean-install decision.
 
 A filesystem-only check is never enough to authorize an S-C to Standalone

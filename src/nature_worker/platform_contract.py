@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Strict loading of the Platform's Client Interface OpenAPI contract.
 
 This is configuration validation, NOT a replacement or parallel API. The

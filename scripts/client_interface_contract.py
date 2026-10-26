@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Extract or compare the Platform's Client Interface OpenAPI contract.
 
 The Worker never authors this contract. ``extract`` copies, unchanged, the

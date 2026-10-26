@@ -1,0 +1,15 @@
+Nature AI Worker
+Copyright 2026 The Nature AI Worker Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+"The Nature AI Worker Authors" means the copyright holders of the
+contributions in this repository, as recorded in its version history.
+
+"NATURE AI" and "Nature AI Worker" are names used by the project's
+maintainers to identify their software and official releases. The Apache
+License does not grant permission to use these names or the project's logo
+(Section 6); see TRADEMARKS.md.
+
+Third-party dependencies are installed separately and are not included in
+this source distribution; see THIRD_PARTY.md for their licenses.

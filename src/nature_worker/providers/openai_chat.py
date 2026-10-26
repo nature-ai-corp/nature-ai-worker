@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Adapter for OpenAI, DeepSeek and other OpenAI-compatible Chat Completions APIs."""
 
 from __future__ import annotations

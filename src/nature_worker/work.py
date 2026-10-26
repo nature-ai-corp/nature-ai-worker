@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Work view: a read-only summary of one conversation for the "My Work" interface.
 
 Everything here is derived from records that already exist: messages, tool

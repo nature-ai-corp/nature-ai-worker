@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Bind only Platform contract operations to the HTTP client.
 
 The real shared S-C contract is supplied by the Platform, not guessed by the

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Read-only clean-state validator tests (no enterprise data deletion)."""
 from nature_worker.platform_storage import platform_paths, validate_clean
 

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Workspace confinement (acceptance E), approvals (F) and credential handling."""
 
 import logging

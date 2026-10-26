@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 import pytest
 
 from nature_worker.installation_mode import ModeError, initialize_standalone, read_mode

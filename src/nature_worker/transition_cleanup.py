@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Failure cleanup coordinator for an attempted Standalone -> S-C upgrade.
 
 This does not itself delete enterprise data. The installer must supply a

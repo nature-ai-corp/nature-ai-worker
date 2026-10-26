@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Platform Client startup preflight. No local Agent or fallback to Standalone.
 
 This does NOT establish Platform connectivity. Integration must consume the

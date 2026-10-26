@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Adapter for Ollama's native /api/chat endpoint."""
 
 from __future__ import annotations

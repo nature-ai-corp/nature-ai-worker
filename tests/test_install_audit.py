@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Read-only S-C install audit integration tests."""
 import json
 from nature_worker.install_audit import audit, main

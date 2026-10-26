@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Session recovery uses an in-memory fake vault, no Platform or Windows secrets."""
 import pytest
 from nature_worker.platform_session import PlatformSessionError

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """The My Work view (WKR-023): status, facts and results derived only from existing records."""
 
 import os

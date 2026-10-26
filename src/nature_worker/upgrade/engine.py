@@ -149,6 +149,11 @@ class UpgradeEngine:
                 checks.append(Check("client_interface", False, str(exc)))
         for name, ok, detail in self.toolkit.check_permissions():
             checks.append(Check(name, ok, detail))
+        try:
+            ok, detail = self.toolkit.backup_space()
+        except OSError as exc:
+            ok, detail = False, f"cannot measure the data root: {exc}"
+        checks.append(Check("disk_space", ok, detail))
         state = self.layout.state()
         unfinished = state is not None and state.get("phase") in UNFINISHED
         checks.append(Check("no_unfinished_upgrade", not unfinished,
@@ -249,6 +254,13 @@ class UpgradeEngine:
         self.toolkit.remove_marker()
         message = f"Upgraded from {state['from']} to {state['to']}."
         try:
+            # Keep this upgrade's backup (a user rollback may need it) and the newest others.
+            removed = self.toolkit.prune_backups((Path(state["backup"]),) if state.get("backup") else ())
+            if removed:
+                message += f" Removed {len(removed)} older data backup(s); the newest are kept."
+        except OSError as exc:
+            message += f" Older data backups could not be removed: {exc}"
+        try:
             if state.get("was_running"):
                 message += " " + self.toolkit.start()
             else:
@@ -268,6 +280,10 @@ class UpgradeEngine:
             self.toolkit.ensure_stopped()
             self.layout.set_current(state["from"])
             restored = None
+            partial = Path(state["backup"]) if state.get("backup") else None
+            if failed_phase not in DATA_CHANGING and partial and partial.is_dir() \
+                    and not (partial / "BACKUP.json").exists():
+                shutil.rmtree(partial)  # an interrupted copy, never usable for a restore
             if failed_phase in DATA_CHANGING:
                 restored = self._aside(f"failed-upgrade-{state['id']}")
                 self.toolkit.restore(Path(state["backup"]), restored)

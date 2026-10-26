@@ -30,11 +30,14 @@ from typing import Callable
 
 from .. import maintenance
 from ..installation_mode import read_mode
-from ..migrations import backup_data_root, restore_data_root
+from ..migrations import backup_data_root, check_backup_space, prune_backups, restore_data_root
 from .layout import INCOMPLETE, INSTALLED, Installation, Layout, LayoutError
 from .release import VerifiedRelease, wheel_requirement
 
 HEALTH_TIMEOUT = 60.0
+# How long backup/restore wait for a process that still holds the data root
+# (a migration left running by an interrupted upgrade finishes on its own).
+DATA_ROOT_WAIT = 600.0
 
 
 class ToolkitError(RuntimeError):
@@ -188,15 +191,37 @@ class BaseToolkit:
         except FileNotFoundError:
             return None
 
+    def _hold_data_root(self) -> maintenance.RuntimeLock:
+        lock = maintenance.hold_data_root(
+            self.inst.data_dir, DATA_ROOT_WAIT,
+            waiting=lambda: self.progress("Waiting for another process (e.g. a migration from an interrupted "
+                                          "upgrade) to release the data root"))
+        self._hand_back(lock.path)  # the lock file stays usable by the data root's own account
+        return lock
+
+    def backup_space(self) -> tuple[bool, str]:
+        return check_backup_space(self.inst.data_dir)
+
     def backup(self, dest: Path) -> None:
-        self.progress(f"Backing up the data root to {dest}")
-        backup_data_root(self.inst.data_dir, dest)
-        self._hand_back(dest)
+        lock = self._hold_data_root()
+        try:
+            self.progress(f"Backing up the data root to {dest}")
+            backup_data_root(self.inst.data_dir, dest)
+            self._hand_back(dest.parent)
+        finally:
+            lock.release()
 
     def restore(self, backup: Path, aside: Path) -> None:
-        self.progress(f"Restoring the data root from {backup} (current data kept in {aside})")
-        restore_data_root(self.inst.data_dir, backup, aside)
-        self._hand_back(self.inst.data_dir)
+        lock = self._hold_data_root()
+        try:
+            self.progress(f"Restoring the data root from {backup} (current data kept in {aside})")
+            restore_data_root(self.inst.data_dir, backup, aside)
+            self._hand_back(self.inst.data_dir)
+        finally:
+            lock.release()
+
+    def prune_backups(self, protect: tuple[Path, ...]) -> list[str]:
+        return prune_backups(self.inst.data_dir, protect=protect)
 
     def write_marker(self, record: dict, token: str) -> None:
         maintenance.write_upgrade_marker(self.inst.data_dir, record, token)

@@ -36,7 +36,7 @@ def test_successful_upgrade_order_journal_and_history(setup):
     out = engine.upgrade(str(make_bundle(tmp, KEY, "1.1.0", data_schema=2)), yes)
     assert out.outcome == "succeeded", out.message
     assert toolkit.calls == ["install", "stop", "ensure_stopped", "backup", "migrate", "after_migrate",
-                             "health:1.1.0"]
+                             "health:1.1.0", "prune"]
     assert layout.current() == "1.1.0" and db_schema(inst.data_dir) == 2
     assert layout.state() is None and read_upgrade_marker(inst.data_dir) is None
     assert toolkit.started == 1  # it was running before, so it is running again

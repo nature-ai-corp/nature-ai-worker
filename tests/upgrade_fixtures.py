@@ -16,7 +16,7 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from nature_worker.migrations import backup_data_root, restore_data_root
+from nature_worker.migrations import backup_data_root, prune_backups, restore_data_root
 from nature_worker.upgrade.layout import INSTALLED, Installation, Layout
 from nature_worker.upgrade.release import TrustedKey, key_id_for, sign_manifest
 from nature_worker.upgrade.toolkit import StopRefused, ToolkitError, host_target
@@ -174,6 +174,15 @@ class FakeToolkit:
     def mode_fingerprint(self):
         p = self.inst.data_dir / "installation-mode.json"
         return hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else None
+
+    space = (True, "test: enough space")
+
+    def backup_space(self):
+        return self.space
+
+    def prune_backups(self, protect):
+        self.calls.append("prune")
+        return prune_backups(self.inst.data_dir, protect=protect)
 
     def backup(self, dest):
         self._step("backup")

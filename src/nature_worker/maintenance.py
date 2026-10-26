@@ -75,6 +75,35 @@ class RuntimeLock:
             self._fd = None
 
 
+class DataRootBusy(ModeError):
+    """Another process (a Worker, or a migration) still holds the data root."""
+
+
+def hold_data_root(data_dir: Path, timeout: float, *,
+                   waiting: Callable[[], None] = lambda: None) -> RuntimeLock:
+    """Take the data root's runtime lock before changing its data.
+
+    Workers and data migrations hold this lock for as long as they run, and
+    the OS releases it when such a process dies. Waiting for it therefore
+    guarantees that no earlier process - for example a migration left
+    running by an interrupted upgrade - can still write to the data.
+    """
+    lock = RuntimeLock(data_dir / RUNTIME_LOCK)
+    deadline = time.monotonic() + timeout
+    announced = False
+    while not lock.acquire():
+        if time.monotonic() >= deadline:
+            raise DataRootBusy(
+                f"{data_dir} is still in use by another process (a running Worker, or a data migration "
+                f"from an interrupted upgrade) after {int(timeout)} s. Nothing was changed. Wait for it "
+                "to finish, then try again.")
+        if not announced:
+            waiting()
+            announced = True
+        time.sleep(0.2)
+    return lock
+
+
 def worker_running(data_dir: Path) -> bool:
     """Whether a Worker process holds this data root's runtime lock."""
     if not (data_dir / RUNTIME_LOCK).exists():

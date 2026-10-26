@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+ * SPDX-License-Identifier: Apache-2.0 */
 :root {
   /* Main working area: light, as in the Platform reference */
   --bg: #ffffff;
@@ -256,6 +258,8 @@ dialog details { margin: 10px 0; }
 .dialog-actions { display: flex; gap: 8px; margin-top: 16px; }
 .spacer { flex: 1; }
 #settings-result { margin-top: 8px; min-height: 1.5em; }
+#upgraded { position: fixed; z-index: 20; inset: 0 0 auto 0; padding: 10px 16px; background: var(--warn-bg); border-bottom: 1px solid var(--warn-border); color: var(--text); }
+#upgraded button { margin-left: 8px; }
 #settings-result.ok { color: var(--accent); }
 #settings-result.err { color: var(--error-border); }
 

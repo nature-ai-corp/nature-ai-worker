@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+ * SPDX-License-Identifier: Apache-2.0 */
 "use strict";
 // Platform Client UI. All server text is rendered with textContent only.
 
@@ -24,6 +26,16 @@ function banner(text, kind = "error") {
   b.hidden = !text;
 }
 
+// The version that first answered this page; a different one later means an upgrade.
+let pageVersion = null;
+function noteServerVersion(version) {
+  if (!version) return;
+  if (pageVersion === null) pageVersion = version;
+  if (version !== pageVersion) {
+    banner(`The Platform Client was upgraded to ${version}. Reload this page and sign in again.`, "info");
+  }
+}
+
 async function api(path, options = {}) {
   const init = { credentials: "same-origin", headers: {}, ...options };
   if (options.json !== undefined) {
@@ -32,6 +44,7 @@ async function api(path, options = {}) {
     init.body = JSON.stringify(options.json);
   }
   const res = await fetch(path, init);
+  noteServerVersion(res.headers.get("X-Nature-Worker-Version"));
   if (res.status === 401 && path !== "/api/login") {
     me = null;
     showView("login");

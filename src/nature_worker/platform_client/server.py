@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Local web UI and API of the Platform Client process.
 
 Only this process ever holds the Platform session cookies, and only in
@@ -25,7 +27,9 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
+from .. import __version__
 from ..installation_mode import ModeError
+from ..maintenance import require_no_upgrade_in_progress
 from ..linux_isolation import inspect_linux_isolation, linux_isolation_verified
 from ..platform_contract import BUNDLED, SUPPORTED_VERSION, PlatformClientContract
 from ..platform_http import (
@@ -186,6 +190,7 @@ def create_app(settings: ClientSettings | None = None, *,
     settings = settings or ClientSettings.from_env()
     contract = PlatformClientContract.load(BUNDLED)
     if verify_startup:
+        require_no_upgrade_in_progress(settings.data_dir)
         preflight, findings = startup_findings(settings, True)
         if not preflight.allowed:
             detail = "; ".join(f"{f.check}: {f.detail}" for f in findings if f.clean is not True)
@@ -221,6 +226,9 @@ def create_app(settings: ClientSettings | None = None, *,
             origin = request.headers.get("origin")
             if origin and urlsplit(origin).netloc != request.headers.get("host"):
                 return JSONResponse({"detail": "Cross-origin request blocked."}, status_code=403)
+            if app.state.draining and request.url.path in ("/api/submit", "/api/login"):
+                return JSONResponse({"detail": "The Platform Client is stopping for an upgrade. "
+                                     "Submit again after it restarts."}, status_code=503)
         path = request.url.path
         if path.startswith("/api/") and path not in ("/api/status", "/api/login"):
             token = request.cookies.get(UI_COOKIE, "")
@@ -229,6 +237,7 @@ def create_app(settings: ClientSettings | None = None, *,
             if not expected or not hmac.compare_digest(token, expected):
                 return JSONResponse({"detail": "Sign in to the Platform."}, status_code=401)
         response = await call_next(request)
+        response.headers["X-Nature-Worker-Version"] = __version__
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
@@ -284,6 +293,7 @@ def create_app(settings: ClientSettings | None = None, *,
                        if signed_in else None)
             pending = account.session.pending_revoke is not None
         return {
+            "version": __version__,
             "signed_in": signed_in,
             "user": {"display_name": user.get("display_name"), "email": user.get("email")}
                     if signed_in and user else None,
@@ -487,4 +497,10 @@ def create_app(settings: ClientSettings | None = None, *,
 
     app.state.account = account
     app.state.submissions = submissions
+    app.state.draining = False  # set while stopping for an upgrade (see maintenance.py)
     return app
+
+
+def running_submissions(app: FastAPI) -> int:
+    """Submissions still waiting for the Platform's answer."""
+    return sum(1 for s in list(app.state.submissions.values()) if s.state == "running")

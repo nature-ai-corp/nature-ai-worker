@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 # Install the Nature AI Worker Platform Client (S-C) as a separate Linux
 # installation: its own unprivileged system account, its own data root and
 # its own process. The existing Standalone installation is not touched.
@@ -8,6 +10,13 @@
 #        --standalone-data /home/<user>/nature-ai-worker/data
 #
 # Remove with scripts/platform-client-linux-uninstall.sh.
+#
+# Layout (shared with nature-worker-upgrade, see docs/UPGRADES.md): each build
+# is a complete venv in $PREFIX/versions/<version>+g<commit>/, `current` names
+# the active one, and the service runs $PREFIX/bin/nature-worker-platform-client.
+# Builds made here are UNSIGNED local builds, never reported as official
+# releases. Signed releases are installed with:
+#   sudo $PREFIX/bin/nature-worker-upgrade upgrade --bundle DIR
 set -euo pipefail
 
 ACCOUNT=nature-pc
@@ -58,16 +67,29 @@ runuser -u "$SUDO_USER" -- git -C "$SRC" archive --format=tar HEAD > "$STAGE/src
 mkdir "$STAGE/src" && tar -xf "$STAGE/src.tar" -C "$STAGE/src"
 
 # Code is root-owned and read-only for the service account. Dependencies are
-# installed from wheels only, so no third-party build code runs as root.
-install -d -o root -g root -m 0755 "$PREFIX"
-[ -x "$PREFIX/venv/bin/python" ] || python3 -m venv "$PREFIX/venv"
-"$PREFIX/venv/bin/pip" install -q --only-binary=:all: -r "$STAGE/src/requirements.lock"
-"$PREFIX/venv/bin/pip" install -q --no-deps --force-reinstall "$STAGE/src"
+# installed from wheels only, so no third-party build code runs as root. Each
+# build gets its own directory; the active one is replaced only by switching
+# `current`, so code is never changed under a running process.
+VERSION="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' "$STAGE/src/src/nature_worker/__init__.py")"
+LABEL="$VERSION+g${COMMIT:0:12}"
+VDIR="$PREFIX/versions/$LABEL"
+install -d -o root -g root -m 0755 "$PREFIX" "$PREFIX/versions"
+if [ ! -f "$VDIR/INSTALLED.json" ] || [ -e "$VDIR/.incomplete" ]; then
+  rm -rf "$VDIR"
+  install -d -o root -g root -m 0755 "$VDIR"
+  touch "$VDIR/.incomplete"
+  python3 -m venv "$VDIR/venv"
+  "$VDIR/venv/bin/pip" install -q --only-binary=:all: -r "$STAGE/src/requirements.lock"
+  "$VDIR/venv/bin/pip" install -q --no-deps "$STAGE/src"
+fi
+"$VDIR/venv/bin/python" -I -m nature_worker.upgrade register-local-build --prefix "$PREFIX" \
+  --version "$LABEL" --edition platform_client --data-dir "$DATA" --account "$ACCOUNT" \
+  --service nature-worker-platform-client.service --port "$PORT" --commit "$COMMIT"
 echo "$COMMIT" > "$PREFIX/COMMIT"
-echo "installed commit $COMMIT"
+echo "installed commit $COMMIT as $LABEL"
 
 install -d -o "$ACCOUNT" -g "$ACCOUNT" -m 0700 "$DATA"
-runuser -u "$ACCOUNT" -- env NWPC_DATA_DIR="$DATA" "$PREFIX/venv/bin/python" -I -m nature_worker.platform_client init
+runuser -u "$ACCOUNT" -- env NWPC_DATA_DIR="$DATA" "$VDIR/venv/bin/python" -I -m nature_worker.platform_client init
 
 umask 027
 cat > "$ENV_FILE" <<EOF
@@ -92,7 +114,7 @@ User=$ACCOUNT
 Group=$ACCOUNT
 EnvironmentFile=$ENV_FILE
 WorkingDirectory=$DATA
-ExecStart=$PREFIX/venv/bin/python -I -m nature_worker.platform_client serve
+ExecStart=$PREFIX/bin/nature-worker-platform-client serve
 Restart=on-failure
 UMask=0077
 LimitCORE=0
@@ -117,12 +139,17 @@ EOF
 systemctl daemon-reload
 echo "--- preflight (as $ACCOUNT)"
 if runuser -u "$ACCOUNT" -- env $(grep -v '^#' "$ENV_FILE" | xargs) \
-     "$PREFIX/venv/bin/python" -I -m nature_worker.platform_client preflight; then
+     "$VDIR/venv/bin/python" -I -m nature_worker.platform_client preflight; then
   systemctl enable nature-worker-platform-client.service
   systemctl restart nature-worker-platform-client.service
   systemctl is-active --quiet nature-worker-platform-client.service || \
     { echo "service failed to start; see: journalctl -u nature-worker-platform-client" >&2; exit 1; }
-  echo "Platform Client running $(cat "$PREFIX/COMMIT"): open http://127.0.0.1:$PORT/ and sign in again"
+  # The layout before versioned installs kept one venv in $PREFIX/venv: no longer used.
+  if [ -d "$PREFIX/venv" ]; then rm -rf "$PREFIX/venv"; fi
+  # Keep the active build and the two most recent others (for rollback); remove older local builds.
+  { ls -1t "$PREFIX/versions" | grep -vxF "$LABEL" | grep -F '+g' | tail -n +3 | \
+    while read -r old; do rm -rf "${PREFIX:?}/versions/$old"; done; } || true
+  echo "Platform Client running $LABEL: open http://127.0.0.1:$PORT/ and sign in again"
 else
   echo "Preflight blocked: the service was NOT started. Resolve the findings above." >&2
   exit 1

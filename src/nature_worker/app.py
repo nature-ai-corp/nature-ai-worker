@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """FastAPI application: JSON API plus the static web UI."""
 
 from __future__ import annotations
@@ -18,6 +20,8 @@ from . import __version__
 from .agent import Agent, ConversationBusy
 from .config import Config
 from .installation_mode import initialize_standalone, require_standalone
+from .maintenance import require_no_upgrade_in_progress
+from .migrations import DB_FILE, migrate, stamp_new_database
 from .transition_cleanup import require_no_failed_sc_residue
 from .credentials import CredentialStore
 from .db import Database
@@ -26,6 +30,7 @@ from .tools import TOOLS, ToolContext, ToolError
 from .tools.workspace import Workspace
 from .templates import load_templates
 from .work import summarize
+from .upgrade.layout import installation_summary
 
 log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
@@ -74,10 +79,17 @@ def create_app(config: Config | None = None) -> FastAPI:
     # A failed enterprise transition must not expose staged S-C data.
     require_standalone(config.data_dir)
     require_no_failed_sc_residue(config.data_dir)
+    require_no_upgrade_in_progress(config.data_dir)
     config.ensure_dirs()
     initialize_standalone(config.data_dir)
     require_no_failed_sc_residue(config.data_dir)
-    db = Database(config.data_dir / "worker.db")
+    # Refuses data from a newer version; migrates older data after a backup.
+    fresh = not (config.data_dir / DB_FILE).exists()
+    if not fresh:
+        migrate(config.data_dir)
+    db = Database(config.data_dir / DB_FILE)
+    if fresh:
+        stamp_new_database(config.data_dir)
     creds = CredentialStore(config.data_dir)
     workspace = Workspace(config.workspace_dir)
 
@@ -116,6 +128,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     app = FastAPI(title="Nature AI Worker", version=__version__, docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.db, app.state.agent, app.state.config = db, agent, config
+    app.state.draining = False  # set while stopping for an upgrade (see maintenance.py)
     if "*" not in config.allowed_hosts:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=config.allowed_hosts)
 
@@ -126,7 +139,15 @@ def create_app(config: Config | None = None) -> FastAPI:
             origin = request.headers.get("origin")
             if origin and urlsplit(origin).netloc != request.headers.get("host"):
                 return JSONResponse({"detail": "Cross-origin request blocked."}, status_code=403)
-        return await call_next(request)
+            if app.state.draining:
+                return JSONResponse({"detail": "Nature AI Worker is stopping for an upgrade. "
+                                     "Your work is saved; continue after it restarts."}, status_code=503)
+        response = await call_next(request)
+        # Lets an open page notice that a different version now answers its API.
+        response.headers["X-Nature-Worker-Version"] = __version__
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
     # -- UI -------------------------------------------------------------------
 
@@ -164,6 +185,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "key_sources": {p: _key_status(p) for p in PROVIDERS},
             "key_endpoints": {p: creds.stored_endpoint(p) for p in PROVIDERS if PROVIDERS[p]["needs_endpoint"]},
             "version": __version__,
+            "installation": installation_summary(),
         }
 
     @app.get("/api/settings")

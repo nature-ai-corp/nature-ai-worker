@@ -11,9 +11,19 @@ Report them privately with GitHub **Private Vulnerability Reporting**:
 
 The report is visible only to you and the maintainers. We aim to acknowledge reports within 5 working days, and we coordinate a fix and disclosure through the advisory. You need a GitHub account to file a report.
 
+Also report privately:
+
+- a credential, private key or internal network detail found in this repository or its history;
+- a build or download that claims to be an official release but does not verify as described in [docs/RELEASES.md](docs/RELEASES.md).
+
 ## Supported versions
 
-Security fixes are made for the latest release (currently 0.1.x).
+Security fixes are made for the latest release (currently 0.1.x). Fixes are delivered as signed releases and applied with `nature-worker-upgrade`. The upgrader verifies a release before it installs anything; see [docs/UPGRADES.md](docs/UPGRADES.md).
+
+## Verifying what you run
+
+- **Official releases** are signed with a NATURE AI release key and identified as described in [docs/RELEASES.md](docs/RELEASES.md). **No official release key has been published yet**, so no download can currently be verified as an official release.
+- `nature-worker-upgrade` installs only bundles whose signed manifest verifies against a trusted key and whose every file matches its SHA-256. A bundle signed by a key that an installation trusts locally (for example, a company's internal builds) is always reported as **not** an official release.
 
 ## Security model
 
@@ -28,6 +38,7 @@ Nature AI Worker is a **single-user application meant to run on your own compute
 | Web fetch | Disabled by default. When enabled: http/https only, no embedded credentials, and every connection (including redirects) is checked at connect time. Loopback, private, link-local (including cloud metadata `169.254.169.254`), CGNAT, multicast and reserved addresses are blocked. The socket connects to the validated IP, which prevents DNS rebinding. Environment proxies are ignored. Size, time and redirect limits apply. Content is marked as untrusted for the model. |
 | Prompt injection | File and web content is treated as data, and the system prompt tells the model not to follow instructions in it. This is a mitigation, not a guarantee. The approval gate is the real control for destructive or outbound actions. |
 | API keys | Encrypted at rest (Fernet) in a `0600` file, or supplied by environment variables. Never stored in SQLite, never returned by the API, never added to conversation history, and redacted from logs (including tracebacks) and from provider error messages and replies. |
+| Upgrades | Bundles are verified (Ed25519 signature over the manifest, SHA-256 and size of every file) after being copied into a private staging directory, and installed offline with `pip --require-hashes --no-index --only-binary`. No source builds run. Each upgrade needs explicit authorization naming the target version. A Standalone upgrade runs as the installation's own user and refuses root. A Platform Client upgrade runs as root, requires root-owned code, and runs data work as the Platform Client account. The installation mode is never changed. See [docs/UPGRADES.md](docs/UPGRADES.md). |
 | Key routing | Official providers always use their explicit official endpoints. SDK environment overrides (base URLs, custom headers, ambient tokens, Vertex switch) are hidden while SDK clients are constructed, so they cannot redirect keys or inject credentials. Keys saved for a configurable endpoint (Ollama, OpenAI-compatible) are bound to that exact endpoint and are not sent anywhere else. See README, "How API keys are stored". |
 
 ## Known residual risks

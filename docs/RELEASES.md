@@ -1,0 +1,81 @@
+# Official releases: identification and provenance
+
+> **Status (2026-10-26):** the mechanism below is implemented and tested, but **no official release key has been generated or published**. `src/nature_worker/upgrade/release_keys.json` lists no keys. Until the maintainers complete [Setting up the official key](#setting-up-the-official-key), no build or download can be verified as an official NATURE AI release, and the upgrader reports every bundle as "not official".
+
+## What makes a release official
+
+A Nature AI Worker release is official only if **all** of the following hold:
+
+1. **Signed manifest.** The release bundle's `release.json` carries a valid Ed25519 signature (`release.json.sig`) by a key listed in `src/nature_worker/upgrade/release_keys.json` **in the installation that verifies it**. Those keys are the official release keys.
+2. **Integrity.** Every file named in the manifest (the Worker wheel, every dependency wheel, the release notes) matches its recorded size and SHA-256.
+3. **Source.** The manifest's `source.commit` is the commit of a `vX.Y.Z` tag in <https://github.com/nature-ai-corp/nature-ai-worker>, and `version` equals that tag.
+4. **Publication.** The bundle is attached to that tag's GitHub Release.
+
+The upgrader checks 1 and 2 itself, before anything is installed. Points 3 and 4 identify where an official release comes from; you can check them by hand (below).
+
+A name, a web page or a file name never makes a build official. Anyone may build and distribute the software (see [TRADEMARKS.md](../TRADEMARKS.md)), but only the maintainers' keys sign official releases.
+
+### Locally trusted keys
+
+An organization may build its own bundles and trust its own key in a specific installation (`trusted-keys.json` in the installation directory, written by `nature-worker-upgrade install --trust-key`). The upgrader then installs those bundles, but always reports them as **"signed by a locally trusted key - NOT an official NATURE AI release"**. A local key can never become an official one: official keys come only from the code of the installed version.
+
+## Bundle format
+
+```
+nature-ai-worker-<version>-<os>-<arch>-py<python>/
+  release.json        manifest (schema 1)
+  release.json.sig    {"schema": 1, "algorithm": "ed25519", "key_id": "...", "signature": "<base64>"}
+  RELEASE_NOTES.md
+  wheels/*.whl        the Worker wheel and every dependency wheel
+```
+
+Manifest fields: `product` (`nature-ai-worker`), `version`, `released_at`, `channel`, `target` (`os`, `arch`, `python`: one bundle per platform), `editions` (`standalone`, `platform_client`), `upgrade_from.min` (oldest version that may upgrade directly), `data_schema` per edition, `client_interface` (the Platform Client Interface version the release speaks), `notes`, `product_wheel`, `artifacts` (path, sha256, size), and `source` (repository, commit, tag).
+
+`key_id` is the first 16 hex digits of the SHA-256 of the raw 32-byte public key.
+
+## Verifying a release
+
+**With an installed Worker** (changes nothing except a staging copy that is deleted afterwards):
+
+```bash
+nature-worker-upgrade check --bundle path/or/https-url
+```
+
+This prints the signer and whether it is an official key, the source commit and tag, the release notes, and every eligibility check.
+
+**Provenance by hand:**
+
+```bash
+python -c "import json; m = json.load(open('release.json')); print(m['version'], m['source'])"
+git fetch --tags https://github.com/nature-ai-corp/nature-ai-worker
+git rev-parse "v<version>^{commit}"    # must equal source.commit
+```
+
+**Not yet available:** bit-for-bit reproducibility of the Worker wheel from the tagged source has not been verified. Neither signed git tags nor build attestations (for example GitHub artifact attestations or Sigstore) are produced yet. These would strengthen point 3, and are recommended next steps.
+
+## Building and signing a release (maintainers)
+
+1. Tag the release commit `vX.Y.Z` after CI passes. Update `__version__` and `pyproject.toml` first. Write the release notes.
+2. On **each target platform** (pip cannot resolve another OS's platform-specific dependencies), with a clean checkout at the tag and the locked dependencies installed:
+
+   ```bash
+   python scripts/release_bundle.py build --private-key /secure/path/release-key.pem \
+       --notes RELEASE_NOTES.md --out dist/nature-ai-worker-X.Y.Z-linux-x86_64-py3.12 \
+       --min-upgrade-from <oldest supported version>
+   ```
+
+   The build uses only the **committed** `HEAD` (`git archive`), never uncommitted files, and records the commit.
+3. Verify each bundle with `nature-worker-upgrade check` on a test installation, then attach the bundles to the GitHub Release for the tag.
+
+`--min-upgrade-from` must be the oldest version whose data schema the release's migrations still upgrade and whose upgrader can install this bundle format.
+
+## Setting up the official key
+
+This is a maintainer decision and has **not** been done:
+
+1. Generate the key on an offline or otherwise protected machine. Set `NATURE_RELEASE_KEY_PASSPHRASE` so the key file is encrypted:
+   `python scripts/release_bundle.py keygen --private-key release-key.pem --comment "NATURE AI release key 2026"`
+2. Keep the private key offline, with an encrypted backup. Never commit it, put it in CI secrets you do not control, or send it to anyone.
+3. Add the printed public-key entry to `src/nature_worker/upgrade/release_keys.json` in a reviewed commit. Releases made from that commit onward can verify bundles signed with it.
+4. **Rotation:** add the new key in a release that is signed with the old key. Remove the old key in a later release.
+5. **Compromise:** publish an advisory, ship a release (signed with an uncompromised key) that removes the key, and tell users to verify the `key_id` of what they install. An installation that still trusts the compromised key cannot tell genuine releases from forged ones until it is upgraded.

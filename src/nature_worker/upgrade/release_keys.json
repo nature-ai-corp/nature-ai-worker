@@ -1,0 +1,5 @@
+{
+  "schema": 1,
+  "comment": "Official NATURE AI release signing keys (Ed25519, raw public key, base64). No official key has been published yet: until one is added here by a signed release of this repository, no bundle verifies as an official release. See docs/RELEASES.md.",
+  "keys": []
+}

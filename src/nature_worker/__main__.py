@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Start the server: ``python -m nature_worker`` or ``nature-worker``."""
 
 from __future__ import annotations
@@ -11,9 +13,12 @@ import sys
 
 import uvicorn
 
+from . import __version__
 from .app import create_app
 from .config import Config
 from .credentials import CredentialStore, RedactSecretsFilter
+from .installation_mode import ModeError
+from .maintenance import RUNTIME_LOCK, MaintenanceWatcher, RuntimeLock, write_runtime_info
 from .providers import SDK_ENV_OVERRIDES
 
 
@@ -73,6 +78,11 @@ def main() -> None:
         print(f"Error: {problem}", file=sys.stderr)
         sys.exit(1)
     config.ensure_dirs()
+    # One Worker per data root. The OS releases the lock if the process dies.
+    lock = RuntimeLock(config.data_dir / RUNTIME_LOCK)
+    if not lock.acquire():
+        print(f"Error: another Nature AI Worker is already using {config.data_dir}.", file=sys.stderr)
+        sys.exit(1)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     # HTTP client libraries can log request details; keep them quiet.
     for name in ("httpx", "httpcore", "httpx2", "httpcore2", "openai", "anthropic", "google_genai"):
@@ -87,10 +97,32 @@ def main() -> None:
             "Ignoring %s: model endpoints and keys come from Settings, not SDK environment overrides.",
             ", ".join(ignored),
         )
-    app = create_app(config)
+    try:
+        app = create_app(config)
+    except ModeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    server = uvicorn.Server(uvicorn.Config(app, host=config.host, port=config.port, log_config=None))
+
+    def drain(on: bool) -> None:
+        app.state.draining = on
+        if on:
+            logging.getLogger("nature_worker").info(
+                "Upgrade requested: accepting no new work; stopping when running work has finished.")
+
+    # An upgrade asks a running Worker to stop through its data root (maintenance.py).
+    watcher = MaintenanceWatcher(config.data_dir, busy=app.state.agent.active_runs, on_drain=drain,
+                                 on_ready=lambda: setattr(server, "should_exit", True))
+    watcher.start()
+    write_runtime_info(config.data_dir, __version__, config.port)
     print(f"Nature AI Worker is running at http://{config.host}:{config.port}")
+    print(f"Version: {__version__}")
     print(f"Workspace folder: {config.workspace_dir}")
-    uvicorn.run(app, host=config.host, port=config.port, log_config=None)
+    try:
+        server.run()
+    finally:
+        watcher.stop()
+        lock.release()
 
 
 if __name__ == "__main__":

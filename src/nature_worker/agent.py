@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """The built-in General Agent: a bounded model/tool loop for one conversation.
 
 A run starts when the user sends a message and ends when the model replies
@@ -71,6 +73,11 @@ class Agent:
     def is_running(self, conv_id: str) -> bool:
         lock = self._locks.get(conv_id)
         return bool(lock and lock.locked())
+
+    def active_runs(self) -> int:
+        """Runs in progress in any conversation (a run paused for approval is not)."""
+        with self._locks_guard:
+            return sum(lock.locked() for lock in self._locks.values())
 
     def send(self, conv_id: str, text: str) -> str:
         with self._conversation_lock(conv_id):

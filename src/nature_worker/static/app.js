@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+ * SPDX-License-Identifier: Apache-2.0 */
 "use strict";
 
 const $ = (sel) => document.querySelector(sel);
@@ -40,6 +42,7 @@ async function api(method, path, body, raw) {
   } catch (e) {
     throw new Error("Cannot reach the Nature AI Worker server. Is it still running?");
   }
+  noteServerVersion(resp.headers.get("X-Nature-Worker-Version"));
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) {
     let detail = data.detail;
@@ -47,6 +50,33 @@ async function api(method, path, body, raw) {
     throw new Error(detail || `Request failed (HTTP ${resp.status}).`);
   }
   return data;
+}
+
+// The version that first answered this page. A different version answering
+// later means the Worker was upgraded: this page's script is outdated.
+let pageVersion = null;
+function noteServerVersion(version) {
+  if (!version) return;
+  if (pageVersion === null) pageVersion = version;
+  if (version === pageVersion || document.getElementById("upgraded")) return;
+  document.body.prepend(el("div", { id: "upgraded", role: "alert" },
+    `Nature AI Worker was upgraded to ${version}. Reload this page before you continue. `,
+    el("button", { type: "button", onclick: () => location.reload() }, "Reload")));
+}
+
+// Upgrading is done with `nature-worker-upgrade`, which has to stop this server.
+function versionLine(s) {
+  const i = s.installation || {};
+  let text = `Nature AI Worker ${s.version}`;
+  if (!i.managed) return `${text} (source or pip installation)`;
+  const a = i.available;
+  if (a && a.version && a.version !== s.version) {
+    text += a.eligible
+      ? ` · ${a.version} is available${a.official ? "" : " (not an official NATURE AI release)"}: run nature-worker-upgrade upgrade`
+      : ` · ${a.version} is not eligible: ${(a.reasons || []).join("; ")}`;
+  }
+  if (i.last_upgrade) text += ` · last upgrade: ${i.last_upgrade.outcome}`;
+  return text;
 }
 
 function el(tag, attrs = {}, ...children) {
@@ -845,6 +875,7 @@ function openSettings(firstRun = false) {
   $("#s-key").value = "";
   $("#s-web").checked = !!s.web_fetch_enabled;
   $("#s-steps").value = s.max_steps;
+  $("#s-version").textContent = versionLine(s);
   $("#setup-intro").hidden = !firstRun;
   $("#settings-heading").textContent = firstRun ? "Set up your AI model" : "Settings";
   $("#s-cancel").hidden = firstRun && !s.configured;

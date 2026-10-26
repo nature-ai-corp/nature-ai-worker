@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """``python -m nature_worker.platform_client [serve|init|preflight]``."""
 from __future__ import annotations
 
@@ -6,7 +8,8 @@ import json
 import sys
 
 from ..installation_mode import ModeError, initialize_platform_client
-from .server import ClientSettings, create_app, startup_findings
+from ..maintenance import MaintenanceWatcher
+from .server import ClientSettings, create_app, running_submissions, startup_findings
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -39,7 +42,18 @@ def main(argv: list[str] | None = None) -> int:
         print(exc, file=sys.stderr)
         return 1
     import uvicorn
-    uvicorn.run(app, host=settings.host, port=settings.port, access_log=False, log_level="warning")
+    server = uvicorn.Server(uvicorn.Config(app, host=settings.host, port=settings.port,
+                                           access_log=False, log_level="warning"))
+    # An upgrade stop: no new submissions; running ones finish; then a clean exit,
+    # whose shutdown signs out of the Platform (revokes the session).
+    watcher = MaintenanceWatcher(settings.data_dir, busy=lambda: running_submissions(app),
+                                 on_drain=lambda on: setattr(app.state, "draining", on),
+                                 on_ready=lambda: setattr(server, "should_exit", True))
+    watcher.start()
+    try:
+        server.run()
+    finally:
+        watcher.stop()
     return 0
 
 

@@ -200,6 +200,15 @@ All settings are optional environment variables (see `.env.example`):
 
 ---
 
+## Upgrading
+
+- **Source checkout or `pip install .`** (the quick start above): `git pull`, then `pip install .`, then restart. When the Worker starts on older data, it backs up the data folder to `data/backups/` and then migrates it. It refuses to open data written by a newer version.
+- **Managed installation:** `nature-worker-upgrade upgrade --bundle <release>` checks the release's signature and every file before it installs anything, shows the release notes, and asks you to confirm the version. It then lets running work finish, backs up your data, switches versions and checks that the new version works. If any step fails, it returns to the previous version and its data.
+
+See [docs/UPGRADES.md](docs/UPGRADES.md). **No official signed release has been published yet** ([docs/RELEASES.md](docs/RELEASES.md)).
+
+---
+
 ## Development
 
 ```bash
@@ -239,9 +248,15 @@ src/nature_worker/
   providers/        One adapter per API (OpenAI-compatible, Anthropic, Gemini, Ollama)
   tools/            Workspace sandbox, file tools, data tools, guarded web fetch
   static/           The web UI (plain HTML/CSS/JS, no build step)
+  migrations.py     Versioned data migrations and data-root backups
+  maintenance.py    Coordinated stop for upgrades, one Worker per data root
+  upgrade/          Verified, transactional upgrades (nature-worker-upgrade)
 tests/              Automated tests
 examples/           Synthetic demo data (sales report demo)
 scripts/acceptance.py   Real-provider acceptance check
+scripts/upgrade_e2e.py  Real upgrade tests on a disposable installation
+scripts/release_bundle.py  Build and sign a release bundle
+scripts/repo_checks.py  License, secret and artifact checks (CI)
 ```
 
 ---
@@ -275,4 +290,6 @@ The automated tests never contact a real AI provider. To check a provider yourse
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE). The third-party dependencies and their licenses are listed in [THIRD_PARTY.md](THIRD_PARTY.md).
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). The third-party dependencies and their licenses are listed in [THIRD_PARTY.md](THIRD_PARTY.md).
+
+You may use, modify and redistribute this software, including commercially, under the Apache License. The license does not grant rights to the project's names or logo. If you distribute a modified version, give it your own name ([TRADEMARKS.md](TRADEMARKS.md)). Official releases are identified by signature ([docs/RELEASES.md](docs/RELEASES.md)). Contributions are made under the Apache License with a DCO sign-off ([CONTRIBUTING.md](CONTRIBUTING.md)). [docs/OPEN_SOURCE_PROTECTION.md](docs/OPEN_SOURCE_PROTECTION.md) explains what is protected and how.

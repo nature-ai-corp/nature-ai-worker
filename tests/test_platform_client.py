@@ -70,10 +70,11 @@ def test_template_task_submission_progress_results_and_logout(pc):
                                                 "Additional instructions: No external messages.",
                                      "start_task": True, "template_id": "tpl-1"}
     view = client.get("/api/tasks/1").json()
-    assert view["progress"]["state"] == "working"
+    assert view["progress"]["execution"]["state"] == "running" and view["progress"]["active"]
     fake.tasks[1]["work_pending"] = False
     view = client.get("/api/tasks/1").json()
-    assert view["progress"]["state"] == "idle"
+    assert view["progress"]["execution"]["state"] == "stopped" and not view["progress"]["active"]
+    assert view["progress"]["execution"]["last_period"]["status"] == "completed"
     assert client.get("/api/tasks/1/results/r-1").json()["content"] == "Full credit summary"
     dl = client.get("/api/tasks/1/files/f-1")
     assert dl.content == b"# hi\n"

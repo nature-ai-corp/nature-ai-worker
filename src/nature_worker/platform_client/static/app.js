@@ -243,30 +243,60 @@ async function loadTasks(attention, search = "") {
   $("task-rows").replaceChildren(...page.items.map((t) => el("tr", { onclick: () => { location.hash = `#/task/${t.task_number}`; } },
     el("td", {}, `#${t.task_number}`), el("td", {}, t.title),
     el("td", {}, t.status, t.needs_attention ? el("span", { class: "tag" }, "needs you") : null),
-    el("td", {}, t.work_pending ? "Working…" : (t.work_status || "")),
+    el("td", {}, t.work_pending ? "Work pending" : (t.work_status || "")),
     el("td", {}, new Date(t.last_activity_at).toLocaleString()))));
   if (!page.items.length) $("task-rows").append(el("tr", {}, el("td", { colspan: "5", class: "muted" }, "No Tasks.")));
 }
 
 $("task-search").addEventListener("submit", (e) => { e.preventDefault(); loadTasks(false, $("task-query").value); });
 
+function when(ts) { return ts ? new Date(ts).toLocaleString() : ""; }
+
+function since(ts) { return ts ? Math.max(0, Math.round((Date.now() - new Date(ts).getTime()) / 1000)) : null; }
+
+// Lifecycle, Agent execution and your decisions are separate facts: never merged.
 function renderProgress(p) {
   const box = $("task-progress");
-  box.className = `card progress ${p.state}`;
-  const items = [el("div", { class: "state" }, p.label)];
-  if (p.state === "working" && p.elapsed_seconds != null) {
-    items.push(el("div", { class: "muted" }, `Running for ${elapsed(p.elapsed_seconds)}. Agent work often takes 4-11 minutes; this page keeps checking.`));
+  const ex = p.execution, dec = p.decision;
+  box.className = `card progress exec-${ex.state}${dec.yours_to_decide ? " needs-you" : ""}`;
+  const row = (label, ...value) => el("div", { class: "fact" }, el("dt", {}, label), el("dd", {}, ...value));
+
+  let execution;
+  if (ex.state === "running") {
+    execution = [el("span", { class: "running" }, `${ex.agent_name || "Agent"} is working now`),
+      ` - run started ${when(ex.started_at)} (${elapsed(since(ex.started_at))} ago). `,
+      el("span", { class: "muted" }, "Agent work often takes 4-11 minutes; this page keeps checking.")];
+  } else if (ex.state === "queued") {
+    execution = ["Work accepted by the Platform; no run has started yet."];
+  } else if (ex.state === "stopped") {
+    const last = ex.last_period;
+    execution = [`Not running. Last run ended ${when(last.ended_at)}`,
+      last.duration_seconds != null ? ` after ${elapsed(last.duration_seconds)}` : "",
+      ` - recorded by the Platform as `, el("strong", {}, last.status),
+      last.failure_reason ? ` (reason: "${last.failure_reason}")` : "", "."];
+  } else execution = ["No work has run yet."];
+
+  const mine = dec.pending_approvals.filter((a) => a.can_decide);
+  const others = dec.pending_approvals.length - mine.length;
+  const decision = mine.length
+    ? [el("strong", {}, `${mine.length} approval request${mine.length > 1 ? "s" : ""} waiting for your decision: `),
+       mine.map((a) => `${a.reference} - ${a.title}${a.expires_at ? ` (expires ${when(a.expires_at)})` : ""}`).join("; "),
+       " - see Approvals below."]
+    : [others ? `${others} approval request(s) pending, not yours to decide.` : "No approval request is waiting for you."];
+
+  const items = [row("Task", p.lifecycle.closed ? "Closed" : "Open"),
+    row("Agent execution", ...execution), row("Your decision", ...decision)];
+  const u = p.agent_report;
+  if (u) {
+    items.push(el("div", { class: "small muted report-heading" },
+      `Agent's own Task Update, saved ${when(u.saved_at)}`,
+      u.stale ? el("span", { class: "tag stale" }, "saved before the latest run - may be out of date") : null));
+    items.push(el("dl", { class: "update" },
+      ...[["Status", u.status], ["Completed", u.completed], ["Work product", u.important_work_product],
+          ["Remaining", u.remaining], ["Dependency", u.dependency], ["Next", u.next_action],
+          ["Asks you", u.user_action]].flatMap(([k, v]) => v ? [el("dt", {}, k), el("dd", {}, v)] : [])));
   }
-  if (p.failure_reason) items.push(el("div", {}, `Reason: ${p.failure_reason}`));
-  if (p.update) {
-    const u = p.update;
-    items.push(el("div", { class: "small muted" }, `Latest Task Update (${new Date(u.saved_at).toLocaleString()}):`),
-      el("dl", { class: "update" },
-        ...[["Status", u.status], ["Completed", u.completed], ["Work product", u.important_work_product],
-            ["Remaining", u.remaining], ["Dependency", u.dependency], ["Next", u.next_action],
-            ["Your action", u.user_action]].flatMap(([k, v]) => v ? [el("dt", {}, k), el("dd", {}, v)] : [])));
-  }
-  box.replaceChildren(...items);
+  box.replaceChildren(el("dl", { class: "facts" }, ...items.slice(0, 3)), ...items.slice(3));
 }
 
 function renderApprovals(n, approvals) {
@@ -330,7 +360,7 @@ async function loadTask(n) {
   renderProgress(p);
   renderApprovals(n, view.approvals);
   renderHistory(t, view.work_history);
-  const key = `${n}:${t.last_activity_at}:${p.state}`;
+  const key = `${n}:${t.last_activity_at}:${p.execution.state}`;
   if (key !== lastResultsKey) { lastResultsKey = key; await renderResults(n); }
   $("task-close").hidden = t.status === "completed";
   $("task-continue").hidden = !t.can_continue_in_chat;
@@ -341,9 +371,9 @@ async function loadTask(n) {
     try { const c = await api(`/api/tasks/${n}/continue`, { method: "POST" }); location.hash = `#/chat/${c.id}`; }
     catch (err) { fail(err); }
   };
-  if (p.state === "working") banner("");
+  if (p.active) banner("");
   if (!p.terminal) {
-    const delay = p.state === "working" ? pollDelay(p.elapsed_seconds || 0) : 30000;
+    const delay = p.active ? pollDelay(since(p.execution.started_at) || 0) : 30000;
     pollTimer = setTimeout(() => { if (location.hash === `#/task/${n}`) loadTask(n).catch(fail); }, delay);
   }
 }

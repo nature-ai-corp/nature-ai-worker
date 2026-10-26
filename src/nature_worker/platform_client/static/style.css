@@ -45,11 +45,12 @@ main { flex: 1; overflow: auto; padding: 24px 32px; }
 table.tasks { width: 100%; border-collapse: collapse; }
 table.tasks td, table.tasks th { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
 table.tasks tbody tr { cursor: pointer; } table.tasks tbody tr:hover { background: var(--surface); }
-.progress .state { font-weight: 600; font-size: 17px; }
-.progress.working .state::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); margin-right: 8px; animation: pulse 1.2s infinite; }
-.progress.failed, .progress.interrupted { border-color: var(--error-border); }
-.progress.needs_you { border-color: var(--warn-border); background: var(--warn-bg); }
-.progress.work_completed, .progress.closed { border-color: var(--ok); }
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+dl.facts dt { font-weight: 600; } dl.facts dd { margin: 0; } .fact { display: contents; }
+.progress .running::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); margin-right: 8px; animation: pulse 1.2s infinite; }
+.progress.needs-you { border-color: var(--warn-border); background: var(--warn-bg); }
+.report-heading { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+.tag.stale { border-color: var(--warn-border); background: var(--warn-bg); }
 @keyframes pulse { 50% { opacity: .3; } }
 pre.content { white-space: pre-wrap; background: var(--surface); padding: 10px; border-radius: 8px; overflow-wrap: anywhere; }
 dl.update { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 8px 0 0; }

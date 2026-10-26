@@ -42,11 +42,15 @@ nature-worker            # http://127.0.0.1:8080
 
 **License of contributions.** Under Section 5 of the [Apache License 2.0](LICENSE), anything you intentionally submit for inclusion is licensed under the Apache License 2.0, without additional terms. You keep the copyright in your contribution. The project does not ask you to assign it.
 
-**Developer Certificate of Origin.** Each commit must carry a `Signed-off-by: Your Name <email>` line (`git commit -s`). By adding it you certify the [Developer Certificate of Origin 1.1](https://developercertificate.org/), in summary:
+**Developer Certificate of Origin.** Each commit you contribute must carry a `Signed-off-by: Your Name <email>` line (`git commit -s`). By adding it you certify the [Developer Certificate of Origin 1.1](https://developercertificate.org/), in summary:
 
 - you wrote the contribution, or have the right to submit it under the Apache License 2.0;
 - if it is based on other work, that work is under a compatible open-source license, and you say which;
 - you understand that the contribution and your sign-off are public and kept permanently.
+
+A sign-off is a personal certification. Only the person it names may add it: never add one for someone else, and tools (including AI coding assistants) must not add one on a person's behalf. A `Co-Authored-By` trailer is not a sign-off.
+
+*Status:* this requirement was adopted on 2026-10-26 and applies to contributions from then on. The existing history, written by the project's maintainer before then, carries no sign-offs. CI does not enforce sign-off yet (a maintainer decision); `python scripts/repo_checks.py --dco origin/main..HEAD` lists the commits in a range that lack one.
 
 If you contribute as part of your job, make sure your employer allows it.
 

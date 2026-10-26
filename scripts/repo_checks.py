@@ -214,17 +214,31 @@ def check_dependency_licenses(found: Findings) -> list[tuple[str, str, str]]:
     return rows
 
 
+def check_dco(found: Findings, revisions: str) -> None:
+    """Commits in ``revisions`` (e.g. origin/main..HEAD) without a DCO sign-off by their author."""
+    log = subprocess.run(["git", "-C", str(REPO), "log", "--format=%H%x00%ae%x00%(trailers:key=Signed-off-by,"
+                          "valueonly,separator=%x01)%x02", revisions], capture_output=True, text=True, check=True)
+    for record in filter(None, (r.strip() for r in log.stdout.split("\x02"))):
+        sha, email, trailers = record.split("\x00")
+        signers = [t.strip() for t in trailers.split("\x01") if t.strip()]
+        if not any(f"<{email}>" in t for t in signers):
+            found.add("dco", sha[:10], "no Signed-off-by from the commit author")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--licenses", action="store_true", help="check installed dependency licenses")
     parser.add_argument("--history", action="store_true", help="scan every blob in the git history")
     parser.add_argument("--print-licenses", action="store_true", help="print the dependency license table")
+    parser.add_argument("--dco", metavar="RANGE", help="also require a DCO sign-off on every commit in RANGE")
     args = parser.parse_args(argv)
     found = Findings()
     check_license(found)
     check_files(found, git_files())
     if args.history:
         check_history(found)
+    if args.dco:
+        check_dco(found, args.dco)
     if args.licenses or args.print_licenses:
         rows = check_dependency_licenses(found)
         if args.print_licenses:

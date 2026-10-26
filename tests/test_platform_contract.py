@@ -67,3 +67,25 @@ def test_unmarked_operations_are_ignored(tmp_path):
     def add(d):
         d["paths"]["/api/v1/admin/x"] = {"get": {"operationId": "adminThing"}}
     assert "adminThing" not in PlatformClientContract.load(_mutated(tmp_path, add)).names()
+
+
+def test_bundled_contract_publishes_no_platform_internals():
+    """Free-text descriptions document the Platform's internals; the public copy has none."""
+    raw = BUNDLED.read_text()
+    document = json.loads(raw)
+    security = document["components"].pop("securitySchemes")
+    assert all(isinstance(s.get("description"), str) for s in security.values())
+
+    def annotations(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "description" and isinstance(value, str):
+                    yield value
+                yield from annotations(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from annotations(value)
+
+    assert list(annotations(document)) == []
+    for internal in ("app.services.", "app.domain.", "_handle_callback", "password_credentials", "mission section"):
+        assert internal not in raw

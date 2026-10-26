@@ -9,8 +9,14 @@ two documents (for example the live Platform OpenAPI and the Platform
 repository's committed ``docs/client-interface-v1.openapi.json``) define the
 same Client Interface.
 
-    python -I scripts/client_interface_contract.py extract LIVE.json OUT.json
-    python -I scripts/client_interface_contract.py compare A.json B.json
+    python -I scripts/client_interface_contract.py extract [--public] LIVE.json OUT.json
+    python -I scripts/client_interface_contract.py strip CONTRACT.json
+    python -I scripts/client_interface_contract.py compare [--ignore-descriptions] A.json B.json
+
+``--public`` / ``strip`` remove the Platform's free-text ``description``
+annotations, which document the Platform's internals (module paths, internal
+requirement IDs, storage details). Paths, methods, parameters, schemas and
+the security schemes (which the Worker checks) are kept exactly.
 """
 from __future__ import annotations
 
@@ -62,6 +68,20 @@ def client_interface(document: dict) -> dict:
     }
 
 
+def strip_descriptions(node, *, keep: bool = False):
+    """Remove string ``description`` annotations, except under securitySchemes.
+
+    A schema property that happens to be named "description" maps to a schema
+    object, not a string, and is kept.
+    """
+    if isinstance(node, dict):
+        return {k: strip_descriptions(v, keep=keep or k == "securitySchemes") for k, v in node.items()
+                if keep or not (k == "description" and isinstance(v, str))}
+    if isinstance(node, list):
+        return [strip_descriptions(v, keep=keep) for v in node]
+    return node
+
+
 def canonical(document: dict) -> bytes:
     return json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
 
@@ -70,9 +90,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     ext = sub.add_parser("extract")
+    ext.add_argument("--public", action="store_true", help="remove free-text descriptions")
     ext.add_argument("source", type=Path)
     ext.add_argument("output", type=Path)
+    strip = sub.add_parser("strip")
+    strip.add_argument("contract", type=Path)
     cmp_ = sub.add_parser("compare")
+    cmp_.add_argument("--ignore-descriptions", action="store_true")
     cmp_.add_argument("a", type=Path)
     cmp_.add_argument("b", type=Path)
     args = parser.parse_args(argv)
@@ -80,6 +104,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "extract":
         raw = args.source.read_bytes()
         subset = client_interface(json.loads(raw))
+        if args.public:
+            subset = strip_descriptions(subset)
         args.output.write_text(json.dumps(subset, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         count = sum(len(ops) for ops in subset["paths"].values())
         print(json.dumps({
@@ -89,8 +115,16 @@ def main(argv: list[str] | None = None) -> int:
         }, indent=2))
         return 0
 
+    if args.command == "strip":
+        public = strip_descriptions(json.loads(args.contract.read_bytes()))
+        args.contract.write_text(json.dumps(public, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(json.dumps({"canonical_sha256": hashlib.sha256(canonical(public)).hexdigest()}, indent=2))
+        return 0
+
     a = client_interface(json.loads(args.a.read_bytes()))
     b = client_interface(json.loads(args.b.read_bytes()))
+    if args.ignore_descriptions:
+        a, b = strip_descriptions(a), strip_descriptions(b)
     ops_a = {(m.upper(), p, o.get("operationId")) for p, ops in a["paths"].items() for m, o in ops.items()}
     ops_b = {(m.upper(), p, o.get("operationId")) for p, ops in b["paths"].items() for m, o in ops.items()}
     same = canonical(a) == canonical(b)

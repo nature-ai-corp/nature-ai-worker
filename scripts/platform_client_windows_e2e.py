@@ -20,10 +20,23 @@ these tests cover installation, startup, upgrade, repair and uninstall. Sign-in
 and Tasks against the real Platform are a separate, manual check.
 
 Writes NEW_DIR\\windows-platform-client-e2e.md; exits 0 only if every check passed.
+NEW_DIR\\e2e-journal.log records, flushed to disk line by line, every scenario and
+child process (PID, command, timeout, exit), Python stacks when a step stalls or the
+interpreter crashes, and console/shutdown events: if the runner ends without the
+line "runner finished", it was stopped from outside (or crashed) and the journal's
+last lines say where.
+
+    python scripts\\platform_client_windows_e2e.py --cleanup-leftovers --workdir EARLIER_DIR
+
+removes what a run that ended without its own cleanup left in the e2e namespace
+(the same e2e uninstall), refusing while any installer, upgrader or e2e process is
+still active; it writes EARLIER_DIR\\windows-platform-client-e2e-cleanup.md.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
+import faulthandler
 import json
 import re
 import os
@@ -32,8 +45,10 @@ import socket
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 import traceback
+import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -60,6 +75,15 @@ ICACLS, SC, CMDKEY = system_tool("icacls.exe"), system_tool("sc.exe"), system_to
 E2E_SERVICE = SERVICE_NAME + "E2E"
 E2E_PREFIX = default_prefix().parent.parent / "NatureAIWorkerE2E" / "PlatformClient"
 E2E_DATA = default_data().parent.parent / "NatureAIWorkerE2E" / "PlatformClient"
+# A child running longer than this gets the runner's Python stack written to the journal
+# (repeated), so a stall shows exactly which call is waiting.
+STALL_DUMP_SECONDS = 300
+# Command lines of everything that may change the e2e namespace (cleanup waits for none).
+ACTIVE_PATTERN = (r"platform_client_windows_e2e\.py|platform-client-windows\.py|nature_worker\.upgrade|"
+                  r"nature-worker-upgrade|nature-worker-platform-client-setup|windows_setup|nwpc-uninstall")
+CONSOLE_EVENTS = {0: "CTRL_C_EVENT (Ctrl+C)", 1: "CTRL_BREAK_EVENT (Ctrl+Break)",
+                  2: "CTRL_CLOSE_EVENT (console window closed)", 5: "CTRL_LOGOFF_EVENT (user signs out)",
+                  6: "CTRL_SHUTDOWN_EVENT (Windows shuts down or restarts)"}
 
 
 class Check(Exception):
@@ -71,10 +95,37 @@ def expect(condition, message: str) -> None:
         raise Check(message)
 
 
+class Journal:
+    """Append-only log, flushed and synced line by line: it survives a killed runner and a
+    power loss, so its last lines say what the runner was doing when it ended."""
+
+    def __init__(self, path: Path):
+        self.file = open(path, "a", encoding="utf-8")  # noqa: SIM115 - open for the whole run
+        self.lock = threading.Lock()
+
+    def __call__(self, text: str) -> None:
+        line = f"{time.strftime('%Y-%m-%d %H:%M:%S %z')} [{os.getpid()}] {text}\n"
+        # Console events arrive on a thread of their own: never wait long for the main thread.
+        locked = self.lock.acquire(timeout=2)
+        try:
+            self.file.write(line)
+            self.file.flush()
+            os.fsync(self.file.fileno())
+        except (OSError, ValueError):
+            pass
+        finally:
+            if locked:
+                self.lock.release()
+
+    def close(self) -> None:
+        self.file.close()
+
+
 class E2E:
-    def __init__(self, workdir: Path, archive: Path, origin: str):
+    def __init__(self, workdir: Path, archive: Path | None, origin: str,
+                 report_name: str = "windows-platform-client-e2e.md"):
         self.w = workdir.resolve()
-        self.archive = archive.resolve()
+        self.archive = archive.resolve() if archive else None
         self.origin = origin
         self.prefix, self.data = E2E_PREFIX, E2E_DATA
         self.system = WindowsSystem()
@@ -83,8 +134,11 @@ class E2E:
         self.port = self.free_port()
         self.lines: list[str] = []
         self.results: list[tuple[str, bool]] = []
-        self.report_path = self.w / "windows-platform-client-e2e.md"
+        self.report_path = self.w / report_name
+        self.journal = Journal(self.w / "e2e-journal.log")
         self.outcome: dict[str, str] = {}
+        self.running: str | None = None
+        self.ended_how: str | None = None
         # Set only once the preconditions proved the e2e namespace empty: from then on,
         # anything in it was created by this run and cleanup may remove it.
         self.namespace_ours = False
@@ -101,8 +155,31 @@ class E2E:
             return s.getsockname()[1]
 
     def run(self, cmd, *, timeout=1800, env=None) -> subprocess.CompletedProcess:
-        return subprocess.run([str(c) for c in cmd], capture_output=True, text=True, timeout=timeout,
-                              stdin=subprocess.DEVNULL, env=env)
+        """subprocess.run, with the child's PID, command, timeout and outcome in the journal.
+        Children share the runner's console and process group on purpose: Ctrl+C reaches them
+        too, so cleanup never races an installer that is still running."""
+        args = [str(c) for c in cmd]
+        started = time.monotonic()
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                                text=True, env=env)
+        self.journal(f"child {proc.pid} started (timeout {timeout} s): {subprocess.list2cmdline(args)}")
+        faulthandler.dump_traceback_later(STALL_DUMP_SECONDS, repeat=True, file=self.journal.file)
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out, err = proc.communicate()
+            self.journal(f"child {proc.pid} killed: still running after {timeout} s")
+            raise subprocess.TimeoutExpired(args, timeout, out, err) from None
+        except BaseException as exc:
+            proc.kill()
+            proc.wait()
+            self.journal(f"child {proc.pid} killed: the runner was interrupted ({type(exc).__name__})")
+            raise
+        finally:
+            faulthandler.cancel_dump_traceback_later()
+        self.journal(f"child {proc.pid} exit {proc.returncode} after {time.monotonic() - started:.1f} s")
+        return subprocess.CompletedProcess(args, proc.returncode, out, err)
 
     def setup_cmd(self, *args) -> subprocess.CompletedProcess:
         """The installer as a user runs it from the checkout (never from inside the installation)."""
@@ -123,7 +200,8 @@ class E2E:
         return [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
     def service_process(self) -> dict:
-        script = (f"$s = Get-CimInstance Win32_Service -Filter \"Name='{E2E_SERVICE}'\"; "
+        script = ("$ProgressPreference = 'SilentlyContinue'; "
+                  f"$s = Get-CimInstance Win32_Service -Filter \"Name='{E2E_SERVICE}'\"; "
                   "$p = Get-CimInstance Win32_Process -Filter (\"ProcessId=\" + $s.ProcessId); "
                   "$o = Invoke-CimMethod -InputObject $p -MethodName GetOwner; "
                   "@{state=$s.State; start_name=$s.StartName; pid=$s.ProcessId; "
@@ -193,7 +271,15 @@ class E2E:
             print(f"[SKIPPED] {name} (needs {', '.join(missing)})", flush=True)
             self.write_report()
             return
-        self.lines.append(f"\n## {name}")
+        # On disk before the scenario starts: a run that ends inside it shows where it was.
+        header = f"\n## RUNNING (not finished): {name}"
+        self.lines.append(header)
+        self.note(f"started {time.strftime('%H:%M:%S')}; if this is the last section, the runner ended "
+                  "inside this scenario: see e2e-journal.log")
+        hint = len(self.lines) - 1
+        self.running = name
+        self.journal(f"scenario started: {name}")
+        self.write_report()
         started = time.monotonic()
         try:
             fn()
@@ -203,7 +289,10 @@ class E2E:
             self.failure = f"{type(exc).__name__}: {exc}"
             self.note(f"FAILED: {exc}")
             self.lines.append("```\n" + traceback.format_exc()[-2000:] + "```")
-        self.lines[self.lines.index(f"\n## {name}")] = f"\n## {'PASS' if ok else 'FAIL'}: {name}"
+        self.running = None
+        self.lines[self.lines.index(header)] = f"\n## {'PASS' if ok else 'FAIL'}: {name}"
+        del self.lines[hint]
+        self.journal(f"scenario {'PASS' if ok else 'FAIL'}: {name}" + ("" if ok else f": {self.failure}"[:300]))
         self.note(f"({time.monotonic() - started:.1f} s)")
         self.results.append((name, ok))
         self.outcome[name] = "PASS" if ok else "FAIL"
@@ -226,7 +315,7 @@ class E2E:
                 default_prefix(), default_prefix().parent, default_data(), default_data().parent,
                 start_menu() / "Nature AI Worker Platform Client.url",
                 Path(os.environ["LOCALAPPDATA"]) / "NatureAIWorker")},
-            "credential_manager": self.run([CMDKEY, "/list"]).stdout,
+            "credential_manager": self.run([CMDKEY, "/list"], timeout=60).stdout,
         }
 
     def s_preconditions(self) -> None:
@@ -269,12 +358,14 @@ class E2E:
         expect(status["platform"] == self.origin and status["signed_in"] is False, f"status {status}")
         self.assert_isolated()
         expect(self.system.get_registry(self.setup.uninstall_key, "DisplayVersion") == self.label, "Apps & Features entry")
-        page = self.run([POWERSHELL, "-NoProfile", "-Command",
-                         f"(Invoke-WebRequest -UseBasicParsing http://127.0.0.1:{self.port}/).StatusCode"])
-        expect(page.stdout.strip() == "200", "the UI page is not served")
+        # In-process, not Invoke-WebRequest: a console-attached PowerShell (progress bar,
+        # interactive host) is the step e2e-4952 was still waiting in when Windows shut down.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(f"http://127.0.0.1:{self.port}/", timeout=15) as page:
+            expect(page.status == 200, f"the UI page answers HTTP {page.status}")
         expect((self.standalone / "worker.db").read_bytes() == b"standalone data that S-C must never touch",
                "the Standalone data changed")
-        showsid = self.run([SC, "showsid", E2E_SERVICE]).stdout
+        showsid = self.run([SC, "showsid", E2E_SERVICE], timeout=60).stdout
         shown = re.search(r"S-1-5-80(?:-\d+){5}", showsid)
         resolved = lookup_account_sid(self.account)
         expect(shown and shown.group(0) == self.sid == resolved,
@@ -285,13 +376,14 @@ class E2E:
         self.note(f"service SID {self.sid}: derived = sc showsid = LookupAccountName; ServiceSidType unrestricted; "
                   f"ObjectName {self.account}")
         runtime = self.prefix / "runtime"
-        version = self.run([runtime / "python.exe", "-I", "-c", "import sys; print(sys.version.split()[0])"])
+        version = self.run([runtime / "python.exe", "-I", "-c", "import sys; print(sys.version.split()[0])"],
+                           timeout=120)
         expect(version.stdout.strip() == sys.version.split()[0], f"runtime is {version.stdout.strip()}")
         expect(not admin_only_problems(read_acl(runtime)), f"runtime not admin-only: {admin_only_problems(read_acl(runtime))}")
         self.note(f"bundled runtime: {runtime}\\python.exe {version.stdout.strip()}, admin-only")
         stored = [p.name for p in self.data.rglob("*") if p.suffix == ".dpapi" or p.name in ("credentials", "sessions")]
         expect(not stored, f"credential storage found in the data root: {stored}")
-        expect(self.run([CMDKEY, "/list"]).stdout == self.before["credential_manager"],
+        expect(self.run([CMDKEY, "/list"], timeout=60).stdout == self.before["credential_manager"],
                "Credential Manager entries of this user changed")
         self.note("no DPAPI file or credentials folder in the data root; this user's Credential Manager unchanged "
                   "(the service keeps Platform sessions in memory only)")
@@ -299,15 +391,15 @@ class E2E:
                   "private to the service account; code admin-only; UI answers on loopback; Standalone untouched")
 
     def s_repair(self) -> None:
-        self.run([ICACLS, self.data, "/grant", f"*{USERS}:(OI)(CI)R"])
-        self.run([SC, "privs", E2E_SERVICE, "SeChangeNotifyPrivilege/SeImpersonatePrivilege"])
+        self.run([ICACLS, self.data, "/grant", f"*{USERS}:(OI)(CI)R"], timeout=120)
+        self.run([SC, "privs", E2E_SERVICE, "SeChangeNotifyPrivilege/SeImpersonatePrivilege"], timeout=60)
         self.system.stop_service(E2E_SERVICE, 60)
         expect(private_problems(read_acl(self.data), self.sid), "damage was not applied")
         result = self.setup_cmd("repair")
         expect(result.returncode == 0, f"repair failed: {result.stdout[-1500:]}{result.stderr[-1500:]}")
         self.wait_version(self.label)
         self.assert_isolated()
-        privs = self.run([SC, "qprivs", E2E_SERVICE]).stdout
+        privs = self.run([SC, "qprivs", E2E_SERVICE], timeout=60).stdout
         expect("SeImpersonatePrivilege" not in privs, "repair did not reset the service privileges")
         self.note("Users read access added, extra privilege granted, service stopped -> repair: data root private "
                   f"again, privileges reset, {self.label} running")
@@ -354,6 +446,7 @@ class E2E:
         proc = subprocess.Popen([str(python), "-I", "-m", "nature_worker.upgrade", "upgrade", "--prefix",
                                  str(self.prefix), "--bundle", str(self.bundles["9.3.0"]), "--confirm-version", "9.3.0"],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+        self.journal(f"child {proc.pid} started (killed once it reaches verifying): upgrade to 9.3.0")
         state_file = self.prefix / "upgrade" / "state.json"
         try:
             deadline = time.monotonic() + 600
@@ -370,6 +463,7 @@ class E2E:
         finally:
             proc.kill()
             proc.wait()
+            self.journal(f"child {proc.pid} killed on purpose, exit {proc.returncode}")
         status = self.upgrader("status")
         expect("UNFINISHED" in status.stdout, "status does not report the unfinished upgrade")
         recovered = self.upgrader("recover", "--confirm")
@@ -444,48 +538,199 @@ class E2E:
                 found.append(f"HKLM\\{key}")
         return found
 
-    def cleanup(self) -> None:
-        """Remove everything of the e2e namespace, also after a failed or partial install, and
-        never anything that existed before this run (the preconditions refused that case)."""
-        if not self.namespace_ours:
-            return
+    def uninstall_namespace(self) -> tuple[list[str], subprocess.CompletedProcess, list[str]]:
+        """The e2e uninstall: the checkout's installer, in the e2e namespace, deleting its data."""
         leftovers = self.e2e_leftovers()
-        if not leftovers:
-            return
+        self.journal(f"e2e uninstall of {leftovers}")
         result = self.setup_cmd("uninstall", "--delete-local-data")
         for path in (E2E_PREFIX.parent, E2E_DATA.parent):
             if path.exists() and not any(path.iterdir()):
                 path.rmdir()
         remaining = self.e2e_leftovers()
+        self.journal(f"e2e uninstall exit {result.returncode}; remaining {remaining or 'none'}")
+        return leftovers, result, remaining
+
+    def cleanup(self) -> None:
+        """Remove everything of the e2e namespace, also after a failed or partial install, and
+        never anything that existed before this run (the preconditions refused that case)."""
+        if not self.namespace_ours:
+            return
+        if not self.e2e_leftovers():
+            return
+        leftovers, result, remaining = self.uninstall_namespace()
         self.lines.append("\n## Cleanup")
         self.note(f"found {leftovers}; e2e uninstall exit {result.returncode}; remaining {remaining or 'none'}")
         if remaining:
             self.lines.append("```\n" + (result.stdout + result.stderr)[-2000:] + "```")
         self.write_report()
 
+    # -- leftovers of a run that ended without its cleanup --------------------------------
+
+    def active_processes(self) -> list[str]:
+        """Processes that could still change the e2e namespace: an installer, upgrader or e2e
+        runner, or anything running from the e2e code folder. Not counted: this runner with its
+        ancestors (the venv launcher, the console) and the e2e service, which the uninstall stops."""
+        script = ("$ProgressPreference = 'SilentlyContinue'; "
+                  f"$svc = Get-CimInstance Win32_Service -Filter \"Name='{E2E_SERVICE}'\"; "
+                  "$procs = @(Get-CimInstance Win32_Process | ForEach-Object { @{pid=[int]$_.ProcessId; "
+                  "parent=[int]$_.ParentProcessId; exe=[string]$_.ExecutablePath; cmd=[string]$_.CommandLine} }); "
+                  "@{self=$PID; service=[int]$svc.ProcessId; processes=$procs} | ConvertTo-Json -Compress -Depth 4")
+        out = self.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", script], timeout=120)
+        expect(out.returncode == 0 and out.stdout.strip(), f"cannot list the processes: {out.stderr[-300:]}")
+        listing = json.loads(out.stdout)
+        procs = {p["pid"]: p for p in listing["processes"]}
+        ours, pid = {os.getpid(), listing["self"]}, os.getpid()
+        while pid in procs and procs[pid]["parent"] not in ours and procs[pid]["parent"] in procs:
+            pid = procs[pid]["parent"]
+            ours.add(pid)
+        prefix = str(E2E_PREFIX).lower()
+        active = []
+        for p in procs.values():
+            if p["pid"] in ours or (listing["service"] and p["pid"] == listing["service"]):
+                continue
+            cmd, exe = p["cmd"] or "", (p["exe"] or "").lower()
+            if re.search(ACTIVE_PATTERN, cmd, re.IGNORECASE) or exe.startswith(prefix) or prefix in cmd.lower():
+                active.append(f"{p['pid']} {cmd}")
+        self.journal(f"active installer/upgrader/e2e processes: {active or 'none'} "
+                     f"(not counted: this runner {sorted(ours)}, e2e service {listing['service'] or 'not running'})")
+        return active
+
+    def s_cleanup_preconditions(self) -> None:
+        """Only an e2e installation is there, and nothing is still working on it."""
+        token = current_token()
+        expect(token.administrator and token.elevated, "run this in an elevated (administrator) prompt")
+        self.found = self.e2e_leftovers()
+        self.note(f"e2e leftovers: {self.found or 'none'}")
+        record = self.prefix / "installation.json"
+        if record.is_file():
+            recorded = json.loads(record.read_text(encoding="utf-8"))
+            expect(recorded.get("service") == E2E_SERVICE and Path(recorded.get("data_dir") or "") == E2E_DATA,
+                   f"{record} does not describe the e2e installation: {recorded}")
+        expect(not (self.prefix / "upgrade" / "state.json").exists(),
+               "an upgrade of the e2e installation is unfinished (upgrade\\state.json): leaving it alone")
+        active = self.active_processes()
+        expect(not active, "still active (wait until they end, then run this again): " + "; ".join(active))
+        self.note("no installer, upgrader or e2e process is active; no unfinished upgrade")
+        self.before = self.production_state()
+        self.namespace_ours = bool(self.found)
+
+    def s_cleanup_leftovers(self) -> None:
+        leftovers, result, remaining = self.uninstall_namespace()
+        output = (result.stdout + result.stderr)[-1500:]
+        expect(result.returncode == 0 and not remaining,
+               f"e2e uninstall exit {result.returncode}; still present: {remaining or 'none'}\n{output}")
+        self.note(f"removed {leftovers} with the e2e uninstall (exit 0); nothing of the e2e namespace remains")
+
+    # -- abnormal termination -----------------------------------------------------------
+
+    def ended(self, how: str) -> None:
+        """Record why the runner is ending outside a scenario's own result, with its stacks."""
+        self.ended_how = how
+        self.journal(f"runner ending: {how}" + (f" (during scenario: {self.running})" if self.running else ""))
+        faulthandler.dump_traceback(file=self.journal.file, all_threads=True)
+        self.lines.append(f"\n## ENDED ABNORMALLY: {how}")
+        if self.running:
+            self.note(f"while running: {self.running}; its result was not recorded")
+        self.note("stacks of every thread are in e2e-journal.log")
+        self.write_report()
+
+    def watch_console(self) -> None:
+        """Windows: record Ctrl+C, a closed window, sign-out and shutdown before the runner ends
+        (the process is terminated after the handler; nothing else would run). Best effort:
+        Windows skips the sign-out and shutdown events for processes that loaded user32."""
+        if sys.platform != "win32":
+            return
+        import ctypes
+        from ctypes import wintypes
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+        def handler(event):
+            how = f"Windows sent {CONSOLE_EVENTS.get(event, f'console event {event}')}"
+            try:
+                if event == 0:  # Python turns Ctrl+C into KeyboardInterrupt, recorded where it lands
+                    self.journal(how)
+                else:
+                    self.ended(how)
+            except Exception:  # noqa: BLE001 - never block the default handling
+                pass
+            return False  # continue with the default handling (Python's Ctrl+C, termination)
+        self._console_handler = handler  # keep the callback alive
+        if not ctypes.WinDLL("kernel32", use_last_error=True).SetConsoleCtrlHandler(handler, True):
+            self.journal(f"SetConsoleCtrlHandler failed ({ctypes.get_last_error()})")
+
+    def describe_process(self) -> None:
+        """Which processes share the runner's console, and whether it runs inside a job."""
+        self.journal(f"runner started: pid {os.getpid()}, parent {os.getppid()}, Python {sys.version.split()[0]}, "
+                     f"{sys.executable}; args {sys.argv[1:]}")
+        if sys.platform != "win32":
+            return
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
+        in_job = wintypes.BOOL()
+        if kernel32.IsProcessInJob(kernel32.GetCurrentProcess(), None, ctypes.byref(in_job)):
+            self.journal(f"runner in a job object: {bool(in_job.value)}")
+        pids = (wintypes.DWORD * 64)()
+        count = kernel32.GetConsoleProcessList(pids, 64)
+        self.journal(f"processes on this console: {list(pids[:min(count, 64)]) if count else 'none (no console)'}")
+
     def write_report(self) -> None:
         passed = sum(ok for _, ok in self.results)
         head = ["# Windows Platform Client e2e report", "",
                 f"- Date: {time.strftime('%Y-%m-%d %H:%M:%S %z')}", f"- Result: {passed}/{len(self.results)} passed"]
-        self.report_path.write_text("\n".join(head + self.lines) + "\n", encoding="utf-8")
+        # Replaced in one step: a runner killed while writing never leaves half a report.
+        tmp = self.report_path.with_name(f"{self.report_path.name}.{threading.get_ident()}.tmp")
+        tmp.write_text("\n".join(head + list(self.lines)) + "\n", encoding="utf-8")
+        os.replace(tmp, self.report_path)
 
     def report(self) -> int:
         self.write_report()
         passed = sum(ok for _, ok in self.results)
         print(f"{passed}/{len(self.results)} passed; report: {self.report_path}")
+        self.journal(f"result {passed}/{len(self.results)} passed")
         return 0 if self.results and passed == len(self.results) else 1
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--workdir", type=Path, required=True)
-    parser.add_argument("--archive", type=Path, required=True)
+    parser.add_argument("--archive", type=Path)
     parser.add_argument("--origin", default="https://platform.example.invalid")
+    parser.add_argument("--cleanup-leftovers", action="store_true",
+                        help="remove what an earlier run (its --workdir) left in the e2e namespace")
     args = parser.parse_args()
     if sys.platform != "win32":
         print("Windows only.", file=sys.stderr)
         return 2
+    if args.cleanup_leftovers:
+        return cleanup_leftovers(args.workdir, args.origin)
+    if args.archive is None:
+        parser.error("--archive is required")
     return run(args.workdir, args.archive, args.origin)
+
+
+@contextlib.contextmanager
+def supervised(e2e: E2E):
+    """Everything that ends the runner leaves a trace: a native crash (faulthandler), a console
+    or shutdown event, an exception escaping the scenarios; and a normal end says so."""
+    restore = faulthandler.is_enabled()
+    faulthandler.enable(file=e2e.journal.file, all_threads=True)
+    e2e.describe_process()
+    e2e.watch_console()
+    try:
+        yield
+    except BaseException as exc:
+        if not e2e.ended_how:
+            e2e.ended(f"{type(exc).__name__}: {exc}")
+        raise
+    finally:
+        e2e.journal("runner finished" if not e2e.ended_how else f"runner ended: {e2e.ended_how}")
+        faulthandler.disable()
+        if restore and sys.__stderr__ is not None:
+            faulthandler.enable(file=sys.__stderr__)
+        e2e.journal.close()
 
 
 def run(workdir: Path, archive: Path, origin: str) -> int:
@@ -495,28 +740,49 @@ def run(workdir: Path, archive: Path, origin: str) -> int:
     # The report directory exists before the first check, so every outcome is recorded.
     workdir.mkdir(parents=True)
     e2e = E2E(workdir, archive, origin)
-    e2e.scenario("Preconditions and test material", e2e.s_preconditions)
-    if not e2e.namespace_ours:
+    with supervised(e2e):
+        e2e.scenario("Preconditions and test material", e2e.s_preconditions)
+        if not e2e.namespace_ours:
+            return e2e.report()
+        install = "Install: service account, private data, admin-only code, Standalone untouched"
+        upgrade = "Signed upgrade"
+        try:
+            for name, fn, needs in (
+                (install, e2e.s_install, ()),
+                ("Repair after damaged permissions and service configuration", e2e.s_repair, (install,)),
+                (upgrade, e2e.s_signed_upgrade, (install,)),
+                ("Failed upgrade rolls back automatically", e2e.s_failed_upgrade_rolls_back, (upgrade,)),
+                ("Tampered bundle refused", e2e.s_refused_tampered, (upgrade,)),
+                ("Upgrader killed during verification, recovered", e2e.s_killed_during_verification, (upgrade,)),
+                ("User rollback", e2e.s_user_rollback, (upgrade,)),
+                ("Uninstall keeps data; reinstall over it", e2e.s_uninstall_keeps_data_then_reinstall, (install,)),
+                ("Uninstall with data deletion and clean validation", e2e.s_uninstall_with_data, (install,)),
+            ):
+                e2e.scenario(name, fn, needs)
+        except BaseException as exc:
+            e2e.ended(f"{type(exc).__name__}: {exc}")  # recorded before cleanup runs
+            raise
+        finally:
+            e2e.cleanup()
+        e2e.scenario("Production installation and Standalone untouched", e2e.s_production_untouched)
         return e2e.report()
-    install = "Install: service account, private data, admin-only code, Standalone untouched"
-    upgrade = "Signed upgrade"
-    try:
-        for name, fn, needs in (
-            (install, e2e.s_install, ()),
-            ("Repair after damaged permissions and service configuration", e2e.s_repair, (install,)),
-            (upgrade, e2e.s_signed_upgrade, (install,)),
-            ("Failed upgrade rolls back automatically", e2e.s_failed_upgrade_rolls_back, (upgrade,)),
-            ("Tampered bundle refused", e2e.s_refused_tampered, (upgrade,)),
-            ("Upgrader killed during verification, recovered", e2e.s_killed_during_verification, (upgrade,)),
-            ("User rollback", e2e.s_user_rollback, (upgrade,)),
-            ("Uninstall keeps data; reinstall over it", e2e.s_uninstall_keeps_data_then_reinstall, (install,)),
-            ("Uninstall with data deletion and clean validation", e2e.s_uninstall_with_data, (install,)),
-        ):
-            e2e.scenario(name, fn, needs)
-    finally:
-        e2e.cleanup()
-    e2e.scenario("Production installation and Standalone untouched", e2e.s_production_untouched)
-    return e2e.report()
+
+
+def cleanup_leftovers(workdir: Path, origin: str) -> int:
+    """After a run that ended without its own cleanup (e2e-4952: Windows shut down): the same
+    e2e uninstall, once nothing is still running; the production installation is checked."""
+    if not workdir.is_dir():
+        print(f"{workdir} is not the folder of an earlier run.", file=sys.stderr)
+        return 2
+    e2e = E2E(workdir, None, origin, report_name="windows-platform-client-e2e-cleanup.md")
+    with supervised(e2e):
+        first = "Cleanup preconditions: only e2e leftovers, nothing still active"
+        e2e.scenario(first, e2e.s_cleanup_preconditions)
+        if e2e.namespace_ours:
+            e2e.scenario("E2E uninstall of the leftovers", e2e.s_cleanup_leftovers)
+        if e2e.outcome[first] == "PASS":
+            e2e.scenario("Production installation and Standalone untouched", e2e.s_production_untouched)
+        return e2e.report()
 
 
 if __name__ == "__main__":

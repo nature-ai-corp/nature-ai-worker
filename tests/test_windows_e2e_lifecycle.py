@@ -4,6 +4,8 @@
 outcome (also when the preconditions fail), and cleanup removes only what the run
 itself created. Scenarios and the OS are replaced; the real ``run()`` is driven."""
 import importlib.util
+import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -166,3 +168,156 @@ def test_upgrade_dependents_skip_when_only_the_upgrade_fails(e2e, tmp_path):
         setattr(module.E2E, name, lambda self, name=name: ran.append(name))
     module.run(tmp_path / "w", tmp_path / "src.tar", "https://x.invalid")
     assert ran == ["s_repair", "s_uninstall_with_data"]  # these need only the install
+
+
+# -- abnormal termination (native e2e-4952: Windows shut down while Install was checking) ----
+
+def ready(self):
+    self.before = {}
+    self.namespace_ours = True
+
+
+def test_a_runner_stopped_inside_a_scenario_leaves_that_scenario_on_disk(e2e, tmp_path):
+    """A kill, crash or shutdown runs no Python code: what is on disk at that moment counts."""
+    module, _ = e2e
+    module.E2E.s_preconditions = ready
+    seen = {}
+
+    def install(self):
+        seen["report"] = self.report_path.read_text(encoding="utf-8")
+        seen["journal"] = (self.w / "e2e-journal.log").read_text(encoding="utf-8")
+    module.E2E.s_install = install
+    workdir = tmp_path / "w"
+    assert module.run(workdir, tmp_path / "src.tar", "https://x.invalid") == 0
+    assert "## RUNNING (not finished): Install" in seen["report"] and "see e2e-journal.log" in seen["report"]
+    assert "scenario started: Install" in seen["journal"] and "runner finished" not in seen["journal"]
+    report = (workdir / "windows-platform-client-e2e.md").read_text(encoding="utf-8")
+    assert "RUNNING" not in report and "see e2e-journal.log" not in report and "## PASS: Install" in report
+    journal = (workdir / "e2e-journal.log").read_text(encoding="utf-8")
+    assert "runner started: pid" in journal and "scenario PASS: Install" in journal
+    assert journal.rstrip().endswith("runner finished")
+
+
+def test_an_interrupted_runner_records_why_and_still_cleans_up(e2e, tmp_path):
+    module, calls = e2e
+    module.E2E.s_preconditions = ready
+
+    def install(self):
+        module.E2E_PREFIX.mkdir(parents=True)
+        raise KeyboardInterrupt()
+    module.E2E.s_install = install
+    workdir = tmp_path / "w"
+    with pytest.raises(KeyboardInterrupt):
+        module.run(workdir, tmp_path / "src.tar", "https://x.invalid")
+    assert calls == [("uninstall", "--delete-local-data")]
+    report = (workdir / "windows-platform-client-e2e.md").read_text(encoding="utf-8")
+    assert "## RUNNING (not finished): Install" in report
+    assert "## ENDED ABNORMALLY: KeyboardInterrupt" in report and "while running: Install" in report
+    assert report.index("## ENDED ABNORMALLY") < report.index("## Cleanup")
+    journal = (workdir / "e2e-journal.log").read_text(encoding="utf-8")
+    assert "runner ending: KeyboardInterrupt" in journal and "(during scenario: Install" in journal
+    assert "Current thread" in journal or "Thread 0x" in journal  # the stacks
+    assert "runner finished" not in journal and "runner ended: KeyboardInterrupt" in journal
+
+
+def test_children_are_journaled_and_a_hung_one_is_killed_with_the_stack_recorded(e2e, tmp_path, monkeypatch):
+    import sys
+    module, _ = e2e
+    monkeypatch.setattr(module, "STALL_DUMP_SECONDS", 1)
+    workdir = tmp_path / "w"
+    workdir.mkdir()
+    runner = module.E2E(workdir, None, "https://x.invalid")
+    ok = runner.run([sys.executable, "-c", "print('hi')"], timeout=30)
+    assert ok.returncode == 0 and ok.stdout.strip() == "hi"
+    with pytest.raises(subprocess.TimeoutExpired):
+        runner.run([sys.executable, "-c", "import time; time.sleep(30)"], timeout=2.5)
+    runner.journal.close()
+    journal = (workdir / "e2e-journal.log").read_text(encoding="utf-8")
+    assert re.search(r"child \d+ started \(timeout 30 s\): .*print\('hi'\)", journal)
+    assert re.search(r"child \d+ exit 0 after", journal)
+    assert re.search(r"child \d+ killed: still running after 2.5 s", journal)
+    assert "in communicate" in journal  # the stall dump shows where the runner waited
+
+
+@pytest.fixture
+def leftovers(e2e, monkeypatch):
+    module, calls = e2e
+    monkeypatch.setattr(module, "current_token", lambda: type("T", (), {"administrator": True, "elevated": True})())
+    monkeypatch.setattr(module.E2E, "production_state", lambda self: {})
+    module.E2E_PREFIX.mkdir(parents=True)
+    module.E2E_DATA.mkdir(parents=True)
+    (module.E2E_PREFIX / "installation.json").write_text(json.dumps(
+        {"service": "NatureWorkerPlatformClientE2E", "data_dir": str(module.E2E_DATA)}), encoding="utf-8")
+    return module, calls
+
+
+def test_cleanup_of_leftovers_waits_while_an_installer_is_still_active(leftovers, tmp_path):
+    module, calls = leftovers
+    module.E2E.active_processes = lambda self: ["4711 python.exe scripts\\platform-client-windows.py install"]
+    workdir = tmp_path / "e2e-4952"
+    workdir.mkdir()
+    assert module.cleanup_leftovers(workdir, "https://x.invalid") == 1
+    assert calls == [] and module.E2E_PREFIX.exists() and module.E2E_DATA.exists()
+    report = (workdir / "windows-platform-client-e2e-cleanup.md").read_text(encoding="utf-8")
+    assert "still active" in report and "4711" in report
+    assert not (workdir / "windows-platform-client-e2e.md").exists()  # the earlier report is never rewritten
+
+
+def test_cleanup_of_leftovers_refuses_an_installation_that_is_not_the_e2e_one(leftovers, tmp_path):
+    module, calls = leftovers
+    module.E2E.active_processes = lambda self: []
+    (module.E2E_PREFIX / "installation.json").write_text(json.dumps(
+        {"service": "NatureWorkerPlatformClient", "data_dir": "C:\\ProgramData\\NatureAIWorker"}), encoding="utf-8")
+    workdir = tmp_path / "e2e-4952"
+    workdir.mkdir()
+    assert module.cleanup_leftovers(workdir, "https://x.invalid") == 1
+    assert calls == [] and module.E2E_PREFIX.exists()
+
+
+def test_cleanup_of_leftovers_refuses_an_unfinished_upgrade(leftovers, tmp_path):
+    module, calls = leftovers
+    module.E2E.active_processes = lambda self: []
+    (module.E2E_PREFIX / "upgrade").mkdir()
+    (module.E2E_PREFIX / "upgrade" / "state.json").write_text("{}", encoding="utf-8")
+    workdir = tmp_path / "e2e-4952"
+    workdir.mkdir()
+    assert module.cleanup_leftovers(workdir, "https://x.invalid") == 1
+    assert calls == []
+
+
+def test_cleanup_of_leftovers_uses_the_e2e_uninstall_and_checks_production(leftovers, tmp_path):
+    module, calls = leftovers
+    module.E2E.active_processes = lambda self: []
+    workdir = tmp_path / "e2e-4952"
+    workdir.mkdir()
+    (workdir / "windows-platform-client-e2e.md").write_text("earlier report", encoding="utf-8")
+    assert module.cleanup_leftovers(workdir, "https://x.invalid") == 0
+    assert calls == [("uninstall", "--delete-local-data")]
+    assert not module.E2E_PREFIX.parent.exists() and not module.E2E_DATA.parent.exists()
+    report = (workdir / "windows-platform-client-e2e-cleanup.md").read_text(encoding="utf-8")
+    assert "Result: 3/3 passed" in report and "nothing of the e2e namespace remains" in report
+    assert (workdir / "windows-platform-client-e2e.md").read_text(encoding="utf-8") == "earlier report"
+
+
+def test_active_processes_ignore_this_runner_its_launcher_and_the_e2e_service(e2e, tmp_path, monkeypatch):
+    import os
+    module, _ = e2e
+    workdir = tmp_path / "w"
+    workdir.mkdir()
+    runner = module.E2E(workdir, None, "https://x.invalid")
+    me, launcher, console = os.getpid(), 900001, 900000
+    code = str(module.E2E_PREFIX)
+    listing = {"self": 900009, "service": 900002, "processes": [
+        {"pid": console, "parent": 4, "exe": "C:\\Windows\\System32\\cmd.exe", "cmd": "cmd /c 3-e2e-cleanup-as-admin.cmd"},
+        {"pid": launcher, "parent": console, "exe": "C:\\kit\\venv\\Scripts\\python.exe",
+         "cmd": "venv\\Scripts\\python.exe scripts\\platform_client_windows_e2e.py --cleanup-leftovers"},
+        {"pid": me, "parent": launcher, "exe": "C:\\uv\\python.exe", "cmd": "python.exe scripts\\platform_client_windows_e2e.py"},
+        {"pid": 900002, "parent": 600, "exe": f"{code}\\runtime\\python.exe", "cmd": f"\"{code}\\runtime\\python.exe\" -I svc.py"},
+        {"pid": 900003, "parent": 1, "exe": "C:\\uv\\python.exe", "cmd": "python.exe -I scripts\\platform-client-windows.py install"},
+        {"pid": 900004, "parent": 1, "exe": f"{code}\\versions\\9.1.0\\venv\\Scripts\\python.exe", "cmd": "python.exe -m pip install"},
+        {"pid": 900005, "parent": 1, "exe": "C:\\Windows\\explorer.exe", "cmd": "explorer.exe"},
+    ]}
+    monkeypatch.setattr(module.E2E, "run", lambda self, cmd, **kw: subprocess.CompletedProcess(cmd, 0, json.dumps(listing), ""))
+    active = runner.active_processes()
+    assert [a.split()[0] for a in active] == ["900003", "900004"]
+    runner.journal.close()

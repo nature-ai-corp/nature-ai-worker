@@ -81,6 +81,10 @@ class E2E:
         self.port = self.free_port()
         self.lines: list[str] = []
         self.results: list[tuple[str, bool]] = []
+        self.report_path = self.w / "windows-platform-client-e2e.md"
+        # Set only once the preconditions proved the e2e namespace empty: from then on,
+        # anything in it was created by this run and cleanup may remove it.
+        self.namespace_ours = False
         self.sid = service_sid(E2E_SERVICE)
 
     # -- helpers ------------------------------------------------------------------------
@@ -178,12 +182,14 @@ class E2E:
             ok = True
         except Exception as exc:  # noqa: BLE001
             ok = False
+            self.failure = f"{type(exc).__name__}: {exc}"
             self.note(f"FAILED: {exc}")
             self.lines.append("```\n" + traceback.format_exc()[-2000:] + "```")
         self.lines[self.lines.index(f"\n## {name}")] = f"\n## {'PASS' if ok else 'FAIL'}: {name}"
         self.note(f"({time.monotonic() - started:.1f} s)")
         self.results.append((name, ok))
-        print(f"[{'PASS' if ok else 'FAIL'}] {name}", flush=True)
+        print(f"[{'PASS' if ok else 'FAIL'}] {name}" + ("" if ok else f": {self.failure}"), flush=True)
+        self.write_report()
 
     def production_state(self) -> dict:
         """What a real installation consists of: recorded before and compared after."""
@@ -218,7 +224,6 @@ class E2E:
         self.before = self.production_state()
         self.note(f"production state recorded: service {self.before['service'] or 'not installed'}; "
                   + ", ".join(f"{Path(k).name} {'exists' if v[0] else 'absent'}" for k, v in self.before["paths"].items()))
-        self.w.mkdir(parents=True)
         self.base_src = self.w / "source"
         with tarfile.open(self.archive) as t:
             self.commit = t.pax_headers.get("comment", "")
@@ -234,6 +239,7 @@ class E2E:
         (self.standalone / "worker.db").write_bytes(b"standalone data that S-C must never touch")
         self.note(f"commit {self.commit}; Python {sys.version.split()[0]}; port {self.port}; "
                   f"origin {self.origin}")
+        self.namespace_ours = True
 
     def s_install(self) -> None:
         result = self.setup_cmd("install", "--origin", self.origin, "--standalone-data", self.standalone,
@@ -394,24 +400,51 @@ class E2E:
             expect(after[key] == self.before[key], f"production {key} changed")
         for path, state in self.before["paths"].items():
             expect(after["paths"][path] == state, f"{path} changed (existence or permissions)")
-        leftovers = [p for p in (E2E_PREFIX.parent, E2E_DATA.parent, self.setup.shortcut) if p.exists()]
-        expect(not leftovers and self.system.service_status(E2E_SERVICE) is None, f"e2e leftovers: {leftovers}")
+        leftovers = self.e2e_leftovers()
+        expect(not leftovers, f"e2e leftovers: {leftovers}")
         self.note("production service, registry entry, folders and their permissions, the Standalone folder and "
                   "Credential Manager are exactly as before; no e2e leftovers")
 
-    def cleanup(self) -> None:
-        """Leave no service behind even when a scenario failed."""
+    def e2e_leftovers(self) -> list[str]:
+        found = [str(p) for p in (E2E_PREFIX.parent, E2E_DATA.parent, self.setup.shortcut) if p.exists()]
         if self.system.service_status(E2E_SERVICE) is not None:
-            self.setup_cmd("uninstall", "--delete-local-data")
+            found.append(f"service {E2E_SERVICE}")
+        for key in (self.setup.uninstall_key, self.setup.service_key):
+            if self.system.get_registry(key, "DisplayName") is not None or \
+                    self.system.get_registry(key, "Environment") is not None:
+                found.append(f"HKLM\\{key}")
+        return found
 
-    def report(self) -> int:
+    def cleanup(self) -> None:
+        """Remove everything of the e2e namespace, also after a failed or partial install, and
+        never anything that existed before this run (the preconditions refused that case)."""
+        if not self.namespace_ours:
+            return
+        leftovers = self.e2e_leftovers()
+        if not leftovers:
+            return
+        result = self.setup_cmd("uninstall", "--delete-local-data")
+        for path in (E2E_PREFIX.parent, E2E_DATA.parent):
+            if path.exists() and not any(path.iterdir()):
+                path.rmdir()
+        remaining = self.e2e_leftovers()
+        self.lines.append("\n## Cleanup")
+        self.note(f"found {leftovers}; e2e uninstall exit {result.returncode}; remaining {remaining or 'none'}")
+        if remaining:
+            self.lines.append("```\n" + (result.stdout + result.stderr)[-2000:] + "```")
+        self.write_report()
+
+    def write_report(self) -> None:
         passed = sum(ok for _, ok in self.results)
         head = ["# Windows Platform Client e2e report", "",
                 f"- Date: {time.strftime('%Y-%m-%d %H:%M:%S %z')}", f"- Result: {passed}/{len(self.results)} passed"]
-        path = self.w / "windows-platform-client-e2e.md"
-        path.write_text("\n".join(head + self.lines) + "\n", encoding="utf-8")
-        print(f"{passed}/{len(self.results)} passed; report: {path}")
-        return 0 if passed == len(self.results) else 1
+        self.report_path.write_text("\n".join(head + self.lines) + "\n", encoding="utf-8")
+
+    def report(self) -> int:
+        self.write_report()
+        passed = sum(ok for _, ok in self.results)
+        print(f"{passed}/{len(self.results)} passed; report: {self.report_path}")
+        return 0 if self.results and passed == len(self.results) else 1
 
 
 def main() -> int:
@@ -423,12 +456,18 @@ def main() -> int:
     if sys.platform != "win32":
         print("Windows only.", file=sys.stderr)
         return 2
-    if args.workdir.exists():
-        print(f"{args.workdir} exists; give a new directory.", file=sys.stderr)
+    return run(args.workdir, args.archive, args.origin)
+
+
+def run(workdir: Path, archive: Path, origin: str) -> int:
+    if workdir.exists():
+        print(f"{workdir} exists; give a new directory.", file=sys.stderr)
         return 2
-    e2e = E2E(args.workdir, args.archive, args.origin)
+    # The report directory exists before the first check, so every outcome is recorded.
+    workdir.mkdir(parents=True)
+    e2e = E2E(workdir, archive, origin)
     e2e.scenario("Preconditions and test material", e2e.s_preconditions)
-    if not e2e.results[-1][1]:
+    if not e2e.namespace_ours:
         return e2e.report()
     try:
         for name, fn in (

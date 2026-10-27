@@ -82,6 +82,7 @@ class E2E:
         self.lines: list[str] = []
         self.results: list[tuple[str, bool]] = []
         self.report_path = self.w / "windows-platform-client-e2e.md"
+        self.outcome: dict[str, str] = {}
         # Set only once the preconditions proved the e2e namespace empty: from then on,
         # anything in it was created by this run and cleanup may remove it.
         self.namespace_ours = False
@@ -174,7 +175,18 @@ class E2E:
 
     # -- scenarios ----------------------------------------------------------------------
 
-    def scenario(self, name: str, fn) -> None:
+    def scenario(self, name: str, fn, needs: tuple[str, ...] = ()) -> None:
+        """Run one scenario, unless a scenario it depends on did not pass: then it is recorded as
+        SKIPPED (still a failed run), so one broken step does not produce a cascade of noise."""
+        missing = [n for n in needs if self.outcome.get(n) != "PASS"]
+        if missing:
+            self.lines.append(f"\n## SKIPPED: {name}")
+            self.note(f"not run: needs {', '.join(missing)}")
+            self.results.append((name, False))
+            self.outcome[name] = "SKIPPED"
+            print(f"[SKIPPED] {name} (needs {', '.join(missing)})", flush=True)
+            self.write_report()
+            return
         self.lines.append(f"\n## {name}")
         started = time.monotonic()
         try:
@@ -188,6 +200,7 @@ class E2E:
         self.lines[self.lines.index(f"\n## {name}")] = f"\n## {'PASS' if ok else 'FAIL'}: {name}"
         self.note(f"({time.monotonic() - started:.1f} s)")
         self.results.append((name, ok))
+        self.outcome[name] = "PASS" if ok else "FAIL"
         print(f"[{'PASS' if ok else 'FAIL'}] {name}" + ("" if ok else f": {self.failure}"), flush=True)
         self.write_report()
 
@@ -469,19 +482,21 @@ def run(workdir: Path, archive: Path, origin: str) -> int:
     e2e.scenario("Preconditions and test material", e2e.s_preconditions)
     if not e2e.namespace_ours:
         return e2e.report()
+    install = "Install: service account, private data, admin-only code, Standalone untouched"
+    upgrade = "Signed upgrade"
     try:
-        for name, fn in (
-            ("Install: service account, private data, admin-only code, Standalone untouched", e2e.s_install),
-            ("Repair after damaged permissions and service configuration", e2e.s_repair),
-            ("Signed upgrade", e2e.s_signed_upgrade),
-            ("Failed upgrade rolls back automatically", e2e.s_failed_upgrade_rolls_back),
-            ("Tampered bundle refused", e2e.s_refused_tampered),
-            ("Upgrader killed during verification, recovered", e2e.s_killed_during_verification),
-            ("User rollback", e2e.s_user_rollback),
-            ("Uninstall keeps data; reinstall over it", e2e.s_uninstall_keeps_data_then_reinstall),
-            ("Uninstall with data deletion and clean validation", e2e.s_uninstall_with_data),
+        for name, fn, needs in (
+            (install, e2e.s_install, ()),
+            ("Repair after damaged permissions and service configuration", e2e.s_repair, (install,)),
+            (upgrade, e2e.s_signed_upgrade, (install,)),
+            ("Failed upgrade rolls back automatically", e2e.s_failed_upgrade_rolls_back, (upgrade,)),
+            ("Tampered bundle refused", e2e.s_refused_tampered, (upgrade,)),
+            ("Upgrader killed during verification, recovered", e2e.s_killed_during_verification, (upgrade,)),
+            ("User rollback", e2e.s_user_rollback, (upgrade,)),
+            ("Uninstall keeps data; reinstall over it", e2e.s_uninstall_keeps_data_then_reinstall, (install,)),
+            ("Uninstall with data deletion and clean validation", e2e.s_uninstall_with_data, (install,)),
         ):
-            e2e.scenario(name, fn)
+            e2e.scenario(name, fn, needs)
     finally:
         e2e.cleanup()
     e2e.scenario("Production installation and Standalone untouched", e2e.s_production_untouched)

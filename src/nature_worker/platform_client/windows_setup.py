@@ -79,6 +79,13 @@ def start_menu() -> Path:
             / "Microsoft" / "Windows" / "Start Menu" / "Programs")
 
 
+def command_failure(command: str, result: subprocess.CompletedProcess, lines: int = 8) -> str:
+    output = [ln.rstrip() for ln in ((result.stderr or "") + "\n" + (result.stdout or "")).splitlines()
+              if ln.strip()]
+    tail = "\n    ".join(ln[:400] for ln in output[-lines:]) or "no output"
+    return f"Command failed (exit {result.returncode}): {command}\n    {tail}"
+
+
 class WindowsSystem:
     """Every OS operation of the installer (tests replace this with a recording fake)."""
 
@@ -100,15 +107,19 @@ class WindowsSystem:
 
     def run(self, cmd: list[str], *, env: dict | None = None, timeout: float = 1800,
             check: bool = True) -> subprocess.CompletedProcess:
+        # Commands never carry secrets (no password or session is ever passed on a command
+        # line), so the whole command can be shown when it fails.
+        command = subprocess.list2cmdline([str(c) for c in cmd])
         try:
             result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout,
                                     stdin=subprocess.DEVNULL)
+        except FileNotFoundError as exc:
+            missing = "" if Path(cmd[0]).is_file() else f" ({cmd[0]} does not exist)"
+            raise SetupError(f"Could not start{missing}: {command}") from exc
         except (OSError, subprocess.TimeoutExpired) as exc:
-            raise SetupError(f"{Path(cmd[0]).name} could not run: {type(exc).__name__}") from exc
+            raise SetupError(f"Could not run ({type(exc).__name__}: {exc}): {command}") from exc
         if check and result.returncode != 0:
-            lines = [ln for ln in (result.stderr or result.stdout or "").splitlines() if ln.strip()]
-            raise SetupError(f"{Path(cmd[0]).name} {' '.join(cmd[1:3])} failed (exit {result.returncode}): "
-                             f"{lines[-1][:300] if lines else 'no output'}")
+            raise SetupError(command_failure(command, result))
         return result
 
     def service_status(self, name: str):
@@ -373,10 +384,12 @@ class Setup:
             raise SetupError("Python from the Microsoft Store cannot be copied for a service. Install Python "
                              "from python.org and run the installer with it.")
         self.say(f"Copying Python {wanted} from {base} to {runtime}")
-        shutil.copytree(base, runtime, ignore=shutil.ignore_patterns(
-            "site-packages", "Scripts", "Doc", "Tools", "test", "tests", "idlelib", "tkinter",
-            "turtledemo", "tcl", "__pycache__", "*.pyc"))
-        (runtime / "Lib" / "site-packages").mkdir(exist_ok=True)
+        copy_runtime(base, runtime)
+        problems = runtime_problems(runtime)
+        if problems:
+            raise SetupError(f"The copied runtime in {runtime} is incomplete: " + "; ".join(problems))
+        self.system.run([str(self.runtime_python), "-I", "-c",
+                         "import venv, ensurepip, sqlite3, ssl, ctypes"])
 
     def build_version(self, label: str, src: Path) -> None:
         target = self.prefix / "versions" / label
@@ -603,8 +616,11 @@ class Setup:
     def clean_validation(self, port: int) -> dict:
         """Independent check after uninstall. A Standalone installation is allowed only if every
         probe is verified clean; anything unknown blocks (docs/PLATFORM_CLIENT_SECURITY.md)."""
+        # Evidence is the process list (every Windows process whose command line runs the Platform
+        # Client), not a listener on the port, which can be any program: on a computer with WSL,
+        # a Linux Platform Client answers on Windows' 127.0.0.1 too.
         processes = self.system.platform_client_processes()
-        running = None if processes is None else bool(processes) or self.system.port_in_use(port)
+        running = None if processes is None else bool(processes)
         registered = (self.system.service_status(self.service) is not None
                       or self.system.get_registry(self.uninstall_key, "DisplayName") is not None)
         leftovers = [p for p in (self.prefix, self.data, self.shortcut) if p.exists()]
@@ -623,6 +639,8 @@ class Setup:
                  "installation is NOT authorized yet"))
         for check, value in checks.items():
             self.say(f"  {check}: {'verified clean' if value is True else 'residue' if value is False else 'unverified'}")
+        for process in processes or []:
+            self.say(f"  running: {process[:300]}")
         for blocker in decision.blockers:
             self.say(f"  blocker: {blocker}")
         return {"checks": checks, "standalone_install_allowed": decision.allowed,
@@ -649,6 +667,37 @@ class Setup:
 
 
 # -- helpers --------------------------------------------------------------------------
+
+# Left out of the runtime copy, by exact path relative to the Python root (compared without
+# case, like Windows). Name patterns are not used: Windows matches them case-insensitively,
+# and "Scripts" once removed Lib\\venv\\scripts, the venv launcher.
+RUNTIME_EXCLUDE = frozenset({
+    "scripts", "doc", "tools", "tcl", "include", "libs", "lib/test", "lib/idlelib", "lib/tkinter",
+    "lib/turtledemo", "lib/site-packages",
+})
+# What creating the service's venvs needs (checked after copying, before anything uses it).
+RUNTIME_REQUIRED = ("python.exe", "Lib/venv/__init__.py", "Lib/venv/scripts/nt/python.exe",
+                    "Lib/ensurepip/__init__.py", "Lib/ensurepip/_bundled")
+
+
+def copy_runtime(base: Path, dest: Path, exclude: frozenset = RUNTIME_EXCLUDE) -> None:
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        rel = Path(directory).relative_to(base).as_posix().lower()
+        skip = {n for n in names if n == "__pycache__" or n.lower().endswith(".pyc")}
+        return skip | {n for n in names if (f"{rel}/{n}" if rel != "." else n).lower() in exclude}
+    shutil.copytree(base, dest, ignore=ignore)
+    (dest / "Lib" / "site-packages").mkdir(exist_ok=True)
+
+
+def runtime_problems(runtime: Path) -> list[str]:
+    problems = [f"missing {rel}" for rel in RUNTIME_REQUIRED if not (runtime / rel).exists()]
+    if not list(runtime.glob("python3*.dll")) and (runtime / "python.exe").exists():
+        problems.append("missing python3*.dll")
+    if (runtime / "Lib" / "ensurepip" / "_bundled").is_dir() and \
+            not list((runtime / "Lib" / "ensurepip" / "_bundled").glob("pip-*.whl")):
+        problems.append("missing the bundled pip wheel in Lib/ensurepip/_bundled")
+    return problems
+
 
 def _check_origin(origin: str, allow_insecure_loopback: bool) -> None:
     if origin.startswith("https://"):
@@ -737,8 +786,7 @@ def _relocate(prefix: Path, argv: list[str]) -> int:
     """Uninstall cannot delete the files it runs from: continue from a temporary copy of the
     interpreter and of this package, in a new window, after this process has exited."""
     temp = Path(tempfile.mkdtemp(prefix="nwpc-uninstall-"))
-    shutil.copytree(Path(sys.base_prefix), temp / "python",
-                    ignore=shutil.ignore_patterns("site-packages", "__pycache__", "*.pyc", "Doc", "test", "tests"))
+    copy_runtime(Path(sys.base_prefix), temp / "python")
     package = Path(__file__).resolve().parents[1]
     shutil.copytree(package, temp / "lib" / "nature_worker", ignore=shutil.ignore_patterns("__pycache__"))
     bootstrap = (f"import sys; sys.path.insert(0, {str(temp / 'lib')!r}); "

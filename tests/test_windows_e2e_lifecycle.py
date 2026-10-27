@@ -124,3 +124,45 @@ def test_an_existing_workdir_is_refused_and_left_alone(e2e, tmp_path):
     (workdir / "keep.txt").write_text("earlier report")
     assert module.run(workdir, tmp_path / "src.tar", "https://x.invalid") == 2
     assert [p.name for p in workdir.iterdir()] == ["keep.txt"]
+
+
+def test_scenarios_that_need_a_failed_install_are_skipped_not_run(e2e, tmp_path, capsys):
+    module, calls = e2e
+    ran = []
+
+    def ready(self):
+        self.before = {}
+        self.namespace_ours = True
+    module.E2E.s_preconditions = ready
+
+    def failed_install(self):
+        raise module.Check("install failed: Command failed (exit 1): python.exe -I -m venv ...")
+    module.E2E.s_install = failed_install
+    for name in SCENARIOS[1:-1]:
+        setattr(module.E2E, name, lambda self, name=name: ran.append(name))
+    workdir = tmp_path / "w"
+    assert module.run(workdir, tmp_path / "src.tar", "https://x.invalid") == 1
+    assert ran == []  # nothing ran against an installation that never completed
+    report = (workdir / "windows-platform-client-e2e.md").read_text(encoding="utf-8")
+    assert report.count("## SKIPPED:") == 8 and "not run: needs Install" in report
+    assert "Result: 2/11 passed" in report and "## FAIL: Install" in report
+    assert "## PASS: Production installation and Standalone untouched" in report  # always checked
+    assert "[SKIPPED] Repair after damaged permissions" in capsys.readouterr().out
+
+
+def test_upgrade_dependents_skip_when_only_the_upgrade_fails(e2e, tmp_path):
+    module, _ = e2e
+    ran = []
+
+    def ready(self):
+        self.before = {}
+        self.namespace_ours = True
+    module.E2E.s_preconditions = ready
+
+    def failed_upgrade(self):
+        raise module.Check("upgrade failed")
+    module.E2E.s_signed_upgrade = failed_upgrade
+    for name in ("s_repair", "s_failed_upgrade_rolls_back", "s_user_rollback", "s_uninstall_with_data"):
+        setattr(module.E2E, name, lambda self, name=name: ran.append(name))
+    module.run(tmp_path / "w", tmp_path / "src.tar", "https://x.invalid")
+    assert ran == ["s_repair", "s_uninstall_with_data"]  # these need only the install

@@ -587,3 +587,70 @@ def test_service_host_outside_the_scm_says_how_to_start_it():
     from nature_worker.windows_service import ServiceError, ServiceHost
     with pytest.raises(ServiceError, match="sc.exe start"):
         ServiceHost("NatureWorkerTest", lambda *_: 0).dispatch()
+
+
+# -- runtime copy and diagnostics (first native e2e run: venv launcher missing) ------------
+
+def fake_python_root(root):
+    for rel in ("python.exe", "python311.dll", "Lib/venv/__init__.py", "Lib/venv/scripts/nt/python.exe",
+                "Lib/ensurepip/__init__.py", "Lib/ensurepip/_bundled/pip-24.0-py3-none-any.whl",
+                "Lib/os.py", "Lib/test/test_os.py", "Lib/site-packages/x/__init__.py", "Scripts/pip.exe",
+                "Doc/index.html", "tcl/tk.tcl", "DLLs/_ssl.pyd", "Lib/__pycache__/os.cpython-311.pyc"):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("x")
+    return root
+
+
+def test_runtime_copy_keeps_the_venv_launcher_and_drops_only_exact_paths(tmp_path):
+    base, dest = fake_python_root(tmp_path / "base"), tmp_path / "runtime"
+    windows_setup.copy_runtime(base, dest)
+    assert (dest / "Lib" / "venv" / "scripts" / "nt" / "python.exe").is_file()  # was dropped by "Scripts"
+    assert (dest / "Lib" / "os.py").is_file() and (dest / "DLLs" / "_ssl.pyd").is_file()
+    for gone in ("Scripts", "Doc", "tcl", "Lib/test", "Lib/site-packages/x", "Lib/__pycache__/os.cpython-311.pyc"):
+        assert not (dest / gone).exists(), gone
+    assert (dest / "Lib" / "site-packages").is_dir() and windows_setup.runtime_problems(dest) == []
+
+
+def test_runtime_exclusions_ignore_case_like_windows(tmp_path):
+    base = fake_python_root(tmp_path / "base")
+    (base / "Scripts").rename(base / "SCRIPTS")
+    windows_setup.copy_runtime(base, tmp_path / "runtime")
+    assert not (tmp_path / "runtime" / "SCRIPTS").exists()
+    assert (tmp_path / "runtime" / "Lib" / "venv" / "scripts" / "nt" / "python.exe").is_file()
+
+
+def test_an_incomplete_runtime_is_refused_naming_the_missing_file(win, tmp_path, monkeypatch):
+    setup, fake, _ = win
+    base = fake_python_root(tmp_path / "base")
+    (base / "Lib" / "venv" / "scripts" / "nt" / "python.exe").unlink()
+    monkeypatch.setattr(windows_setup.sys, "base_prefix", str(base))
+    with pytest.raises(SetupError, match=r"incomplete: missing Lib/venv/scripts/nt/python.exe"):
+        Setup.ensure_runtime(setup)
+
+
+def test_command_failures_name_the_command_and_the_missing_program(tmp_path):
+    system = windows_setup.WindowsSystem()
+    missing = tmp_path / "runtime" / "python.exe"
+    with pytest.raises(SetupError, match="does not exist") as info:
+        system.run([str(missing), "-I", "-m", "venv", str(tmp_path / "venv")])
+    assert str(missing) in str(info.value) and "-m venv" in str(info.value)
+    with pytest.raises(SetupError) as info:
+        system.run([sys.executable, "-c", "import sys; print('step 1'); sys.stderr.write('Error: boom'); sys.exit(3)"])
+    message = str(info.value)
+    assert "Command failed (exit 3)" in message and sys.executable in message and "Error: boom" in message
+
+
+def test_an_unrelated_listener_on_the_port_is_not_a_running_platform_client(win, tmp_path):
+    setup, fake, standalone = win
+    install(setup, standalone, tmp_path)
+    fake.busy_ports.add(8090)  # e.g. the Linux Platform Client in WSL, forwarded to Windows' localhost
+    report = setup.uninstall(delete_local_data=True)
+    assert report["checks"]["running_processes"] is True
+
+
+def test_a_running_platform_client_process_is_residue(win, tmp_path):
+    setup, fake, standalone = win
+    install(setup, standalone, tmp_path)
+    fake.platform_client_processes = lambda: ["4242 python.exe -I platform-client-service.py"]
+    report = setup.uninstall(delete_local_data=True)
+    assert report["checks"]["running_processes"] is False and report["processes"]

@@ -99,7 +99,7 @@ Every phase is written to `upgrade/state.json` before it starts.
 - An upgrade never writes the installation-mode marker. It verifies after the upgrade that the marker is unchanged, and rolls back if it is not.
 - `install` refuses a Platform Client data root for Standalone.
 - The Standalone upgrader refuses to run as root, and requires the installation and data to be owned by the user.
-- The Platform Client upgrader requires root and a root-owned code path that others cannot write. It requires a data root private to the Platform Client account, and runs schema and migration work as that account (`runuser`). It touches no Standalone path.
+- The Platform Client upgrader requires root (Linux) or an elevated administrator (Windows) and a code path that only those can write. It requires a data root private to the Platform Client account. On Linux, schema and migration work runs as that account (`runuser`). On Windows it runs as the administrator, and files keep the data root's DACL (SYSTEM, Administrators, the service account). It touches no Standalone path.
 - A Platform Client release must match the installed Client Interface version. The upgrader cannot install Platform business logic: releases contain only the Worker and its dependencies.
 
 ## Verification status
@@ -108,9 +108,9 @@ Every phase is written to `upgrade/state.json` before it starts.
 |---|---|---|
 | Unit tests: release verification, layout, launchers, migrations, drain handshake, engine (every failure point, interruption and recovery path, both rollbacks), CLI authorization, Platform Client toolkit with a recording runner | PASS (Linux) | `tests/test_release.py`, `test_upgrade_engine.py`, `test_upgrade_layout_cli.py`, `test_migrations_maintenance.py` |
 | Real Standalone upgrades on Linux, disposable installation: install over v0.1 data; upgrade while Agent work runs; drain timeout; refusals (tampered, untrusted, altered, downgrade, wrong platform, incompatible path, unauthorized); failed upgrade with automatic rollback; kill during migration plus recover; kill during verification plus recover; user rollback; edition separation | PASS | `python scripts/upgrade_e2e.py --workdir <new dir>` (report written there; CI job `upgrade-e2e`) |
-| Real Standalone upgrades on Windows | NOT EXECUTED here | CI job `upgrade-e2e` on `windows-2022` runs the same script; not yet observed passing |
+| Real Standalone upgrades on Windows | PARTIAL evidence; not re-run on the current revision | Local run on Windows 11 (Python 3.11.15) on 2026-10-26 at 10:01: 8 of 12 scenarios passed. Its 4 failures were Windows sharing violations on `state.json`, fixed in `7eb07bb` two minutes later. A later 12/12 run was reported by the maintainer, but its report is not in this repository. CI job `upgrade-e2e` on `windows-2022` runs the same script. |
 | Real Platform Client upgrade on Linux (root, systemd, `nature-pc`) | NOT EXECUTED | requires sudo; see [Manual Platform Client upgrade test](#manual-platform-client-upgrade-test) |
-| Platform Client on Windows | NOT IMPLEMENTED | no Windows Platform Client installer exists yet; the upgrader refuses |
+| Platform Client upgrades on Windows (service, `WindowsPlatformClientToolkit`) | IMPLEMENTED; unit-tested on Linux; NOT EXECUTED on Windows | `tests/test_windows_platform_client.py`; real run: `scripts/platform_client_windows_e2e.py` ([PLATFORM_CLIENT_WINDOWS.md](PLATFORM_CLIENT_WINDOWS.md)) |
 | Updated `platform-client-linux-install.sh` (versioned layout, legacy conversion) | NOT EXECUTED | requires sudo; syntax and fragments checked only |
 | Official release key, signed official releases | NOT DONE | owner decision ([RELEASES.md](RELEASES.md)) |
 

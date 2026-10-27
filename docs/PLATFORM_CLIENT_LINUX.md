@@ -1,6 +1,6 @@
 # Linux Platform Client (S–C) on Client Interface v1.3
 
-Status: **implemented; real end-to-end integration NOT EXECUTED.** See [Verification](#verification-status).
+Status: **implemented; real Platform integration verified historically (Tasks #77, #78, reported by the maintainer), not re-run on the current revision.** See [Verification](#verification-status).
 
 ## What it is
 
@@ -91,5 +91,5 @@ Run it with `nature-worker-platform-client preflight`.
 | Compared with the committed Platform contract | NOT EXECUTED | committed file not accessible |
 | Private HTTPS endpoint (Tailscale Serve) | NOT EXECUTED | Serve on the Platform host answers 404 for every path; it does not proxy to `:8000` yet |
 | Linux install under a separate account | NOT EXECUTED | requires sudo |
-| Real Worker login, Task, Agent run, progress, results, logout, audit | NOT EXECUTED | blocked on the two rows above |
+| Real Worker login, Task, Agent run, progress, results, logout, audit | PASS (historical, reported by the maintainer); not re-run on the current revision | Linux Worker connected to the real Platform over the existing HTTPS Client Interface: Task #78 was created and executed and returned Agent results; Task #77 was inspected in the Worker UI. The run's logs and revision are not in this repository. |
 | Unit tests against a contract-shaped fake | PASS | not integration evidence |

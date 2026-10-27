@@ -6,6 +6,9 @@ Standalone: everything runs as the user who owns the installation, never as
 root. The Worker is a user process; it is asked to stop through its data root
 and is not restarted by the upgrader (the user starts it, as before).
 
+Platform Client (Windows): the same, with the Windows service, an elevated
+upgrader and NTFS permissions instead of systemd, root and file ownership.
+
 Platform Client (Linux): the upgrader runs as root because the code is
 root-owned. Data-root work (schema, migrations, backups) runs as, or is handed
 back to, the Platform Client's own account; the service is controlled with
@@ -346,9 +349,8 @@ class PlatformClientToolkit(BaseToolkit):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if not sys.platform.startswith("linux"):
-            raise ToolkitError("Platform Client upgrades are implemented for the Linux service only. "
-                               "No Windows Platform Client installer exists yet.")
+        if not sys.platform.startswith("linux") and type(self) is PlatformClientToolkit:
+            raise ToolkitError("This Platform Client toolkit is for the Linux systemd service.")
         if not (self.inst.account and self.inst.service and self.inst.port):
             raise ToolkitError("The installation record lacks the Platform Client account, service or port.")
         self.data_user = self.inst.account
@@ -444,7 +446,126 @@ class PlatformClientToolkit(BaseToolkit):
             os.chown(p, entry.pw_uid, entry.pw_gid, follow_symlinks=False)
 
 
+class WindowsPlatformClientToolkit(PlatformClientToolkit):
+    """Windows service installed by ``nature-worker-platform-client-setup install``.
+
+    The upgrader runs elevated because the code is under Program Files. Data-root
+    work runs as the administrator; files it creates inherit the data root's DACL
+    (SYSTEM, Administrators, the service account), and files it moves are reset
+    to that DACL, so the service account keeps exactly its access.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if sys.platform != "win32":
+            raise ToolkitError("This Platform Client toolkit is for the Windows service.")
+        self.data_user = None
+
+    def check_permissions(self) -> list[tuple[str, bool, str]]:
+        from ..windows_security import (WindowsSecurityError, admin_only_problems, current_token,
+                                        parent_problems, private_problems, read_acl, service_sid)
+        token = current_token()
+        admin = token.administrator and token.elevated
+        checks = [("administrator", admin, "running as administrator" if admin else
+                   "Platform Client code is under Program Files: run the upgrade as administrator")]
+        try:
+            problems = [f"{p}: {msg}" for p in (self.layout.prefix, self.layout.runtime, self.layout.versions)
+                        if p.exists() for msg in admin_only_problems(read_acl(p))]
+            problems += [f"{p}: {msg}" for p in self.layout.prefix.parents for msg in parent_problems(read_acl(p))]
+        except WindowsSecurityError as exc:
+            problems = [str(exc)]
+        checks.append(("code_admin_owned", not problems, "code folders can be changed by administrators only"
+                       if not problems else "; ".join(problems)))
+        try:
+            data = private_problems(read_acl(self.inst.data_dir), service_sid(self.inst.service))
+        except WindowsSecurityError as exc:
+            data = [str(exc)]
+        checks.append(("data_private", not data, f"{self.inst.data_dir} is private to {self.inst.account}"
+                       if not data else "; ".join(data)))
+        return checks
+
+    def _state(self) -> int | None:
+        from .. import windows_service
+        status = windows_service.query(self.inst.service)
+        return status.state if status else None
+
+    def is_running(self) -> bool:
+        return self._state() not in (None, 1)
+
+    def _stop_service(self) -> None:
+        from .. import windows_service
+        try:
+            windows_service.stop(self.inst.service, 120)
+        except windows_service.ServiceError as exc:
+            raise ToolkitError(str(exc)) from exc
+
+    def stop(self, timeout: float) -> None:
+        if self.is_running():
+            self.progress("Asking the Platform Client to finish running submissions and sign out")
+            maintenance.request_stop(self.inst.data_dir, "upgrade")
+            deadline = time.monotonic() + timeout
+            while self.is_running() and time.monotonic() < deadline:
+                time.sleep(0.5)
+            maintenance.withdraw_stop(self.inst.data_dir)
+            if self.is_running():
+                raise StopRefused(f"The Platform Client still had a submission running after {int(timeout)} s. "
+                                  "Nothing was changed. Try again later.")
+        self._stop_service()
+
+    def ensure_stopped(self) -> None:
+        self._stop_service()
+
+    def start(self) -> str:
+        from .. import windows_service
+        try:
+            windows_service.start(self.inst.service, 90)
+        except windows_service.ServiceError as exc:
+            raise ToolkitError(str(exc)) from exc
+        return f"{self.inst.service} restarted. Sign in to the Platform again."
+
+    def health(self, version: str, token: str) -> None:
+        import httpx
+        from .. import windows_service
+        self.remove_marker()
+        self.progress(f"Starting {self.inst.service} on {version}")
+        self._stop_service()
+        log = self.inst.data_dir / "logs" / "service.log"
+        try:
+            windows_service.start(self.inst.service, HEALTH_TIMEOUT)
+        except windows_service.ServiceError as exc:
+            raise ToolkitError(f"{self.inst.service} did not start on {version} ({exc}); see {log}") from exc
+        status = None
+        with httpx.Client(base_url=f"http://127.0.0.1:{self.inst.port}", timeout=5, trust_env=False) as client:
+            deadline = time.monotonic() + HEALTH_TIMEOUT
+            while time.monotonic() < deadline:
+                try:
+                    status = client.get("/api/status")
+                    if status.status_code == 200:
+                        break
+                except httpx.HTTPError:
+                    pass
+                if self._state() in (None, 1):
+                    break
+                time.sleep(0.5)
+            if status is None or status.status_code != 200:
+                raise ToolkitError(f"{self.inst.service} did not answer on {version}; see {log}")
+            if status.json().get("version") != version:
+                raise ToolkitError(f"The service reports {status.json().get('version')!r}, not {version}.")
+            if client.get("/").status_code != 200:
+                raise ToolkitError(f"{version} does not serve its web UI.")
+
+    def _hand_back(self, path: Path) -> None:
+        """Give files the data root's own permissions; the data root's DACL itself is never reset."""
+        if path == self.inst.data_dir:
+            if any(path.iterdir()):
+                self.runner.run(["icacls", str(path / "*"), "/reset", "/T", "/C", "/Q"])
+        elif path.exists():
+            self.runner.run(["icacls", str(path), "/reset", "/T", "/C", "/Q"])
+
+
 def toolkit_for(layout: Layout, inst: Installation, **kwargs) -> BaseToolkit:
     if inst.edition == "platform_client":
+        if sys.platform == "win32":
+            return WindowsPlatformClientToolkit(layout, inst, **kwargs)
         return PlatformClientToolkit(layout, inst, **kwargs)
     return StandaloneToolkit(layout, inst, **kwargs)

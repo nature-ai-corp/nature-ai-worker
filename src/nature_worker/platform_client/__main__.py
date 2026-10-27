@@ -33,14 +33,25 @@ def main(argv: list[str] | None = None) -> int:
         }, indent=2))
         return 0 if preflight.allowed else 1
 
-    if settings.host not in ("127.0.0.1", "::1", "localhost"):
-        print("The Platform Client UI listens on loopback only.", file=sys.stderr)
-        return 1
     try:
-        app = create_app(settings)
+        server, watcher = build_server(settings)
     except ModeError as exc:
         print(exc, file=sys.stderr)
         return 1
+    watcher.start()
+    try:
+        server.run()
+    finally:
+        watcher.stop()
+    return 0
+
+
+def build_server(settings: ClientSettings):
+    """The loopback UI server and its upgrade watcher (shared by the console and the
+    Windows service host). Raises ModeError when the preflight blocks startup."""
+    if settings.host not in ("127.0.0.1", "::1", "localhost"):
+        raise ModeError("The Platform Client UI listens on loopback only.")
+    app = create_app(settings)
     import uvicorn
     server = uvicorn.Server(uvicorn.Config(app, host=settings.host, port=settings.port,
                                            access_log=False, log_level="warning"))
@@ -49,12 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     watcher = MaintenanceWatcher(settings.data_dir, busy=lambda: running_submissions(app),
                                  on_drain=lambda on: setattr(app.state, "draining", on),
                                  on_ready=lambda: setattr(server, "should_exit", True))
-    watcher.start()
-    try:
-        server.run()
-    finally:
-        watcher.stop()
-    return 0
+    return server, watcher
 
 
 if __name__ == "__main__":

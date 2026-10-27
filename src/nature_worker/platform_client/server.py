@@ -31,6 +31,7 @@ from .. import __version__
 from ..installation_mode import ModeError
 from ..maintenance import require_no_upgrade_in_progress
 from ..linux_isolation import inspect_linux_isolation, linux_isolation_verified
+from ..windows_isolation import inspect_windows_isolation
 from ..platform_contract import BUNDLED, SUPPORTED_VERSION, PlatformClientContract
 from ..platform_http import (
     PlatformHttpClient, PlatformInterfaceError, PlatformProblem, SessionCookies, SessionExpired,
@@ -56,6 +57,7 @@ class ClientSettings:
     platform_origin: str
     standalone_data_dir: Path
     standalone_uid: int | None = None
+    standalone_sid: str | None = None   # Windows: the Standalone user, recorded by the installer
     allow_insecure_loopback: bool = False
     ca_bundle: str | None = None
     host: str = "127.0.0.1"
@@ -70,6 +72,7 @@ class ClientSettings:
             platform_origin=env("NWPC_PLATFORM_ORIGIN"),
             standalone_data_dir=Path(env("NWPC_STANDALONE_DATA_DIR", "/nonexistent")),
             standalone_uid=int(env("NWPC_STANDALONE_UID")) if env("NWPC_STANDALONE_UID") else None,
+            standalone_sid=env("NWPC_STANDALONE_SID") or None,
             allow_insecure_loopback=env("NWPC_ALLOW_INSECURE_LOOPBACK") == "1",
             ca_bundle=env("NWPC_CA_BUNDLE") or None,
             host=env("NWPC_HOST", "127.0.0.1"),
@@ -121,14 +124,18 @@ class Account:
 
 
 def startup_findings(settings: ClientSettings, contract_ok: bool):
-    findings = inspect_linux_isolation(settings.data_dir, settings.standalone_data_dir,
-                                       settings.standalone_uid)
+    if sys.platform == "win32":
+        findings = inspect_windows_isolation(settings.data_dir, settings.standalone_data_dir,
+                                             settings.standalone_sid)
+    else:
+        findings = inspect_linux_isolation(settings.data_dir, settings.standalone_data_dir,
+                                           settings.standalone_uid)
     preflight = check_platform_startup(
         settings.data_dir,
         sc_runtime_available=contract_ok and bool(settings.platform_origin),
         os_isolation_verified=linux_isolation_verified(findings),
-        # Linux sessions are memory-only: no credential is ever persisted.
-        credential_backend_verified=sys.platform.startswith("linux"),
+        # Sessions are memory-only on Linux and Windows: no credential is ever persisted.
+        credential_backend_verified=sys.platform.startswith("linux") or sys.platform == "win32",
     )
     return preflight, findings
 

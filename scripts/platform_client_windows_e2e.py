@@ -47,10 +47,13 @@ from nature_worker.platform_client.windows_setup import (  # noqa: E402
 from nature_worker.platform_client.winservice import SERVICE_NAME  # noqa: E402
 from nature_worker.upgrade.release import public_key_entry  # noqa: E402
 from nature_worker.windows_security import (  # noqa: E402
-    admin_only_problems, current_token, private_problems, read_acl, service_sid,
+    admin_only_problems, current_token, private_problems, read_acl, service_sid, system_tool,
 )
 
 USERS = "S-1-5-32-545"
+# This test runs elevated: system programs by absolute path only (never a bare name).
+POWERSHELL = system_tool("WindowsPowerShell", "v1.0", "powershell.exe")
+ICACLS, SC, CMDKEY = system_tool("icacls.exe"), system_tool("sc.exe"), system_tool("cmdkey.exe")
 # Everything this test creates lives in its own namespace, never the production one.
 E2E_SERVICE = SERVICE_NAME + "E2E"
 E2E_PREFIX = default_prefix().parent.parent / "NatureAIWorkerE2E" / "PlatformClient"
@@ -118,7 +121,7 @@ class E2E:
                   "$o = Invoke-CimMethod -InputObject $p -MethodName GetOwner; "
                   "@{state=$s.State; start_name=$s.StartName; pid=$s.ProcessId; "
                   "owner=($o.Domain + '\\' + $o.User); command=$p.CommandLine} | ConvertTo-Json")
-        out = self.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], timeout=120)
+        out = self.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", script], timeout=120)
         expect(out.returncode == 0, f"cannot inspect the service process: {out.stderr[-300:]}")
         return json.loads(out.stdout)
 
@@ -198,7 +201,7 @@ class E2E:
                 default_prefix(), default_prefix().parent, default_data(), default_data().parent,
                 start_menu() / "Nature AI Worker Platform Client.url",
                 Path(os.environ["LOCALAPPDATA"]) / "NatureAIWorker")},
-            "credential_manager": self.run(["cmdkey", "/list"]).stdout,
+            "credential_manager": self.run([CMDKEY, "/list"]).stdout,
         }
 
     def s_preconditions(self) -> None:
@@ -241,7 +244,7 @@ class E2E:
         expect(status["platform"] == self.origin and status["signed_in"] is False, f"status {status}")
         self.assert_isolated()
         expect(self.system.get_registry(self.setup.uninstall_key, "DisplayVersion") == self.label, "Apps & Features entry")
-        page = self.run(["powershell", "-NoProfile", "-Command",
+        page = self.run([POWERSHELL, "-NoProfile", "-Command",
                          f"(Invoke-WebRequest -UseBasicParsing http://127.0.0.1:{self.port}/).StatusCode"])
         expect(page.stdout.strip() == "200", "the UI page is not served")
         expect((self.standalone / "worker.db").read_bytes() == b"standalone data that S-C must never touch",
@@ -253,7 +256,7 @@ class E2E:
         self.note(f"bundled runtime: {runtime}\\python.exe {version.stdout.strip()}, admin-only")
         stored = [p.name for p in self.data.rglob("*") if p.suffix == ".dpapi" or p.name in ("credentials", "sessions")]
         expect(not stored, f"credential storage found in the data root: {stored}")
-        expect(self.run(["cmdkey", "/list"]).stdout == self.before["credential_manager"],
+        expect(self.run([CMDKEY, "/list"]).stdout == self.before["credential_manager"],
                "Credential Manager entries of this user changed")
         self.note("no DPAPI file or credentials folder in the data root; this user's Credential Manager unchanged "
                   "(the service keeps Platform sessions in memory only)")
@@ -261,15 +264,15 @@ class E2E:
                   "private to the service account; code admin-only; UI answers on loopback; Standalone untouched")
 
     def s_repair(self) -> None:
-        self.run(["icacls", self.data, "/grant", f"*{USERS}:(OI)(CI)R"])
-        self.run(["sc.exe", "privs", E2E_SERVICE, "SeChangeNotifyPrivilege/SeImpersonatePrivilege"])
+        self.run([ICACLS, self.data, "/grant", f"*{USERS}:(OI)(CI)R"])
+        self.run([SC, "privs", E2E_SERVICE, "SeChangeNotifyPrivilege/SeImpersonatePrivilege"])
         self.system.stop_service(E2E_SERVICE, 60)
         expect(private_problems(read_acl(self.data), self.sid), "damage was not applied")
         result = self.setup_cmd("repair")
         expect(result.returncode == 0, f"repair failed: {result.stdout[-1500:]}{result.stderr[-1500:]}")
         self.wait_version(self.label)
         self.assert_isolated()
-        privs = self.run(["sc.exe", "qprivs", E2E_SERVICE]).stdout
+        privs = self.run([SC, "qprivs", E2E_SERVICE]).stdout
         expect("SeImpersonatePrivilege" not in privs, "repair did not reset the service privileges")
         self.note("Users read access added, extra privilege granted, service stopped -> repair: data root private "
                   f"again, privileges reset, {self.label} running")

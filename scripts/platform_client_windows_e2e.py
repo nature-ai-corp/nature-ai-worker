@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import faulthandler
+import hashlib
 import json
 import re
 import os
@@ -81,6 +82,14 @@ STALL_DUMP_SECONDS = 300
 # Command lines of everything that may change the e2e namespace (cleanup waits for none).
 ACTIVE_PATTERN = (r"platform_client_windows_e2e\.py|platform-client-windows\.py|nature_worker\.upgrade|"
                   r"nature-worker-upgrade|nature-worker-platform-client-setup|windows_setup|nwpc-uninstall")
+# Credential Manager entries Windows maintains for the signed-in user itself (Microsoft account and
+# Web Account Manager single sign-on, Office, OneDrive, Xbox): TokenBroker refreshes them in the
+# background at any time (e2e-4952 cleanup: one was rewritten mid-uninstall, as the Start menu
+# re-indexed). A change to one of them is reported, never counted as Nature AI Worker's; every
+# other added, removed or changed entry fails the run.
+WINDOWS_MANAGED_TARGET = re.compile(
+    r"^(?:\w+:target=)?(?:MicrosoftAccount:|SSO_POP_(?:Device|User)|virtualapp/didlogical|WindowsLive:|"
+    r"MicrosoftOffice\d*_Data:|OneDrive Cached Credential|XblGrts|XboxLive|Xbl\|)", re.IGNORECASE)
 CONSOLE_EVENTS = {0: "CTRL_C_EVENT (Ctrl+C)", 1: "CTRL_BREAK_EVENT (Ctrl+Break)",
                   2: "CTRL_CLOSE_EVENT (console window closed)", 5: "CTRL_LOGOFF_EVENT (user signs out)",
                   6: "CTRL_SHUTDOWN_EVENT (Windows shuts down or restarts)"}
@@ -93,6 +102,60 @@ class Check(Exception):
 def expect(condition, message: str) -> None:
     if not condition:
         raise Check(message)
+
+
+def credential_entries(listing: str) -> frozenset[tuple[str, str, str, str]]:
+    """``cmdkey /list`` as metadata: (target, type, persistence, short hash of the user name).
+    cmdkey never prints a secret; the user name is not kept either. Order does not matter.
+    Output that cannot be parsed (another display language) is compared as a whole."""
+    entries: list[list[str]] = []
+    for raw in listing.splitlines():
+        line = raw.strip()
+        key, colon, value = line.partition(":")
+        if colon and key.lower() == "target":
+            entries.append([value.strip(), "", "", ""])
+        elif entries and colon and key.lower() == "type":
+            entries[-1][1] = value.strip()
+        elif entries and colon and key.lower() == "user":
+            entries[-1][3] = hashlib.sha256(value.strip().encode("utf-8")).hexdigest()[:8]
+        elif entries and line and not colon:
+            entries[-1][2] = line  # "Local machine persistence", "Saved for this logon only", ...
+    if not entries and listing.strip() and "* NONE *" not in listing:
+        return frozenset({("(unparsed cmdkey output)", "", "", hashlib.sha256(listing.encode()).hexdigest()[:8])})
+    return frozenset(tuple(e) for e in entries)
+
+
+def redact(target: str) -> str:
+    """Target names as reported: e-mail addresses (account names) left out."""
+    return re.sub(r"[^\s:=/]+@[^\s:=/]+", "<account>", target)
+
+
+def credential_changes(before: str, after: str) -> tuple[list[str], list[str]]:
+    """Targets added, removed or changed between two listings: (Windows-maintained, all others)."""
+    old, new = credential_entries(before), credential_entries(after)
+    changed = sorted({e[0] for e in old ^ new})
+    managed = [t for t in changed if WINDOWS_MANAGED_TARGET.search(t)]
+    return managed, [t for t in changed if t not in managed]
+
+
+def service_profile(system, sid: str, service: str) -> Path | None:
+    """The profile Windows created for a service's virtual account (on its first start), if any."""
+    registered = system.get_registry(rf"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid}",
+                                     "ProfileImagePath")
+    if registered:
+        return Path(os.path.expandvars(registered))
+    fallback = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "ServiceProfiles" / service
+    return fallback if fallback.is_dir() else None
+
+
+def profile_credential_files(profile: Path) -> list[str]:
+    """Names (never contents) of Credential Manager files stored in a profile."""
+    found = []
+    for scope in ("Local", "Roaming"):
+        folder = profile / "AppData" / scope / "Microsoft" / "Credentials"
+        if folder.is_dir():
+            found += [str(p) for p in folder.iterdir()]
+    return found
 
 
 class Journal:
@@ -315,8 +378,37 @@ class E2E:
                 default_prefix(), default_prefix().parent, default_data(), default_data().parent,
                 start_menu() / "Nature AI Worker Platform Client.url",
                 Path(os.environ["LOCALAPPDATA"]) / "NatureAIWorker")},
-            "credential_manager": self.run([CMDKEY, "/list"], timeout=60).stdout,
+            "credential_manager": self.credential_snapshot(),
         }
+
+    def credential_snapshot(self) -> str:
+        """This user's Credential Manager listing; its metadata (never secrets) goes to the journal.
+        Taken in the elevated runner: the same user and profile as without elevation, so the same
+        persisted entries; entries "saved for this logon only" belong to the elevated logon session."""
+        listing = self.run([CMDKEY, "/list"], timeout=60).stdout
+        entries = sorted(credential_entries(listing))
+        context = ""
+        if sys.platform == "win32":
+            token = current_token()
+            context = f" as {token.user} (elevated {token.elevated})"
+        self.journal(f"Credential Manager{context}: {len(entries)} entries: "
+                     + "; ".join(f"{redact(t)} [{kind or '?'}, {persist or '?'}, user {user or '-'}]"
+                                 for t, kind, persist, user in entries))
+        return listing
+
+    def check_credentials(self, after: str) -> None:
+        """Nature AI Worker added, removed or changed no Credential Manager entry of this user, and
+        its service account stored none in its own profile (which this user's listing cannot show)."""
+        managed, other = credential_changes(self.before["credential_manager"], after)
+        if managed:
+            self.note("Credential Manager: entries Windows maintains for the signed-in account changed during "
+                      f"the run (TokenBroker refresh, not Nature AI Worker): {', '.join(map(redact, managed))}")
+        expect(not other, "Credential Manager entries of this user were added, removed or changed: "
+               f"{', '.join(map(redact, other))} (metadata of both listings: e2e-journal.log)")
+        profile = service_profile(self.system, self.sid, E2E_SERVICE)
+        stored = profile_credential_files(profile) if profile else []
+        expect(not stored, f"the service account stored Credential Manager files: {stored}")
+        self.note(f"service account profile {profile or '(none created)'}: no Credential Manager files")
 
     def s_preconditions(self) -> None:
         token = current_token()
@@ -383,10 +475,9 @@ class E2E:
         self.note(f"bundled runtime: {runtime}\\python.exe {version.stdout.strip()}, admin-only")
         stored = [p.name for p in self.data.rglob("*") if p.suffix == ".dpapi" or p.name in ("credentials", "sessions")]
         expect(not stored, f"credential storage found in the data root: {stored}")
-        expect(self.run([CMDKEY, "/list"], timeout=60).stdout == self.before["credential_manager"],
-               "Credential Manager entries of this user changed")
-        self.note("no DPAPI file or credentials folder in the data root; this user's Credential Manager unchanged "
-                  "(the service keeps Platform sessions in memory only)")
+        self.check_credentials(self.credential_snapshot())
+        self.note("no DPAPI file or credentials folder in the data root; no Credential Manager entry of this "
+                  "user or of the service account (the service keeps Platform sessions in memory only)")
         self.note(f"installed {self.label}; service runs as {self.account} (process owner checked); data root "
                   "private to the service account; code admin-only; UI answers on loopback; Standalone untouched")
 
@@ -519,8 +610,9 @@ class E2E:
 
     def s_production_untouched(self) -> None:
         after = self.production_state()
-        for key in ("service", "uninstall_key", "credential_manager"):
+        for key in ("service", "uninstall_key"):
             expect(after[key] == self.before[key], f"production {key} changed")
+        self.check_credentials(after["credential_manager"])
         for path, state in self.before["paths"].items():
             expect(after["paths"][path] == state, f"{path} changed (existence or permissions)")
         leftovers = self.e2e_leftovers()

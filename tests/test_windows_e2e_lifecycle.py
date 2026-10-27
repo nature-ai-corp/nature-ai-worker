@@ -321,3 +321,130 @@ def test_active_processes_ignore_this_runner_its_launcher_and_the_e2e_service(e2
     active = runner.active_processes()
     assert [a.split()[0] for a in active] == ["900003", "900004"]
     runner.journal.close()
+
+
+# -- Credential Manager (e2e-4952 cleanup: "production credential_manager changed") -------------
+
+LISTING = """
+Currently stored credentials:
+
+    Target: MicrosoftAccount:target=SSO_POP_Device
+    Type: Generic 
+    User: 02abcdefghijkl
+    Saved for this logon only
+    
+    Target: WindowsLive:target=virtualapp/didlogical
+    Type: Generic 
+    User: 02abcdefghijkl
+    Local machine persistence
+    
+    Target: LegacyGeneric:target=git:https://github.com
+    Type: Generic 
+    User: someone@example.com
+    Local machine persistence
+    
+"""
+
+
+def test_credential_listing_is_kept_as_metadata_without_order_or_user_names(e2e):
+    module, _ = e2e
+    entries = module.credential_entries(LISTING)
+    assert {e[0] for e in entries} == {"MicrosoftAccount:target=SSO_POP_Device",
+                                       "WindowsLive:target=virtualapp/didlogical",
+                                       "LegacyGeneric:target=git:https://github.com"}
+    assert {e[2] for e in entries} == {"Saved for this logon only", "Local machine persistence"}
+    assert not any("someone@example.com" in field or "02abcdefghijkl" in field for e in entries for field in e)
+    blocks = LISTING.split("\n    \n")
+    assert module.credential_entries("\n    \n".join(reversed(blocks))) == entries  # order is not a change
+    assert module.credential_entries("Currently stored credentials:\n\n* NONE *\n") == frozenset()
+    assert module.redact("MicrosoftAccount:user=someone@example.com") == "MicrosoftAccount:user=<account>"
+
+
+def test_a_windows_sign_in_refresh_is_reported_not_failed(e2e, tmp_path):
+    module, _ = e2e
+    after = LISTING.replace("User: 02abcdefghijkl\n    Saved for this logon only",
+                            "User: 02zzzzzzzzzzzz\n    Saved for this logon only")
+    managed, other = module.credential_changes(LISTING, after)
+    assert managed == ["MicrosoftAccount:target=SSO_POP_Device"] and other == []
+    runner = module.E2E(tmp_path, None, "https://x.invalid")
+    runner.before = {"credential_manager": LISTING}
+    runner.check_credentials(after)
+    assert any("TokenBroker refresh, not Nature AI Worker" in line for line in runner.lines)
+    runner.journal.close()
+
+
+@pytest.mark.parametrize("after", [
+    LISTING + "    Target: LegacyGeneric:target=NatureWorkerPlatformClient\n    Type: Generic \n"
+              "    User: svc\n    Local machine persistence\n",                            # added (ours)
+    LISTING + "    Target: LegacyGeneric:target=platform.example.invalid\n    Type: Generic \n"
+              "    User: svc\n    Local machine persistence\n",                            # added (any name)
+    LISTING.replace("    Target: LegacyGeneric:target=git:https://github.com", "    Target: LegacyGeneric:target=x"),
+    LISTING.replace("User: someone@example.com", "User: other@example.com"),           # user changed
+])
+def test_every_other_credential_change_still_fails(e2e, tmp_path, after):
+    module, _ = e2e
+    runner = module.E2E(tmp_path, None, "https://x.invalid")
+    runner.before = {"credential_manager": LISTING}
+    with pytest.raises(module.Check, match="were added, removed or changed") as failure:
+        runner.check_credentials(after)
+    assert "example.com" not in str(failure.value)  # account names never reach the report
+    runner.journal.close()
+
+
+def test_unparsed_listings_are_compared_whole(e2e):
+    module, _ = e2e
+    german = "Derzeit gespeicherte Anmeldeinformationen:\n\n    Ziel: LegacyGeneric:target=a\n"
+    assert module.credential_changes(german, german) == ([], [])
+    assert module.credential_changes(german, german + "    Ziel: LegacyGeneric:target=b\n")[1]
+
+
+def test_credential_files_of_the_service_account_fail_the_check(e2e, tmp_path):
+    module, _ = e2e
+    profile = tmp_path / "ServiceProfiles" / "NatureWorkerPlatformClientE2E"
+    vault = profile / "AppData" / "Local" / "Microsoft" / "Credentials"
+    vault.mkdir(parents=True)
+    runner = module.E2E(tmp_path, None, "https://x.invalid")
+    runner.system.get_registry = lambda key, name: str(profile) if runner.sid in key else None
+    runner.before = {"credential_manager": LISTING}
+    runner.check_credentials(LISTING)  # an empty Credentials folder is fine
+    (vault / "0123456789ABCDEF").write_bytes(b"\0")
+    with pytest.raises(module.Check, match="service account stored Credential Manager files"):
+        runner.check_credentials(LISTING)
+    runner.journal.close()
+
+
+# Native Windows: read-only (cmdkey /list, registry and folder listings); no credential is touched.
+windows_only = pytest.mark.skipif(__import__("sys").platform != "win32", reason="Windows only")
+
+
+@windows_only
+def test_native_cmdkey_listing_parses_every_entry(e2e):
+    module, _ = e2e
+    listing = subprocess.run([module.CMDKEY, "/list"], capture_output=True, text=True, timeout=60).stdout
+    targets = [ln for ln in listing.splitlines() if ln.strip().lower().startswith("target:")]
+    entries = module.credential_entries(listing)
+    if targets:
+        assert len({t.split(":", 1)[1].strip() for t in targets}) == len({e[0] for e in entries})
+        assert all(e[2] for e in entries)  # each entry has its persistence
+    assert module.credential_changes(listing, listing) == ([], [])
+
+
+@windows_only
+def test_native_service_profile_of_a_builtin_account(e2e):
+    module, _ = e2e
+    from nature_worker.platform_client.windows_setup import WindowsSystem
+    profile = module.service_profile(WindowsSystem(), "S-1-5-19", "LocalService")  # NT AUTHORITY\LOCAL SERVICE
+    assert profile is not None and profile.name.lower() == "localservice"
+    assert isinstance(module.profile_credential_files(profile), list)
+
+
+@windows_only
+def test_native_snapshot_records_the_user_and_elevation(e2e, tmp_path):
+    module, _ = e2e
+    from nature_worker.windows_security import current_token
+    runner = module.E2E(tmp_path, None, "https://x.invalid")
+    runner.credential_snapshot()
+    runner.journal.close()
+    journal = (tmp_path / "e2e-journal.log").read_text(encoding="utf-8")
+    token = current_token()
+    assert f"Credential Manager as {token.user} (elevated {token.elevated})" in journal

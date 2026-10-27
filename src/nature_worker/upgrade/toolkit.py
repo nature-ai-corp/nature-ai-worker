@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import maintenance
+from ..build_identity import build_mismatch
 from ..installation_mode import read_mode
 from ..migrations import backup_data_root, check_backup_space, prune_backups, restore_data_root
 from .layout import INCOMPLETE, INSTALLED, Installation, Layout, LayoutError
@@ -431,8 +432,9 @@ class PlatformClientToolkit(BaseToolkit):
             if status is None or status.status_code != 200:
                 raise ToolkitError(f"{self.inst.service} did not start on {version}; "
                                    f"see journalctl -u {self.inst.service}")
-            if status.json().get("version") != version:
-                raise ToolkitError(f"The service reports {status.json().get('version')!r}, not {version}.")
+            mismatch = build_mismatch(status.json(), version)
+            if mismatch:
+                raise ToolkitError(f"The service is not the activated build: {mismatch}.")
             if client.get("/").status_code != 200:
                 raise ToolkitError(f"{version} does not serve its web UI.")
 
@@ -549,8 +551,9 @@ class WindowsPlatformClientToolkit(PlatformClientToolkit):
                 time.sleep(0.5)
             if status is None or status.status_code != 200:
                 raise ToolkitError(f"{self.inst.service} did not answer on {version}; see {log}")
-            if status.json().get("version") != version:
-                raise ToolkitError(f"The service reports {status.json().get('version')!r}, not {version}.")
+            mismatch = build_mismatch(status.json(), version)
+            if mismatch:
+                raise ToolkitError(f"The service is not the activated build: {mismatch}.")
             if client.get("/").status_code != 200:
                 raise ToolkitError(f"{version} does not serve its web UI.")
 

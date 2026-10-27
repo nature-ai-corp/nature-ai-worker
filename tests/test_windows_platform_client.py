@@ -142,6 +142,7 @@ class FakeWindows:
         self.private_sid = SVC
         self.account_sid_value = None
         self.resolve_override = None
+        self.status_override = None
         self.prefix = None
 
     # identity and permissions
@@ -239,7 +240,14 @@ class FakeWindows:
             return None
         key = next(k for k, v in self.registry.items() if k.startswith("SYSTEM") and "Environment" in v)
         env = dict(v.split("=", 1) for v in self.registry[key]["Environment"])
-        return {"version": current, "platform": env["NWPC_PLATFORM_ORIGIN"]}
+        status = {"version": current.split("+")[0], "build": current, "platform": env["NWPC_PLATFORM_ORIGIN"]}
+        return self.status_override(status) if self.status_override else status
+
+    def http_probe(self, port):
+        status = self.http_status(port)
+        if status is None:
+            return {"error": "ConnectionRefusedError: [WinError 10061]"}
+        return {"http": 200, "body": json.dumps(status), "json": status}
 
     def port_in_use(self, port):
         return port in self.busy_ports
@@ -390,7 +398,7 @@ def test_reinstall_that_fails_to_build_restarts_the_running_build(win, tmp_path)
     fake.fail_pip = True
     with pytest.raises(SetupError, match="pip"):
         install(setup, standalone, tmp_path, archive=source_archive(tmp_path, "c" * 40))
-    assert setup.current() == first and fake.service == 4 and fake.http_status(8090)["version"] == first
+    assert setup.current() == first and fake.service == 4 and fake.http_status(8090)["build"] == first
 
 
 def test_repair_reapplies_everything_but_keeps_version_origin_and_data(win, tmp_path):
@@ -751,3 +759,73 @@ def test_native_least_privilege_acl_with_a_service_sid(tmp_path):
     result = subprocess.run([system_tool("icacls.exe"), str(folder), "/grant", f"*{unregistered}:(OI)(CI)M"],
                             capture_output=True, text=True)
     assert result.returncode == 1332  # the native failure this ordering prevents
+
+
+# -- exact installed build (native e2e: "did not answer as 0.1.0+g81f1b9d82f62") ----------
+
+def test_install_requires_the_exact_build_not_the_base_version(win, tmp_path):
+    setup, fake, standalone = win
+    # What the 81f1b9d service answered: its base version, no build field.
+    fake.status_override = lambda st: {k: v for k, v in st.items() if k != "build"}
+    with pytest.raises(SetupError) as info:
+        install(setup, standalone, tmp_path)
+    message = str(info.value)
+    assert "reports version '0.2.0' and no build, not 0.2.0+gaaaaaaaaaaaa" in message
+    assert "last answer: HTTP 200" in message and '"version": "0.2.0"' in message and "service state: running" in message
+
+
+def test_a_different_build_is_never_accepted(win, tmp_path):
+    setup, fake, standalone = win
+    fake.status_override = lambda st: {**st, "build": "0.2.0+gbbbbbbbbbbbb"}
+    with pytest.raises(SetupError, match="runs build '0.2.0\\+gbbbbbbbbbbbb', not 0.2.0\\+gaaaaaaaaaaaa"):
+        install(setup, standalone, tmp_path)
+
+
+def test_no_answer_is_reported_with_the_connection_error(win, tmp_path):
+    setup, fake, standalone = win
+    fake.start_fails_for.add("0.2.0+gaaaaaaaaaaaa")
+    with pytest.raises(SetupError, match="last answer: ConnectionRefusedError"):
+        install(setup, standalone, tmp_path)
+
+
+def test_build_identity_rules():
+    from nature_worker.build_identity import build_mismatch
+    assert build_mismatch({"version": "0.1.0", "build": "0.1.0+gabc"}, "0.1.0+gabc") is None
+    assert build_mismatch({"version": "0.1.0", "build": "0.1.0+gabc"}, "0.1.0") is not None
+    assert build_mismatch({"version": "9.1.0", "build": None}, "9.1.0") is not None  # unmanaged: never a match
+    assert build_mismatch({"version": "9.1.0"}, "9.1.0") is None  # a signed release from before the field
+    assert build_mismatch({"version": "0.1.0"}, "0.1.0+gabc") is not None
+
+
+def test_the_running_build_is_the_versions_directory_the_code_was_loaded_from(tmp_path):
+    """Real interpreter, real versioned layout (native on Windows: Lib\\site-packages)."""
+    import shutil
+    import nature_worker
+    prefix = tmp_path / "PC"
+    site = prefix / "versions" / "0.1.0+g81f1b9d82f62" / "venv" / ("Lib" if os.name == "nt" else "lib") / "site-packages"
+    shutil.copytree(Path(nature_worker.__file__).parent, site / "nature_worker",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    (prefix / "installation.json").write_text("{}")
+    code = ("import site, sys; site.addsitedir(sys.argv[1]); import nature_worker.build_identity as b; "
+            "print(b.__file__.startswith(sys.argv[1]), b.running_build())")
+    # -S: like the service runtime, whose own site-packages is empty, only the layout's copy is importable.
+    out = subprocess.run([sys.executable, "-I", "-S", "-c", code, str(site)], capture_output=True, text=True, check=True).stdout
+    assert out.split() == ["True", "0.1.0+g81f1b9d82f62"]
+    (prefix / "installation.json").unlink()  # not a managed installation: no build claimed
+    out = subprocess.run([sys.executable, "-I", "-S", "-c", code, str(site)], capture_output=True, text=True, check=True).stdout
+    assert out.split() == ["True", "None"]
+
+
+def test_status_reports_the_installed_build(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from nature_worker.platform_client import server
+    monkeypatch.setattr(server, "running_build", lambda: "0.1.0+g81f1b9d82f62")
+    settings = server.ClientSettings(tmp_path / "pc", "https://platform.example", tmp_path / "sa")
+    with TestClient(server.create_app(settings, verify_startup=False)) as client:
+        status = client.get("/api/status").json()
+    assert status["build"] == "0.1.0+g81f1b9d82f62" and status["version"] == nature_worker_version()
+
+
+def nature_worker_version():
+    import nature_worker
+    return nature_worker.__version__

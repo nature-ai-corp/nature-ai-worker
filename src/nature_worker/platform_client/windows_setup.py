@@ -36,10 +36,12 @@ import sys
 import tarfile
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 from .. import maintenance
+from ..build_identity import build_mismatch
 from ..installation_mode import PLATFORM_CLIENT, ModeError, read_mode
 from ..install_gate import CleanEvidence, standalone_install_decision
 from ..windows_security import (
@@ -171,12 +173,25 @@ class WindowsSystem:
             pass
 
     def http_status(self, port: int) -> dict | None:
+        answer = self.http_probe(port)
+        return answer.get("json")
+
+    def http_probe(self, port: int) -> dict:
+        """What 127.0.0.1:<port>/api/status answered: HTTP status, body (shortened) and parsed
+        JSON, or the connection error. /api/status carries no secret before sign-in."""
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             with opener.open(f"http://127.0.0.1:{port}/api/status", timeout=3) as response:
-                return json.load(response)
-        except (OSError, ValueError):
-            return None
+                body = response.read(4096).decode("utf-8", "replace")
+                code = response.status
+        except urllib.error.HTTPError as exc:
+            return {"http": exc.code, "body": exc.read(500).decode("utf-8", "replace")}
+        except OSError as exc:
+            return {"error": f"{type(exc).__name__}: {getattr(exc, 'reason', exc)}"}
+        try:
+            return {"http": code, "body": body[:500], "json": json.loads(body)}
+        except ValueError:
+            return {"http": code, "body": body[:500]}
 
     def port_in_use(self, port: int) -> bool:
         import socket
@@ -490,12 +505,29 @@ class Setup:
             self.system.start_service(self.service, 90)
         except SetupError as exc:
             raise SetupError(f"{exc}\n{self.log_tail()}") from exc
-        for _ in range(60):
-            status = self.system.http_status(port)
-            if status and status.get("version") == label and status.get("platform") == origin:
-                return
+        self.wait_for_build(label, port, origin)
+
+    def wait_for_build(self, label: str, port: int, origin: str | None = None, attempts: int = 60) -> dict:
+        """The service answers on its port and runs exactly ``label`` (and serves ``origin``)."""
+        answer: dict = {}
+        why = "no answer"
+        for _ in range(attempts):
+            answer = self.system.http_probe(port)
+            status = answer.get("json")
+            if status:
+                why = build_mismatch(status, label) or (
+                    None if origin is None or status.get("platform") == origin
+                    else f"it serves {status.get('platform')!r}, not {origin}")
+                if why is None:
+                    return status
             self.system.sleep(1)
-        raise SetupError(f"The service did not answer as {label} on 127.0.0.1:{port}.\n{self.log_tail()}")
+        service = self.system.service_status(self.service)
+        state = (f"{service.name}, exit {getattr(service, 'win32_exit', 0)}/{getattr(service, 'service_exit', 0)}"
+                 if service else "not installed")
+        seen = (f"HTTP {answer['http']}: {answer.get('body', '')[:300]}" if "http" in answer
+                else answer.get("error", "no answer"))
+        raise SetupError(f"The service did not answer as build {label} on 127.0.0.1:{port}: {why}.\n"
+                         f"  last answer: {seen}\n  service state: {state}\n{self.log_tail()}")
 
     def reactivate(self, previous: str, port: int) -> None:
         """After a failed reinstall, the build that was active before is active and serving again."""
@@ -507,13 +539,8 @@ class Setup:
                 tmp.write_text(previous, encoding="utf-8")
                 os.replace(tmp, self.prefix / "current")
             self.system.start_service(self.service, 90)
-            for _ in range(60):
-                status = self.system.http_status(port)
-                if status and status.get("version") == previous:
-                    self.say(f"{previous} is running again.")
-                    return
-                self.system.sleep(1)
-            raise SetupError(f"{previous} did not answer on 127.0.0.1:{port}")
+            self.wait_for_build(previous, port)
+            self.say(f"{previous} is running again.")
         except (SetupError, OSError) as exc:
             self.say(f"Reactivating {previous} failed too ({exc}). Run `repair` after fixing the cause.")
 

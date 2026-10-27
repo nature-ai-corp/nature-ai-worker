@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from .. import __version__
+from ..build_identity import running_build
 from ..installation_mode import ModeError
 from ..maintenance import require_no_upgrade_in_progress
 from ..linux_isolation import inspect_linux_isolation, linux_isolation_verified
@@ -211,6 +212,7 @@ def create_app(settings: ClientSettings | None = None, *,
     ops = PlatformOperations(http, contract)
     api = ClientInterface(ops)
     account = Account(ops)
+    build = running_build()  # the installed build this process runs (fixed for its lifetime)
     submissions = account.submissions
     login_times: list[float] = []
 
@@ -301,6 +303,7 @@ def create_app(settings: ClientSettings | None = None, *,
             pending = account.session.pending_revoke is not None
         return {
             "version": __version__,
+            "build": build,
             "signed_in": signed_in,
             "user": {"display_name": user.get("display_name"), "email": user.get("email")}
                     if signed_in and user else None,

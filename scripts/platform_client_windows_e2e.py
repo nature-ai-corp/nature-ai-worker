@@ -42,6 +42,7 @@ sys.path.insert(0, str(REPO / "src"))
 from cryptography.hazmat.primitives import serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 
+from nature_worker.build_identity import build_mismatch  # noqa: E402
 from nature_worker.platform_client.windows_setup import (  # noqa: E402
     UNINSTALL_KEY, Setup, WindowsSystem, default_data, default_prefix, start_menu,
 )
@@ -132,13 +133,17 @@ class E2E:
         return json.loads(out.stdout)
 
     def wait_version(self, version: str, timeout: float = 90) -> dict:
+        """The service answers and runs exactly the installed build ``version``."""
         deadline = time.monotonic() + timeout
+        answer, why = {}, "no answer"
         while time.monotonic() < deadline:
-            status = self.status()
-            if status and status.get("version") == version:
-                return status
+            answer = self.system.http_probe(self.port)
+            if answer.get("json"):
+                why = build_mismatch(answer["json"], version)
+                if why is None:
+                    return answer["json"]
             time.sleep(1)
-        raise Check(f"the service did not answer as {version} (last: {self.status()})")
+        raise Check(f"the service did not answer as build {version}: {why}; last answer {answer}")
 
     def assert_isolated(self) -> None:
         problems = private_problems(read_acl(self.data), self.sid)

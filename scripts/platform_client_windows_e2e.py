@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import os
 import shutil
 import socket
@@ -47,7 +48,7 @@ from nature_worker.platform_client.windows_setup import (  # noqa: E402
 from nature_worker.platform_client.winservice import SERVICE_NAME  # noqa: E402
 from nature_worker.upgrade.release import public_key_entry  # noqa: E402
 from nature_worker.windows_security import (  # noqa: E402
-    admin_only_problems, current_token, private_problems, read_acl, service_sid, system_tool,
+    admin_only_problems, current_token, lookup_account_sid, private_problems, read_acl, service_sid, system_tool,
 )
 
 USERS = "S-1-5-32-545"
@@ -268,6 +269,16 @@ class E2E:
         expect(page.stdout.strip() == "200", "the UI page is not served")
         expect((self.standalone / "worker.db").read_bytes() == b"standalone data that S-C must never touch",
                "the Standalone data changed")
+        showsid = self.run([SC, "showsid", E2E_SERVICE]).stdout
+        shown = re.search(r"S-1-5-80(?:-\d+){5}", showsid)
+        resolved = lookup_account_sid(self.account)
+        expect(shown and shown.group(0) == self.sid == resolved,
+               f"service SID: derived {self.sid}, sc showsid {shown and shown.group(0)}, Windows {resolved}")
+        expect(self.system.get_registry(self.setup.service_key, "ServiceSidType") == 1, "service SID type")
+        expect((self.system.get_registry(self.setup.service_key, "ObjectName") or "").lower() == self.account.lower(),
+               "service account registration")
+        self.note(f"service SID {self.sid}: derived = sc showsid = LookupAccountName; ServiceSidType unrestricted; "
+                  f"ObjectName {self.account}")
         runtime = self.prefix / "runtime"
         version = self.run([runtime / "python.exe", "-I", "-c", "import sys; print(sys.version.split()[0])"])
         expect(version.stdout.strip() == sys.version.split()[0], f"runtime is {version.stdout.strip()}")

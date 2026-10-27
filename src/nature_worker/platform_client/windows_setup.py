@@ -122,6 +122,13 @@ class WindowsSystem:
             raise SetupError(command_failure(command, result))
         return result
 
+    def account_sid(self, name: str) -> str:
+        from ..windows_security import lookup_account_sid
+        try:
+            return lookup_account_sid(name)
+        except WindowsSecurityError as exc:
+            raise SetupError(str(exc)) from exc
+
     def service_status(self, name: str):
         from .. import windows_service
         return windows_service.query(name)
@@ -319,6 +326,12 @@ class Setup:
             label = f"{version}+g{commit[:12]}"
             self.ensure_runtime()
             self.build_version(label, src)
+            # The service is registered before any ACL names its SID: Windows maps
+            # NT SERVICE\<name> to that SID only while the service exists (icacls error 1332).
+            self.configure_service(origin=origin, standalone_data=standalone_data,
+                                   standalone_sid=standalone_sid, port=port,
+                                   allow_insecure_loopback=allow_insecure_loopback)
+            self.verify_service_identity()
             self.provision_data_root()
             self.say(f"Preparing the data root {self.data}")
             self.system.run([str(self.version_python(label)), "-I", "-m", "nature_worker.platform_client",
@@ -330,14 +343,14 @@ class Setup:
                              "--account", self.account, "--service", self.service, "--port", str(port),
                              "--commit", commit], env=_child_env())
             (self.prefix / "COMMIT").write_text(commit + "\n", encoding="utf-8")
-            self.configure_service(origin=origin, standalone_data=standalone_data,
-                                   standalone_sid=standalone_sid, port=port,
-                                   allow_insecure_loopback=allow_insecure_loopback)
             self.start_and_verify(label, origin, port)
         except (SetupError, OSError):
-            # Whatever failed, an installation that was serving before serves again.
+            # Whatever failed, an installation that was serving before serves again, and a
+            # first installation leaves no half-configured service behind.
             if previous and previous != label and (self.current() != previous or was_running):
                 self.reactivate(previous, port)
+            elif status is None and self.system.service_status(self.service) is not None:
+                self.system.run([system_tool("sc.exe"), "delete", self.service], check=False)
             raise
         finally:
             shutil.rmtree(staging, ignore_errors=True)
@@ -457,6 +470,20 @@ class Setup:
             env["NWPC_ALLOW_INSECURE_LOOPBACK"] = "1"
         self.system.set_registry(self.service_key, {"Environment": [f"{k}={v}" for k, v in env.items()]})
 
+    def verify_service_identity(self) -> str:
+        """The registered service runs as its own virtual account with an unrestricted service SID,
+        and Windows resolves that account to exactly the SID this installer grants access to."""
+        account = self.system.get_registry(self.service_key, "ObjectName")
+        if (account or "").lower() != self.account.lower():
+            raise SetupError(f"Service {self.service} is registered to run as {account!r}, not {self.account}.")
+        if self.system.get_registry(self.service_key, "ServiceSidType") != 1:  # SERVICE_SID_TYPE_UNRESTRICTED
+            raise SetupError(f"Service {self.service} has no unrestricted service SID.")
+        resolved = self.system.account_sid(self.account)
+        if resolved != self.sid:
+            raise SetupError(f"Windows maps {self.account} to {resolved}, not the expected {self.sid}.")
+        self.say(f"Service account {self.account} resolves to {resolved}")
+        return resolved
+
     def start_and_verify(self, label: str, origin: str, port: int) -> None:
         self.say(f"Starting {self.service}")
         try:
@@ -555,6 +582,16 @@ class Setup:
                              "Uninstall and install again.")
         self.check_data_root()
         self.stop_service(drain=True)
+        if self.system.service_status(self.service) is None:
+            raise SetupError(f"Service {self.service} is not registered; install again.")
+        # Service configuration first (it may be what is damaged), then its verified identity,
+        # then the permissions that name it.
+        port = int(env.get("NWPC_PORT") or inst.get("port") or DEFAULT_PORT)
+        standalone = env.get("NWPC_STANDALONE_DATA_DIR") or None
+        self.configure_service(origin=origin, standalone_data=Path(standalone) if standalone else None,
+                               standalone_sid=env.get("NWPC_STANDALONE_SID") or self.system.token().user,
+                               port=port, allow_insecure_loopback=env.get("NWPC_ALLOW_INSECURE_LOOPBACK") == "1")
+        self.verify_service_identity()
         self.provision_data_root()
         if read_mode(self.data) != PLATFORM_CLIENT:
             self.system.run([str(self.version_python(label)), "-I", "-m", "nature_worker.platform_client",
@@ -564,11 +601,6 @@ class Setup:
                          "import sys; from pathlib import Path; from nature_worker.upgrade.layout import Layout; "
                          "l = Layout(Path(sys.argv[1])); l.write_launchers(l.installation())", str(self.prefix)],
                         env=_child_env())
-        port = int(env.get("NWPC_PORT") or inst.get("port") or DEFAULT_PORT)
-        standalone = env.get("NWPC_STANDALONE_DATA_DIR") or None
-        self.configure_service(origin=origin, standalone_data=Path(standalone) if standalone else None,
-                               standalone_sid=env.get("NWPC_STANDALONE_SID") or self.system.token().user,
-                               port=port, allow_insecure_loopback=env.get("NWPC_ALLOW_INSECURE_LOOPBACK") == "1")
         self.start_and_verify(label, origin, port)
         self.register_app(label, port)
         self.say(f"Repaired: {label} running on http://127.0.0.1:{port}/")

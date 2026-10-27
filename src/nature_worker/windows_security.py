@@ -196,6 +196,28 @@ def read_acl(path: Path) -> Acl:
         kernel32.LocalFree(sd)
 
 
+def lookup_account_sid(name: str) -> str:
+    """The SID Windows itself maps ``name`` to (LookupAccountNameW). ``NT SERVICE\\<service>``
+    resolves only while that service is registered with the Service Control Manager."""
+    _require_windows()
+    ctypes, wintypes, advapi32, kernel32 = _api()
+    advapi32.LookupAccountNameW.argtypes = [
+        wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD),
+        wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(ctypes.c_int)]
+    sid_size, domain_size, use = wintypes.DWORD(0), wintypes.DWORD(0), ctypes.c_int()
+    advapi32.LookupAccountNameW(None, name, None, ctypes.byref(sid_size), None,
+                                ctypes.byref(domain_size), ctypes.byref(use))
+    error = ctypes.get_last_error()
+    if error != 122:  # ERROR_INSUFFICIENT_BUFFER: the account exists, sizes are known
+        raise WindowsSecurityError(f"Windows cannot resolve the account {name} (error {error})")
+    sid = ctypes.create_string_buffer(sid_size.value)
+    domain = ctypes.create_unicode_buffer(domain_size.value)
+    if not advapi32.LookupAccountNameW(None, name, sid, ctypes.byref(sid_size), domain,
+                                       ctypes.byref(domain_size), ctypes.byref(use)):
+        raise WindowsSecurityError(f"Windows cannot resolve the account {name} ({ctypes.get_last_error()})")
+    return _sid_string(ctypes.addressof(sid))
+
+
 @dataclass(frozen=True)
 class Token:
     user: str

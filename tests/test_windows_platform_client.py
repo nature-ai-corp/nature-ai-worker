@@ -139,7 +139,9 @@ class FakeWindows:
         self.start_fails_for: set[str] = set()
         self.fail_pip = False
         self.names: set[str] = set()
-        self.account_sid = SVC
+        self.private_sid = SVC
+        self.account_sid_value = None
+        self.resolve_override = None
         self.prefix = None
 
     # identity and permissions
@@ -152,7 +154,7 @@ class FakeWindows:
             return self.acls[path]
         if self.prefix and (path == self.prefix or self.prefix in path.parents):
             return Acl(ADMINISTRATORS, False, (Ace(SYSTEM, FULL), Ace(ADMINISTRATORS, FULL), Ace(USERS, READ)))
-        return private_acl(self.account_sid)
+        return private_acl(self.private_sid)
 
     def is_link(self, path):
         return Path(path).is_symlink()
@@ -166,6 +168,12 @@ class FakeWindows:
         elif cmd[0] in ("sc.exe", "icacls", "powershell"):
             raise AssertionError(f"{cmd[0]} run by bare name in elevated code")
         self.calls.append(cmd)
+        if cmd[0] == "icacls":  # like Windows: a service SID resolves only while that service exists
+            for arg in cmd:
+                sid = arg[1:].split(":")[0] if arg.startswith("*S-1-5-80-") else None
+                if sid and (self.service is None or sid != self.account_sid_value):
+                    raise SetupError(f"Command failed (exit 1332): icacls ... *{sid}: No mapping between "
+                                     "account names and security IDs was done.")
         if self.fail_pip and "pip" in cmd:
             raise SetupError("python -I -m pip failed (exit 1): no matching distribution")
         out = ""
@@ -191,11 +199,23 @@ class FakeWindows:
             data = Path(env["NWPC_DATA_DIR"])
             from nature_worker.installation_mode import initialize_platform_client
             initialize_platform_client(data)
-        elif cmd[0] == "sc.exe" and cmd[1] == "create":
-            self.service = 1
+        elif cmd[0] == "sc.exe" and cmd[1] in ("create", "config"):
+            self.service = self.service or 1
+            key = rf"SYSTEM\CurrentControlSet\Services\{cmd[2]}"
+            self.registry.setdefault(key, {})["ObjectName"] = cmd[cmd.index("obj=") + 1]
+            self.account_sid_value = service_sid(cmd[2])
+        elif cmd[0] == "sc.exe" and cmd[1] == "sidtype":
+            self.registry.setdefault(rf"SYSTEM\CurrentControlSet\Services\{cmd[2]}", {})["ServiceSidType"] = \
+                {"unrestricted": 1, "restricted": 3, "none": 0}[cmd[3]]
         elif cmd[0] == "sc.exe" and cmd[1] == "delete":
             self.service = None
+            self.registry.pop(rf"SYSTEM\CurrentControlSet\Services\{cmd[2]}", None)
         return subprocess.CompletedProcess(cmd, 0, out, "")
+
+    def account_sid(self, name):
+        if self.service is None:
+            raise SetupError(f"Windows cannot resolve the account {name} (error 1332)")
+        return self.resolve_override or service_sid(name.split("\\", 1)[1])
 
     # service
     def service_status(self, name):
@@ -217,7 +237,7 @@ class FakeWindows:
         current = (self.prefix / "current").read_text()
         if current in self.start_fails_for:
             return None
-        key = next(k for k in self.registry if k.startswith("SYSTEM"))
+        key = next(k for k, v in self.registry.items() if k.startswith("SYSTEM") and "Environment" in v)
         env = dict(v.split("=", 1) for v in self.registry[key]["Environment"])
         return {"version": current, "platform": env["NWPC_PLATFORM_ORIGIN"]}
 
@@ -260,7 +280,7 @@ def win(tmp_path, monkeypatch, request):
     service = getattr(request, "param", None)
     setup = Setup(tmp_path / "Program Files" / "PC", tmp_path / "ProgramData" / "NatureAIWorker" / "PC",
                   service=service, system=fake, say=lambda _m: None)
-    fake.prefix, fake.account_sid = setup.prefix, setup.sid
+    fake.prefix, fake.private_sid = setup.prefix, setup.sid
     # The runtime copy is the installer's own interpreter; emulate it without copying Python.
     def runtime():
         setup.runtime_python.parent.mkdir(parents=True, exist_ok=True)
@@ -654,3 +674,80 @@ def test_a_running_platform_client_process_is_residue(win, tmp_path):
     fake.platform_client_processes = lambda: ["4242 python.exe -I platform-client-service.py"]
     report = setup.uninstall(delete_local_data=True)
     assert report["checks"]["running_processes"] is False and report["processes"]
+
+
+# -- service identity before ACLs (native e2e: icacls exit 1332) -------------------------
+
+def test_the_service_is_registered_and_its_sid_verified_before_any_acl_names_it(win, tmp_path):
+    setup, fake, standalone = win
+    install(setup, standalone, tmp_path)
+    create = next(i for i, c in enumerate(fake.calls) if c[:2] == ["sc.exe", "create"])
+    sidtype = next(i for i, c in enumerate(fake.calls) if c[:2] == ["sc.exe", "sidtype"])
+    grant = next(i for i, c in enumerate(fake.calls) if c[0] == "icacls" and f"*{setup.sid}:(OI)(CI)M" in c)
+    assert create < sidtype < grant
+
+
+def test_granting_a_service_sid_before_the_service_exists_fails_like_windows(win):
+    setup, fake, _ = win
+    with pytest.raises(SetupError, match="1332"):
+        setup.provision_data_root()  # the order of the failed native run
+
+
+def test_a_sid_windows_maps_differently_is_never_granted(win, tmp_path):
+    setup, fake, standalone = win
+    fake.resolve_override = "S-1-5-80-1-2-3-4-5"
+    with pytest.raises(SetupError, match="not the expected"):
+        install(setup, standalone, tmp_path)
+    assert not any(c[0] == "icacls" and "/grant:r" in c and str(setup.data) in c for c in fake.calls)
+    assert fake.service is None  # the first installation removed the service it created
+
+
+def test_a_service_registered_under_another_account_is_refused(win, tmp_path, monkeypatch):
+    setup, fake, standalone = win
+    original = fake.run
+
+    def run(cmd, **kwargs):
+        result = original(cmd, **kwargs)
+        if fake.calls[-1][:2] == ["sc.exe", "create"]:
+            fake.registry[setup.service_key]["ObjectName"] = "LocalSystem"
+        return result
+    monkeypatch.setattr(fake, "run", run)
+    with pytest.raises(SetupError, match="LocalSystem"):
+        install(setup, standalone, tmp_path)
+
+
+def test_repair_restores_a_damaged_service_account_before_checking_it(win, tmp_path):
+    setup, fake, standalone = win
+    label = install(setup, standalone, tmp_path)
+    fake.registry[setup.service_key]["ObjectName"] = "LocalSystem"
+    fake.registry[setup.service_key]["ServiceSidType"] = 0
+    assert setup.repair() == label
+    assert fake.registry[setup.service_key]["ObjectName"] == setup.account
+    assert fake.registry[setup.service_key]["ServiceSidType"] == 1
+
+
+@windows_only
+def test_native_service_account_resolution():
+    from nature_worker.windows_security import WindowsSecurityError, lookup_account_sid
+    assert lookup_account_sid("NT SERVICE\\TrustedInstaller") == TRUSTED_INSTALLER == service_sid("TrustedInstaller")
+    with pytest.raises(WindowsSecurityError):  # an unregistered service has no account yet
+        lookup_account_sid("NT SERVICE\\NatureWorkerNoSuchService")
+
+
+@windows_only
+def test_native_least_privilege_acl_with_a_service_sid(tmp_path):
+    """The installer's icacls grants, applied for real to a registered service account."""
+    from nature_worker.config import current_user_sid
+    from nature_worker.windows_security import read_acl, system_tool
+    folder = tmp_path / "data"
+    folder.mkdir()
+    user = current_user_sid()
+    subprocess.run([system_tool("icacls.exe"), str(folder), "/inheritance:r", "/grant:r", f"*{user}:(OI)(CI)F",
+                    f"*{TRUSTED_INSTALLER}:(OI)(CI)M"], check=True, capture_output=True)
+    acl = read_acl(folder)
+    assert acl.protected and acl.grantees() == {user, TRUSTED_INSTALLER}
+    assert not acl.grantees() & {USERS, AUTH_USERS, EVERYONE}
+    unregistered = service_sid("NatureWorkerNoSuchService")
+    result = subprocess.run([system_tool("icacls.exe"), str(folder), "/grant", f"*{unregistered}:(OI)(CI)M"],
+                            capture_output=True, text=True)
+    assert result.returncode == 1332  # the native failure this ordering prevents

@@ -462,3 +462,49 @@ def test_native_snapshot_records_the_user_and_elevation(e2e, tmp_path):
     journal = (tmp_path / "e2e-journal.log").read_text(encoding="utf-8")
     token = current_token()
     assert f"Credential Manager as {token.user} (elevated {token.elevated})" in journal
+
+
+# -- upgrade history (e2e-4841: the engine recorded "succeeded", the e2e expected "success") -------
+
+# The entry the signed upgrade of e2e-4841 really wrote (upgrade\history.jsonl, Windows, 952960c).
+E2E_4841_ENTRY = {
+    "at": "2026-10-27T16:09:44-0400", "id": "20261027-160923-1fa5ab", "from": "0.1.0+g952960c745a7",
+    "to": "9.1.0", "edition": "platform_client", "phase": "verifying",
+    "manifest_sha256": "da9cc9ee93b8d0d2b9c3bd27fa3d886a113ad4a7c5ec486efb64d8582e43eced",
+    "signer_key_id": "16e60c1b376da399", "signer_scope": "local",
+    "backup": "C:\\ProgramData\\NatureAIWorkerE2E\\PlatformClient\\backups\\upgrade-20261027-160923-1fa5ab",
+    "started_at": 1793131763.1086924, "outcome": "succeeded",
+    "message": "Upgraded from 0.1.0+g952960c745a7 to 9.1.0. NatureWorkerPlatformClientE2E restarted. "
+               "Sign in to the Platform again."}
+
+
+def write_history(module, *entries):
+    history = module.E2E_PREFIX / "upgrade" / "history.jsonl"
+    history.parent.mkdir(parents=True, exist_ok=True)
+    history.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
+
+
+def test_the_real_signed_upgrade_history_entry_is_accepted(e2e, tmp_path):
+    module, _ = e2e
+    runner = module.E2E(tmp_path, None, "https://x.invalid")
+    write_history(module, {"outcome": "local_build_activated", "to": "0.1.0+g952960c745a7"}, E2E_4841_ENTRY)
+    assert runner.last_upgrade(module.SUCCEEDED, to="9.1.0") == E2E_4841_ENTRY
+    with pytest.raises(module.Check, match="expected outcome 'succeeded' to 9.3.0"):
+        runner.last_upgrade(module.SUCCEEDED, to="9.3.0")       # the version is checked too
+    with pytest.raises(module.Check, match="expected outcome 'rolled_back'"):
+        runner.last_upgrade(module.ROLLED_BACK)                 # only the newest entry counts
+    write_history(module)
+    with pytest.raises(module.Check, match="history is empty"):
+        runner.last_upgrade(module.SUCCEEDED)
+    runner.journal.close()
+
+
+def test_the_e2e_expects_only_outcomes_the_upgrade_engine_records(e2e):
+    module, _ = e2e
+    engine = (SCRIPT.parents[1] / "src" / "nature_worker" / "upgrade" / "engine.py").read_text(encoding="utf-8")
+    recorded = set(re.findall(r'_end\(state, "(\w+)"', engine)) | set(re.findall(r'"outcome": "(\w+)"', engine))
+    assert {module.SUCCEEDED, module.ROLLED_BACK, module.ROLLED_BACK_BY_USER} <= recorded
+    script = SCRIPT.read_text(encoding="utf-8")
+    # Every outcome the runner compares with is one of those constants, never a literal of its own.
+    assert not re.search(r'(get\("outcome"\)|\["outcome"\]) == ["\']', script)
+    assert "success" not in recorded

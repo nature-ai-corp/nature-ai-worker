@@ -91,6 +91,9 @@ ACTIVE_PATTERN = (r"platform_client_windows_e2e\.py|platform-client-windows\.py|
 WINDOWS_MANAGED_TARGET = re.compile(
     r"^(?:\w+:target=)?(?:MicrosoftAccount:|SSO_POP_(?:Device|User)|virtualapp/didlogical|WindowsLive:|"
     r"MicrosoftOffice\d*_Data:|OneDrive Cached Credential|XblGrts|XboxLive|Xbl\|)", re.IGNORECASE)
+# Outcomes the upgrade engine records in upgrade\history.jsonl (nature_worker/upgrade/engine.py,
+# Outcome.outcome): the e2e checks these exact values, never its own words for them.
+SUCCEEDED, ROLLED_BACK, ROLLED_BACK_BY_USER = "succeeded", "rolled_back", "rolled_back_by_user"
 CONSOLE_EVENTS = {0: "CTRL_C_EVENT (Ctrl+C)", 1: "CTRL_BREAK_EVENT (Ctrl+Break)",
                   2: "CTRL_CLOSE_EVENT (console window closed)", 5: "CTRL_LOGOFF_EVENT (user signs out)",
                   6: "CTRL_SHUTDOWN_EVENT (Windows shuts down or restarts)"}
@@ -293,6 +296,15 @@ class E2E:
     def history(self) -> list[dict]:
         path = self.prefix / "upgrade" / "history.jsonl"
         return [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+    def last_upgrade(self, outcome: str, *, to: str | None = None) -> dict:
+        """The newest history entry, which must record ``outcome`` (and the version it went to)."""
+        history = self.history()
+        expect(history, "the upgrade history is empty")
+        last = history[-1]
+        expect(last.get("outcome") == outcome and (to is None or last.get("to") == to),
+               f"history: expected outcome {outcome!r}" + (f" to {to}" if to else "") + f", got {last}")
+        return last
 
     def service_process(self) -> dict:
         script = ("$ProgressPreference = 'SilentlyContinue'; "
@@ -548,17 +560,17 @@ class E2E:
         expect(result.returncode == 0, f"upgrade failed: {result.stdout[-1500:]}{result.stderr[-1500:]}")
         self.wait_version("9.1.0")
         self.assert_isolated()
-        expect(self.history()[-1].get("outcome") == "success", f"history {self.history()[-1]}")
+        last = self.last_upgrade(SUCCEEDED, to="9.1.0")
+        expect(last.get("from") == self.label, f"history: upgraded from {last.get('from')}, not {self.label}")
         self.note(f"{self.label} -> 9.1.0 (signed by a locally trusted key): service restarted on 9.1.0, same "
-                  "account, data still private, history 'success'")
+                  f"account, data still private, history '{SUCCEEDED}' from {self.label}")
 
     def s_failed_upgrade_rolls_back(self) -> None:
         result = self.upgrader("upgrade", "--bundle", self.bundles["9.2.0"], "--confirm-version", "9.2.0")
         expect(result.returncode == 1, f"expected exit 1, got {result.returncode}: {result.stdout[-800:]}")
         expect(self.current() == "9.1.0", f"current is {self.current()}")
         self.wait_version("9.1.0")
-        last = self.history()[-1]
-        expect(last.get("outcome") == "rolled_back", f"history {last}")
+        last = self.last_upgrade(ROLLED_BACK, to="9.2.0")
         self.note(f"9.2.0 (service exits at start): exit 1, outcome rolled_back, failed phase "
                   f"{last.get('failed_phase')}; 9.1.0 serving again")
 
@@ -594,24 +606,27 @@ class E2E:
             self.journal(f"child {proc.pid} killed on purpose, exit {proc.returncode}")
         status = self.upgrader("status")
         expect("UNFINISHED" in status.stdout, "status does not report the unfinished upgrade")
+        # Killed while verifying, the data is already migrated: recovery verifies 9.3.0 again and
+        # completes the upgrade if it works (engine.recover, as scripts/upgrade_e2e.py checks on Linux).
         recovered = self.upgrader("recover", "--confirm")
         expect(recovered.returncode == 0, f"recover failed: {recovered.stdout[-800:]}")
-        expect(self.current() == "9.1.0", f"after recover: {self.current()}")
-        self.wait_version("9.1.0")
-        self.assert_isolated()
-        self.note("upgrader killed during 'verifying' -> status UNFINISHED -> recover --confirm: 9.1.0 active "
-                  "and serving, permissions intact")
-        result = self.upgrader("upgrade", "--bundle", self.bundles["9.3.0"], "--confirm-version", "9.3.0")
-        expect(result.returncode == 0, f"upgrade after recovery failed: {result.stdout[-800:]}")
+        expect(self.current() == "9.3.0", f"after recover: {self.current()}")
+        expect(not state_file.exists(), "recovery left upgrade\\state.json behind")
         self.wait_version("9.3.0")
-        self.note("upgrade to 9.3.0 after recovery: success")
+        self.assert_isolated()
+        self.last_upgrade(SUCCEEDED, to="9.3.0")
+        self.note("upgrader killed during 'verifying' -> status UNFINISHED -> recover --confirm re-verified 9.3.0 "
+                  f"and completed the upgrade (history '{SUCCEEDED}'): 9.3.0 serving, permissions intact")
 
     def s_user_rollback(self) -> None:
         result = self.run([self.prefix / "bin" / "nature-worker-upgrade.cmd", "rollback", "--confirm"])
         expect(result.returncode == 0, f"rollback failed: {result.stdout[-800:]}")
         expect(self.current() == "9.1.0", f"current {self.current()}")
         self.wait_version("9.1.0")
-        self.note("user rollback 9.3.0 -> 9.1.0: service serving 9.1.0")
+        self.assert_isolated()
+        self.last_upgrade(ROLLED_BACK_BY_USER, to="9.1.0")
+        self.note(f"user rollback 9.3.0 -> 9.1.0 (history '{ROLLED_BACK_BY_USER}'): service serving 9.1.0, "
+                  "permissions intact")
 
     def s_uninstall_keeps_data_then_reinstall(self) -> None:
         marker = self.data / "e2e-kept.txt"

@@ -306,12 +306,14 @@ def source_archive(tmp_path, commit="a" * 40, version="0.2.0"):
 
 
 @pytest.fixture
-def win(tmp_path, monkeypatch, request):
+def win(tmp_path, tmp_path_factory, monkeypatch, request):
     monkeypatch.setattr(windows_setup, "start_menu", lambda: tmp_path / "start")
     monkeypatch.delenv("NATURE_WORKER_INSTALL_PREFIX", raising=False)
-    monkeypatch.setenv("SystemRoot", str(tmp_path))
-    monkeypatch.setattr(windows_profile, "profiles_root", lambda: tmp_path / "ServiceProfiles")
+    profiles = short_profiles_root(tmp_path_factory)
+    monkeypatch.setenv("SystemRoot", str(profiles.parent))  # ProfileList: %SystemRoot%\ServiceProfiles\...
+    monkeypatch.setattr(windows_profile, "profiles_root", lambda: profiles)
     fake = FakeWindows(tmp_path)
+    fake.profiles = profiles
     service = getattr(request, "param", None)
     setup = Setup(tmp_path / "Program Files" / "PC", tmp_path / "ProgramData" / "NatureAIWorker" / "PC",
                   service=service, system=fake, say=lambda _m: None)
@@ -582,9 +584,27 @@ OBSERVED_PROFILE = json.loads((Path(__file__).parent / "data" / "windows_service
                               .read_text(encoding="utf-8"))
 
 
+# Windows' MAX_PATH: 259 characters plus the terminating NUL, unless long paths are enabled.
+MAX_PATH = 260
+
+
+def short_profiles_root(tmp_path_factory):
+    """A short folder for synthetic service profiles (never the real ServiceProfiles). Under
+    tmp_path (pytest's per-test folder, named after the test) the observed profile's longest file,
+    126 characters below the profile, reached 261 characters natively and could not be created."""
+    root = tmp_path_factory.mktemp("sr") / "ServiceProfiles"
+    assert windows_profile.profiles_root() not in (root, *root.parents)
+    root.mkdir()
+    return root
+
+
 def build_observed_profile(profile, make_link):
     """The observed profile, rebuilt: every file (sizes shortened), folder and junction, each
     junction pointing to the folder Windows points it to."""
+    too_long = [e for e in OBSERVED_PROFILE["entries"]
+                if len(str(profile.joinpath(*PureWindowsPath(e.rpartition(" (")[0]).parts))) >= MAX_PATH]
+    if too_long:
+        raise ValueError(f"{profile} is too deep for Windows' MAX_PATH ({MAX_PATH}): {too_long[0]}")
     for folder in OBSERVED_PROFILE["empty_folders"]:
         (profile / folder).mkdir(parents=True, exist_ok=True)
     links = []
@@ -601,6 +621,19 @@ def build_observed_profile(profile, make_link):
         target.mkdir(parents=True, exist_ok=True)
         make_link(target, path)
     return len(links)
+
+
+def test_observed_profile_fixture_fits_windows_max_path(tmp_path_factory):
+    """Regression (native run at 39ab6bb: 11 FileNotFoundError): every observed path fits MAX_PATH
+    under the fixtures' root, and a root too deep is refused with the reason, not FileNotFoundError."""
+    root = short_profiles_root(tmp_path_factory) / "NatureWorkerPlatformClient"
+    longest = max(len(str(root.joinpath(*PureWindowsPath(e.rpartition(" (")[0]).parts)))
+                  for e in OBSERVED_PROFILE["entries"])
+    assert longest < MAX_PATH
+    deep = root / ("d" * (MAX_PATH - len(str(root)) - 120))
+    with pytest.raises(ValueError, match="too deep for Windows' MAX_PATH"):
+        build_observed_profile(deep, symlink)
+    assert not deep.exists()  # refused before creating anything
 
 
 def symlink(target, path):
@@ -951,8 +984,9 @@ def junction(target, path):
 
 
 @windows_only
-def test_native_observed_profile_with_real_junctions_is_windows_standard(tmp_path):
+def test_native_observed_profile_with_real_junctions_is_windows_standard(tmp_path_factory):
     sid = service_sid("NatureWorkerPlatformClientE2E")
+    tmp_path = short_profiles_root(tmp_path_factory)
     profile = tmp_path / "NatureWorkerPlatformClientE2E"
     profile.mkdir()
     assert build_observed_profile(profile, junction) == 17

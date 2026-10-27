@@ -325,7 +325,7 @@ class E2E:
         wheel.write_bytes(bytes(content))
         self.bundles["tampered"] = tampered
         result = self.upgrader("upgrade", "--bundle", self.bundles["9.1.0"], "--confirm-version", "9.1.0")
-        expect(result.returncode == 0, f"upgrade failed: {result.stdout[-1500:]}")
+        expect(result.returncode == 0, f"upgrade failed: {result.stdout[-1500:]}{result.stderr[-1500:]}")
         self.wait_version("9.1.0")
         self.assert_isolated()
         expect(self.history()[-1].get("outcome") == "success", f"history {self.history()[-1]}")
@@ -404,7 +404,7 @@ class E2E:
                   "Standalone reinstall while data remains")
         result = self.setup_cmd("install", "--origin", self.origin, "--standalone-data", self.standalone,
                                 "--port", self.port, "--archive", self.archive)
-        expect(result.returncode == 0, f"reinstall failed: {result.stdout[-1500:]}")
+        expect(result.returncode == 0, f"reinstall failed: {result.stdout[-1500:]}{result.stderr[-1500:]}")
         self.wait_version(self.current())
         self.assert_isolated()
         expect(marker.exists(), "reinstall lost the kept data")

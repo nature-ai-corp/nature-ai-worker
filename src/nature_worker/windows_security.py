@@ -196,6 +196,51 @@ def read_acl(path: Path) -> Acl:
         kernel32.LocalFree(sd)
 
 
+FILE_ALL_ACCESS = 0x1F01FF
+FILE_MODIFY = 0x1301BF
+
+
+def protected_dacl_sddl(owner: str, grants: list[tuple[str, int]]) -> str:
+    """Owner plus a protected DACL holding exactly ``grants``, inherited by everything inside."""
+    for sid in (owner, *(g[0] for g in grants)):
+        if not sid.startswith("S-1-") or not all(part.isdigit() for part in sid[4:].split("-")):
+            raise WindowsSecurityError(f"Invalid SID {sid!r}")
+    return f"O:{owner}D:PAI" + "".join(f"(A;OICI;0x{mask:x};;;{sid})" for sid, mask in grants)
+
+
+def set_protected_dacl(path: Path, owner: str, grants: list[tuple[str, int]]) -> None:
+    """Replace the owner and the whole DACL of ``path`` in one call (SetNamedSecurityInfoW).
+    Every other entry, explicit or inherited, is gone afterwards; nothing is looked up by name."""
+    _require_windows()
+    ctypes, wintypes, advapi32, kernel32 = _api()
+    sd = ctypes.c_void_p()
+    advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+    if not advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            protected_dacl_sddl(owner, grants), 1, ctypes.byref(sd), None):
+        raise WindowsSecurityError(f"Invalid security descriptor ({ctypes.get_last_error()})")
+    try:
+        owner_sid, dacl = ctypes.c_void_p(), ctypes.c_void_p()
+        defaulted, present = wintypes.BOOL(), wintypes.BOOL()
+        advapi32.GetSecurityDescriptorOwner.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
+                                                        ctypes.POINTER(wintypes.BOOL)]
+        advapi32.GetSecurityDescriptorDacl.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.BOOL),
+                                                       ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.BOOL)]
+        if not (advapi32.GetSecurityDescriptorOwner(sd, ctypes.byref(owner_sid), ctypes.byref(defaulted)) and
+                advapi32.GetSecurityDescriptorDacl(sd, ctypes.byref(present), ctypes.byref(dacl),
+                                                   ctypes.byref(defaulted))):
+            raise WindowsSecurityError(f"Cannot read the new security descriptor ({ctypes.get_last_error()})")
+        advapi32.SetNamedSecurityInfoW.argtypes = [wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD, ctypes.c_void_p,
+                                                   ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+        advapi32.SetNamedSecurityInfoW.restype = wintypes.DWORD
+        # SE_FILE_OBJECT; OWNER | DACL | PROTECTED_DACL_SECURITY_INFORMATION
+        err = advapi32.SetNamedSecurityInfoW(str(path), 1, 0x1 | 0x4 | 0x80000000, owner_sid, None, dacl, None)
+        if err:
+            raise WindowsSecurityError(f"Cannot set the permissions of {path} (error {err})")
+    finally:
+        kernel32.LocalFree(sd)
+
+
 def lookup_account_sid(name: str) -> str:
     """The SID Windows itself maps ``name`` to (LookupAccountNameW). ``NT SERVICE\\<service>``
     resolves only while that service is registered with the Service Control Manager."""

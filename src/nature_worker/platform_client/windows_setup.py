@@ -45,8 +45,8 @@ from ..build_identity import build_mismatch
 from ..installation_mode import PLATFORM_CLIENT, ModeError, read_mode
 from ..install_gate import CleanEvidence, standalone_install_decision
 from ..windows_security import (
-    ADMINISTRATORS, MACHINE_ADMINS, SYSTEM, Acl, WindowsSecurityError, admin_only_problems,
-    private_problems, service_sid, system_tool,
+    ADMINISTRATORS, FILE_ALL_ACCESS, FILE_MODIFY, MACHINE_ADMINS, SYSTEM, Acl, WindowsSecurityError,
+    admin_only_problems, private_problems, service_sid, system_tool,
 )
 from .winservice import SERVICE_NAME, service_log
 
@@ -123,6 +123,13 @@ class WindowsSystem:
         if check and result.returncode != 0:
             raise SetupError(command_failure(command, result))
         return result
+
+    def set_protected_dacl(self, path: Path, owner: str, grants: list[tuple[str, int]]) -> None:
+        from ..windows_security import set_protected_dacl
+        try:
+            set_protected_dacl(path, owner, grants)
+        except WindowsSecurityError as exc:
+            raise SetupError(str(exc)) from exc
 
     def account_sid(self, name: str) -> str:
         from ..windows_security import lookup_account_sid
@@ -437,16 +444,20 @@ class Setup:
                          "--no-input", "--no-deps", str(src)], env=env)
 
     def provision_data_root(self) -> None:
-        """Parent: administrators only. Data root: also the service account (modify), nothing else."""
+        """Parent: administrators only. Data root: also the service account (modify), nothing else.
+
+        The whole DACL is replaced in one call, so an entry someone added (e.g. Users) is removed;
+        granting with icacls /grant:r only replaces the entries of the principals it names. The
+        caller has verified administrator rights, the installation record, the data root's owner
+        and that neither folder is a link."""
         parent = self.data.parent
         self.data.mkdir(parents=True, exist_ok=True)
-        icacls = [system_tool("icacls.exe")]
-        self.system.run([*icacls, str(parent), "/setowner", f"*{ADMINISTRATORS}"])
-        self.system.run([*icacls, str(parent), "/inheritance:r", "/grant:r",
-                         f"*{SYSTEM}:(OI)(CI)F", f"*{ADMINISTRATORS}:(OI)(CI)F"])
-        self.system.run([*icacls, str(self.data), "/setowner", f"*{ADMINISTRATORS}"])
-        self.system.run([*icacls, str(self.data), "/inheritance:r", "/grant:r",
-                         f"*{SYSTEM}:(OI)(CI)F", f"*{ADMINISTRATORS}:(OI)(CI)F", f"*{self.sid}:(OI)(CI)M"])
+        for path in (parent, self.data):
+            if self.system.is_link(path):
+                raise SetupError(f"{path} is a link or junction; refusing.")
+        admins = [(SYSTEM, FILE_ALL_ACCESS), (ADMINISTRATORS, FILE_ALL_ACCESS)]
+        self.system.set_protected_dacl(parent, ADMINISTRATORS, admins)
+        self.system.set_protected_dacl(self.data, ADMINISTRATORS, [*admins, (self.sid, FILE_MODIFY)])
         self.reset_children(self.data)
         problems = private_problems(self.system.read_acl(self.data), self.sid)
         if problems:

@@ -213,6 +213,10 @@ class FakeWindows:
             self.registry.pop(rf"SYSTEM\CurrentControlSet\Services\{cmd[2]}", None)
         return subprocess.CompletedProcess(cmd, 0, out, "")
 
+    def set_protected_dacl(self, path, owner, grants):
+        self.calls.append(["set_protected_dacl", str(path), owner, *[f"{sid}:{mask:#x}" for sid, mask in grants]])
+        self.acls[Path(path)] = Acl(owner, True, tuple(Ace(sid, mask, flags=3) for sid, mask in grants))
+
     def account_sid(self, name):
         if self.service is None:
             raise SetupError(f"Windows cannot resolve the account {name} (error 1332)")
@@ -317,9 +321,8 @@ def test_install_creates_an_isolated_service_installation(win, tmp_path):
     assert f'"{setup.runtime_python}" -I "{setup.prefix / "bin" / "platform-client-service.py"}"' in create
     assert ["sc.exe", "privs", "NatureWorkerPlatformClient", "SeChangeNotifyPrivilege"] in sc
     assert ["sc.exe", "sidtype", "NatureWorkerPlatformClient", "unrestricted"] in sc
-    grant = next(c for c in fake.calls if c[0] == "icacls" and c[1] == str(setup.data) and "/grant:r" in c)
-    assert "/inheritance:r" in grant and f"*{SVC}:(OI)(CI)M" in grant
-    assert not any(USERS in arg or USER in arg for arg in grant)
+    grant = next(c for c in fake.calls if c[0] == "set_protected_dacl" and c[1] == str(setup.data))
+    assert grant[2:] == [ADMINISTRATORS, f"{SYSTEM}:0x1f01ff", f"{ADMINISTRATORS}:0x1f01ff", f"{SVC}:0x1301bf"]
     env = dict(v.split("=", 1) for v in fake.registry[setup.service_key]["Environment"])
     assert env["NWPC_STANDALONE_SID"] == USER and env["NWPC_DATA_DIR"] == str(setup.data)
     assert env["NWPC_HOST"] == "127.0.0.1" and env["NWPC_PORT"] == "8090"
@@ -408,7 +411,7 @@ def test_repair_reapplies_everything_but_keeps_version_origin_and_data(win, tmp_
     fake.calls.clear()
     assert setup.repair() == label
     assert any(c[:2] == ["sc.exe", "config"] for c in fake.calls)
-    assert any(c[0] == "icacls" and "/inheritance:r" in c for c in fake.calls)
+    assert any(c[0] == "set_protected_dacl" and c[1] == str(setup.data) for c in fake.calls)
     env = dict(v.split("=", 1) for v in fake.registry[setup.service_key]["Environment"])
     assert env["NWPC_PLATFORM_ORIGIN"] == "https://platform.example"
     assert (setup.data / "conversations.json").read_text() == "kept"
@@ -691,14 +694,14 @@ def test_the_service_is_registered_and_its_sid_verified_before_any_acl_names_it(
     install(setup, standalone, tmp_path)
     create = next(i for i, c in enumerate(fake.calls) if c[:2] == ["sc.exe", "create"])
     sidtype = next(i for i, c in enumerate(fake.calls) if c[:2] == ["sc.exe", "sidtype"])
-    grant = next(i for i, c in enumerate(fake.calls) if c[0] == "icacls" and f"*{setup.sid}:(OI)(CI)M" in c)
+    grant = next(i for i, c in enumerate(fake.calls) if c[0] == "set_protected_dacl" and f"{setup.sid}:0x1301bf" in c)
     assert create < sidtype < grant
 
 
 def test_granting_a_service_sid_before_the_service_exists_fails_like_windows(win):
     setup, fake, _ = win
-    with pytest.raises(SetupError, match="1332"):
-        setup.provision_data_root()  # the order of the failed native run
+    with pytest.raises(SetupError):
+        setup.verify_service_identity()  # nothing may name the SID before the service is registered
 
 
 def test_a_sid_windows_maps_differently_is_never_granted(win, tmp_path):
@@ -706,7 +709,7 @@ def test_a_sid_windows_maps_differently_is_never_granted(win, tmp_path):
     fake.resolve_override = "S-1-5-80-1-2-3-4-5"
     with pytest.raises(SetupError, match="not the expected"):
         install(setup, standalone, tmp_path)
-    assert not any(c[0] == "icacls" and "/grant:r" in c and str(setup.data) in c for c in fake.calls)
+    assert not any(c[0] == "set_protected_dacl" and c[1] == str(setup.data) for c in fake.calls)
     assert fake.service is None  # the first installation removed the service it created
 
 
@@ -829,3 +832,44 @@ def test_status_reports_the_installed_build(tmp_path, monkeypatch):
 def nature_worker_version():
     import nature_worker
     return nature_worker.__version__
+
+
+def test_repair_removes_an_added_users_entry_and_revalidates(win, tmp_path):
+    """Native e2e (f119259): repair refused because icacls /grant:r kept the added Users entry."""
+    setup, fake, standalone = win
+    install(setup, standalone, tmp_path)
+    fake.acls[setup.data] = private_acl(setup.sid, Ace(USERS, READ, flags=3))
+    setup.repair()
+    acl = fake.read_acl(setup.data)
+    assert private_problems(acl, setup.sid) == [] and USERS not in acl.grantees()
+
+
+def test_reinstall_over_retained_data_with_a_damaged_acl_restores_it(win, tmp_path):
+    setup, fake, standalone = win
+    install(setup, standalone, tmp_path)
+    setup.uninstall(delete_local_data=False)
+    fake.acls[setup.data] = private_acl(setup.sid, Ace(USERS, READ, flags=3))
+    install(setup, standalone, tmp_path, archive=source_archive(tmp_path, "d" * 40))
+    assert USERS not in fake.read_acl(setup.data).grantees()
+
+
+def test_protected_dacl_sddl_is_exact():
+    from nature_worker.windows_security import WindowsSecurityError, protected_dacl_sddl
+    assert protected_dacl_sddl(ADMINISTRATORS, [(SYSTEM, 0x1F01FF), (SVC, 0x1301BF)]) == \
+        f"O:{ADMINISTRATORS}D:PAI(A;OICI;0x1f01ff;;;{SYSTEM})(A;OICI;0x1301bf;;;{SVC})"
+    with pytest.raises(WindowsSecurityError):
+        protected_dacl_sddl("S-1-5-32-544)(A;;FA;;;WD", [])
+
+
+@windows_only
+def test_native_dacl_replacement_removes_foreign_entries(tmp_path):
+    from nature_worker.config import current_user_sid
+    from nature_worker.windows_security import read_acl, set_protected_dacl, system_tool
+    folder = tmp_path / "data"
+    folder.mkdir()
+    subprocess.run([system_tool("icacls.exe"), str(folder), "/grant", f"*{USERS}:(OI)(CI)R"], check=True,
+                   capture_output=True)
+    user = current_user_sid()
+    set_protected_dacl(folder, user, [(user, 0x1F01FF), (TRUSTED_INSTALLER, 0x1301BF)])
+    acl = read_acl(folder)
+    assert acl.protected and acl.grantees() == {user, TRUSTED_INSTALLER}

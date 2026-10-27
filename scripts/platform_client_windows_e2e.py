@@ -271,10 +271,13 @@ class E2E:
         self.journal(f"service account profile: {json.dumps(summary)}")
         expect(not summary["credential_files"],
                f"the service account stored Credential Manager files: {summary['credential_files']}")
-        expect(not summary["other_data"], f"the service account profile holds data: {summary['other_data']}")
+        expect(not summary["other_data"], f"the service account profile holds files Windows does not create: "
+               f"{summary['other_data']}")
+        expect(not summary.get("bad_links"), f"the service account profile holds links that are not Windows' own "
+               f"junctions: {summary.get('bad_links')}")
         self.note(f"service account profile {summary['path']}: "
-                  + (f"kept by Windows ({summary['file_count']} files, names in e2e-journal.log), no credential "
-                     f"files, no data; DPAPI master keys: {len(summary['dpapi_master_keys'])}; "
+                  + (f"kept by Windows ({summary['file_count']} entries, names in e2e-journal.log), no credential "
+                     f"files, only Windows-standard files and junctions; DPAPI master keys: {len(summary['dpapi_master_keys'])}; "
                      f"removable on request: {summary['removable']}" if summary["exists"] else "not created"))
         return summary
 

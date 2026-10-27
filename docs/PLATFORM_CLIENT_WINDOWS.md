@@ -92,11 +92,14 @@ Data-root work runs as the administrator. Files it creates inherit the data root
   - Keeps the service account's Windows profile and says so (see below); `--remove-service-profile` removes it.
   - Started from Apps & Features, it continues from a temporary copy in a new window, because files in use cannot be deleted.
 - **Service account profile.** Windows creates `%SystemRoot%\ServiceProfiles\<service>` for the virtual account on the service's first start, registers it in `ProfileList` under the service SID, and keeps it when the service is deleted. The Platform Client stores nothing there itself. Uninstall lists its files (names and sizes; contents are never read). With `--remove-service-profile` it is removed by Windows' own `DeleteProfileW`, never by deleting files, and only if all of these hold, otherwise it is kept and the uninstall reports why:
-  - the service is deleted and the profile's registry hive is not loaded;
+  - the service is deleted and the profile's registry hive is not loaded. Windows was seen keeping it loaded after the service was deleted; restart Windows first;
   - `ProfileList` has an entry for exactly this service's SID, naming exactly `%SystemRoot%\ServiceProfiles\<service>`; no other folder, and no other `ServiceProfiles` entry, is ever considered;
-  - the folder is not a link or junction, is owned by the service account, SYSTEM or Administrators, and grants the service account access;
-  - it holds no Credential Manager file and nothing outside what Windows creates (`NTUSER.DAT*`, `ntuser.ini`, `AppData`);
+  - the folder is not a link or junction, is owned by the service account, SYSTEM or Administrators (observed: Administrators), and grants the service account access;
+  - it holds no Credential Manager file, and every file is one Windows creates. These come from the Default profile and the account's registry hives: `NTUSER.DAT*`, `ntuser.ini`, `UsrClass.dat*`, `DefaultLayouts.xml`, the default shortcuts in WinX, Quick Launch, SendTo and Start Menu\Programs, and `desktop.ini` files. Standard folders such as Desktop, Documents, Downloads or OneDrive may exist, but may hold nothing else. Any other file, anywhere, blocks removal;
+  - every link is one of Windows' compatibility junctions (`Application Data`, `My Documents`, `Documents\My Music`, ...), pointing to its own folder in this profile. Any other link, or one pointing elsewhere, blocks removal. Links are never followed;
   - it holds no DPAPI master keys while the data root is kept (anything DPAPI-protected by the account would become unreadable).
+
+  An ordinary uninstall never depends on this: a profile that cannot be removed or inspected is kept and reported, and the uninstall still succeeds. A kept profile is not Worker residue for clean validation. A later installation of the same service reuses it, because Windows maps it to the same service SID.
 - **Clean validation.** After uninstall, an independent check reports each probe:
   - credentials: verified only if the service account's profile, the one place its Credential Manager entries could be, holds no credential file (unverified if it cannot be read);
   - running Platform Client processes, by command line through CIM;

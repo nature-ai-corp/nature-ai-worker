@@ -507,7 +507,7 @@ def other_data(profile):
 @pytest.mark.parametrize("damage, reason, os_credentials", [
     (credential_file, "Credential Manager file", False),
     (dpapi_key, "DPAPI master keys and the data root is kept", True),
-    (other_data, "data outside what Windows creates: Documents", True),
+    (other_data, "files Windows does not create: Documents", True),
 ])
 def test_remove_service_profile_refuses_meaningful_state(win, tmp_path, damage, reason, os_credentials):
     setup, fake, standalone = win
@@ -576,20 +576,132 @@ def test_remove_service_profile_refuses_a_linked_profile_folder(win, tmp_path):
     assert (target / "NTUSER.DAT").exists()
 
 
-def test_service_profile_links_inside_are_listed_not_followed(win, tmp_path):
-    setup, fake, standalone = win
-    install(setup, standalone, tmp_path)
-    outside = tmp_path / "outside"
-    (outside / "Documents").mkdir(parents=True)
-    (outside / "Documents" / "keep.txt").write_text("not ours")
+# The profile Windows really created for the e2e service (native inspection at 8fa4a0f): standard
+# empty folders, desktop.ini files, compatibility junctions, registry hives and default shortcuts.
+OBSERVED_PROFILE = json.loads((Path(__file__).parent / "data" / "windows_service_profile_e2e.json")
+                              .read_text(encoding="utf-8"))
+
+
+def build_observed_profile(profile, make_link):
+    """The observed profile, rebuilt: every file (sizes shortened), folder and junction, each
+    junction pointing to the folder Windows points it to."""
+    for folder in OBSERVED_PROFILE["empty_folders"]:
+        (profile / folder).mkdir(parents=True, exist_ok=True)
+    links = []
+    for entry in OBSERVED_PROFILE["entries"]:
+        rel, _, kind = entry.rpartition(" (")
+        path = profile.joinpath(*PureWindowsPath(rel).parts)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if kind == "link, not followed)":
+            links.append((rel, path))
+        else:
+            path.write_bytes(b"\0" * min(int(kind.split()[0]), 16))
+    for rel, path in links:
+        target = profile.joinpath(*windows_profile._WINDOWS_LINKS[rel.lower().replace("\\", "/")].split("/"))
+        target.mkdir(parents=True, exist_ok=True)
+        make_link(target, path)
+    return len(links)
+
+
+def symlink(target, path):
     try:
-        os.symlink(outside, profile_of(setup, fake) / "AppData" / "Application Data", target_is_directory=True)
+        os.symlink(target, path, target_is_directory=True)
     except OSError:
         pytest.skip("symbolic links not permitted")
-    profile = setup.service_profile()
-    assert any("(link, not followed)" in f for f in profile.files)
-    assert not any("keep.txt" in f for f in profile.files)
-    assert profile.problems == [f"service {setup.service} is still registered"]  # the link is no problem
+
+
+@pytest.fixture
+def observed(win, tmp_path):
+    setup, fake, standalone = win
+    install(setup, standalone, tmp_path)
+    profile = profile_of(setup, fake)
+    shutil.rmtree(profile)
+    profile.mkdir()
+    assert build_observed_profile(profile, symlink) == 17
+    return setup, fake, profile
+
+
+def test_the_observed_windows_profile_is_all_windows_standard(observed):
+    setup, fake, profile = observed
+    setup.uninstall(delete_local_data=True)
+    inspected = setup.service_profile()
+    assert inspected.other_data == [] and inspected.bad_links == [] and inspected.problems == []
+    assert sum("(link, not followed)" in f for f in inspected.files) == 17
+    # Desktop, Documents, Downloads, ... exist and are empty: standard, not data.
+    assert all((profile / folder).is_dir() for folder in ("Desktop", "Documents", "Downloads", "Saved Games"))
+
+
+def test_the_observed_profile_is_removed_on_request_once_its_hive_is_unloaded(observed):
+    setup, fake, profile = observed
+    fake.loaded_hives.add(setup.sid)  # as observed natively after the service was deleted
+    report = setup.uninstall(delete_local_data=True, remove_service_profile=True)
+    assert report["service_profile"]["problems"] == [
+        "Windows has its registry hive loaded (restart Windows, then try again)"]
+    assert profile.is_dir() and not any(c[0] == "DeleteProfileW" for c in fake.calls)
+    fake.loaded_hives.clear()  # after a restart
+    report = setup.uninstall(delete_local_data=True, remove_service_profile=True)
+    assert report["failures"] == [] and ["DeleteProfileW", setup.sid] in fake.calls and not profile.exists()
+
+
+@pytest.mark.parametrize("rel, reason", [
+    ("Documents/notes.txt", "files Windows does not create: Documents"),
+    ("Desktop/report.pdf", "files Windows does not create: Desktop"),
+    ("AppData/Local/Temp/nwpc.tmp", "files Windows does not create: AppData"),
+    ("AppData/Roaming/Vendor/settings.json", "files Windows does not create: AppData"),
+    ("notes.txt", "files Windows does not create: notes.txt"),
+])
+def test_a_file_windows_does_not_create_blocks_removal(observed, rel, reason):
+    setup, fake, profile = observed
+    path = profile.joinpath(*rel.split("/"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("x")
+    report = setup.uninstall(delete_local_data=True, remove_service_profile=True)
+    assert any(reason in f for f in report["failures"]), report["failures"]
+    assert not any(c[0] == "DeleteProfileW" for c in fake.calls) and (profile / "NTUSER.DAT").exists()
+
+
+@pytest.mark.parametrize("link, target", [
+    ("Documents/My Music", "outside"),          # a Windows junction name, pointing out of the profile
+    ("Documents/My Music", "Documents"),        # pointing to the wrong folder of the profile
+    ("Desktop/shortcut", "Music"),              # not a Windows junction at all
+])
+def test_a_link_that_is_not_windows_own_junction_blocks_removal(observed, tmp_path, link, target):
+    setup, fake, profile = observed
+    path = profile.joinpath(*link.split("/"))
+    if path.is_symlink():
+        path.unlink()
+    destination = tmp_path / "outside" if target == "outside" else profile / target
+    destination.mkdir(exist_ok=True)
+    symlink(destination, path)
+    report = setup.uninstall(delete_local_data=True, remove_service_profile=True)
+    assert any("not Windows' own junctions" in f and Path(link).name in f for f in report["failures"])
+    assert not any(c[0] == "DeleteProfileW" for c in fake.calls)
+
+
+def test_a_kept_profile_never_fails_an_ordinary_uninstall_or_blocks_a_new_installation(observed, tmp_path):
+    setup, fake, profile = observed
+    (profile / "Documents" / "notes.txt").write_text("someone's")  # not removable
+    fake.loaded_hives.add(setup.sid)
+    report = setup.uninstall(delete_local_data=True)
+    assert report["failures"] == [] and report["service_profile"]["removable"] is False
+    # Kept profiles are no residue of the Worker: credentials verified, locations clean.
+    assert report["checks"]["os_credentials"] is True and report["checks"]["other_app_locations"] is True
+    standalone = tmp_path / "Standalone"
+    install(setup, standalone, tmp_path)  # Windows reuses the profile for the same service SID
+    assert fake.service == 4 and (profile / "Documents" / "notes.txt").read_text() == "someone's"
+
+
+def test_an_inspection_that_fails_never_fails_the_uninstall(win, tmp_path):
+    setup, fake, standalone = win
+    install(setup, standalone, tmp_path)
+
+    def denied(_sid):
+        raise PermissionError(5, "Access is denied")
+    fake.user_hive_loaded = denied
+    report = setup.uninstall(delete_local_data=True, remove_service_profile=True)
+    assert not setup.prefix.exists() and not setup.data.exists()
+    assert any("cannot be read" in f for f in report["failures"])
+    assert not any(c[0] == "DeleteProfileW" for c in fake.calls)
 
 
 def test_remove_service_profile_is_refused_while_the_service_is_registered(win, tmp_path):
@@ -809,6 +921,76 @@ def test_native_service_profile_inspection_is_read_only():
     assert profile.problems  # loaded, or unreadable without elevation: never removable
     assert profile.unreadable or profile.loaded
     assert ctypes.WinDLL("userenv").DeleteProfileW  # the Windows API the removal uses exists
+
+
+class NativeProfileSystem(windows_setup.WindowsSystem):
+    """The real file system, links and junctions; the profile's registration, owner and hive
+    state as Windows reported them for the e2e profile. Never deletes anything."""
+
+    def __init__(self, root, sid):
+        self.root, self.sid = root, sid
+
+    def get_registry(self, key, name):
+        if key.endswith(self.sid) and name == "ProfileImagePath":
+            return str(self.root / "NatureWorkerPlatformClientE2E")
+        return None
+
+    def read_acl(self, path):
+        return Acl(OBSERVED_PROFILE["owner"], True, (Ace(SYSTEM, FULL), Ace(ADMINISTRATORS, FULL), Ace(self.sid, FULL)))
+
+    def user_hive_loaded(self, sid):
+        return False
+
+    def delete_profile(self, sid):
+        raise AssertionError("an inspection must never delete")
+
+
+def junction(target, path):
+    import _winapi
+    _winapi.CreateJunction(str(target), str(path))
+
+
+@windows_only
+def test_native_observed_profile_with_real_junctions_is_windows_standard(tmp_path):
+    sid = service_sid("NatureWorkerPlatformClientE2E")
+    profile = tmp_path / "NatureWorkerPlatformClientE2E"
+    profile.mkdir()
+    assert build_observed_profile(profile, junction) == 17
+    system = NativeProfileSystem(tmp_path, sid)
+    inspected = windows_profile.inspect(system, "NatureWorkerPlatformClientE2E", sid, root=tmp_path,
+                                        service_registered=False, data_kept=False)
+    assert inspected.bad_links == [] and inspected.other_data == [] and inspected.problems == []
+    assert sum("(link, not followed)" in f for f in inspected.files) == 17  # NTFS junctions seen as links
+    # A real junction with a Windows name, pointing out of the profile, blocks removal.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    os.rmdir(profile / "Documents" / "My Music")  # removes the junction, not its target
+    assert (profile / "Music").is_dir()
+    junction(outside, profile / "Documents" / "My Music")
+    inspected = windows_profile.inspect(system, "NatureWorkerPlatformClientE2E", sid, root=tmp_path,
+                                        service_registered=False, data_kept=False)
+    assert inspected.bad_links == [str(PureWindowsPath("Documents", "My Music"))]
+
+
+@windows_only
+def test_native_e2e_service_profile_holds_only_windows_standard_content():
+    """Read-only, when the real e2e profile exists and this prompt may list it (elevated)."""
+    profile = windows_profile.profiles_root() / "NatureWorkerPlatformClientE2E"
+    try:
+        os.listdir(profile)
+    except FileNotFoundError:
+        pytest.skip("no e2e service profile on this computer")
+    except PermissionError:
+        pytest.skip("listing the e2e service profile needs an elevated prompt")
+
+    class NoDelete(windows_setup.WindowsSystem):
+        def delete_profile(self, sid):
+            raise AssertionError("an inspection must never delete")
+    sid = service_sid("NatureWorkerPlatformClientE2E")
+    inspected = windows_profile.inspect(NoDelete(), "NatureWorkerPlatformClientE2E", sid,
+                                        service_registered=False, data_kept=False)
+    assert inspected.registered and not any("ProfileList" in p for p in inspected.problems)
+    assert inspected.credential_files == [] and inspected.other_data == [] and inspected.bad_links == []
 
 
 # -- runtime copy and diagnostics (first native e2e run: venv launcher missing) ------------

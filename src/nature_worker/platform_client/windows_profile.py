@@ -17,6 +17,7 @@ service's SID is ever considered.
 """
 from __future__ import annotations
 
+import fnmatch
 import ntpath
 import os
 from dataclasses import dataclass, field
@@ -25,10 +26,44 @@ from pathlib import Path, PureWindowsPath
 from ..windows_security import ADMINISTRATORS, SYSTEM, WindowsSecurityError
 
 PROFILE_LIST = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
-# What Windows itself creates in a service profile (relative paths, compared without case): the
-# registry hive and its logs, and the AppData tree. Anything else (Desktop, Documents, ...) is
-# treated as data someone made, and blocks removal.
-_WINDOWS_ITEMS = ("ntuser.dat", "ntuser.ini", "ntuser.pol", "appdata")
+# What Windows creates in a service profile (from the Default profile and the account's registry
+# hives), as observed natively in NatureWorkerPlatformClientE2E's profile (8fa4a0f, 86 entries).
+# Relative paths, compared without case; fnmatch's "*" also matches "\". Folders are not data:
+# only files and links are classified, so the standard empty folders (Desktop, Documents, ...)
+# are fine, but any file in them other than desktop.ini is not.
+_STANDARD_FOLDERS = ("desktop", "documents", "downloads", "favorites", "links", "music", "onedrive",
+                     "pictures", "saved games", "videos", "contacts", "searches", "3d objects")
+_WINDOWS_FILES = (
+    "ntuser.dat*", "ntuser.ini", "ntuser.pol",                          # the user hive, its logs
+    "appdata/local/microsoft/windows/usrclass.dat*",                    # the classes hive, its logs
+    "appdata/local/microsoft/windows/shell/defaultlayouts.xml",
+    "appdata/local/microsoft/windows/winx/group*/*.lnk", "appdata/local/microsoft/windows/winx/group*/desktop.ini",
+    "appdata/local/microsoft/windows sidebar/settings.ini",
+    "appdata/roaming/microsoft/internet explorer/quick launch/*.lnk",
+    "appdata/roaming/microsoft/internet explorer/quick launch/desktop.ini",
+    "appdata/roaming/microsoft/windows/sendto/*.lnk", "appdata/roaming/microsoft/windows/sendto/*.zfsendtotarget",
+    "appdata/roaming/microsoft/windows/sendto/*.desklink", "appdata/roaming/microsoft/windows/sendto/*.mapimail",
+    "appdata/roaming/microsoft/windows/sendto/desktop.ini",
+    "appdata/roaming/microsoft/windows/start menu/programs/*.lnk",
+    "appdata/roaming/microsoft/windows/start menu/programs/*desktop.ini",
+    *(f"{folder}/desktop.ini" for folder in _STANDARD_FOLDERS),
+)
+# Windows' compatibility junctions (for programs written for Windows XP) and the profile folder
+# each must point to. Any other link, or one of these pointing anywhere else, blocks removal.
+_WINDOWS_LINKS = {
+    "application data": "appdata/roaming", "cookies": "appdata/local/microsoft/windows/inetcookies",
+    "local settings": "appdata/local", "my documents": "documents",
+    "nethood": "appdata/roaming/microsoft/windows/network shortcuts",
+    "printhood": "appdata/roaming/microsoft/windows/printer shortcuts",
+    "recent": "appdata/roaming/microsoft/windows/recent", "sendto": "appdata/roaming/microsoft/windows/sendto",
+    "start menu": "appdata/roaming/microsoft/windows/start menu",
+    "templates": "appdata/roaming/microsoft/windows/templates",
+    "appdata/local/application data": "appdata/local",
+    "appdata/local/history": "appdata/local/microsoft/windows/history",
+    "appdata/local/temporary internet files": "appdata/local/microsoft/windows/inetcache",
+    "appdata/local/microsoft/windows/temporary internet files": "appdata/local/microsoft/windows/inetcache",
+    "documents/my music": "music", "documents/my pictures": "pictures", "documents/my videos": "videos",
+}
 _CREDENTIALS = ("appdata/local/microsoft/credentials", "appdata/roaming/microsoft/credentials")
 _DPAPI_KEYS = "appdata/roaming/microsoft/protect"
 _MANIFEST_LIMIT = 200
@@ -50,7 +85,8 @@ class Profile:
     unreadable: bool = False             # its permissions or part of it could not be read
     credential_files: list[str] = field(default_factory=list)
     dpapi_keys: list[str] = field(default_factory=list)
-    other_data: list[str] = field(default_factory=list)
+    other_data: list[str] = field(default_factory=list)   # files Windows does not create there
+    bad_links: list[str] = field(default_factory=list)    # links other than Windows' own junctions
     files: list[str] = field(default_factory=list)   # "relative\\path (size bytes)"
     problems: list[str] = field(default_factory=list)  # reasons it must not be removed
 
@@ -61,7 +97,7 @@ class Profile:
     def summary(self) -> dict:
         return {"path": str(self.expected), "registered_path": self.registered, "exists": self.exists,
                 "owner": self.owner, "loaded": self.loaded, "unreadable": self.unreadable, "credential_files": self.credential_files,
-                "dpapi_master_keys": self.dpapi_keys, "other_data": self.other_data,
+                "dpapi_master_keys": self.dpapi_keys, "other_data": self.other_data, "bad_links": self.bad_links,
                 "file_count": len(self.files), "removable": self.present and not self.problems,
                 "problems": self.problems}
 
@@ -74,12 +110,17 @@ def inspect(system, service: str, sid: str, *, root: Path | None = None, service
             data_kept: bool) -> Profile:
     """Identity, ownership and contents (names and sizes) of the service's profile."""
     profile = Profile(service, sid, (root or profiles_root()) / service)
-    registered = system.get_registry(rf"{PROFILE_LIST}\{sid}", "ProfileImagePath")
+    problems = profile.problems
+    try:  # an inspection never fails an uninstall: what cannot be read is a reason to keep it
+        registered = system.get_registry(rf"{PROFILE_LIST}\{sid}", "ProfileImagePath")
+        profile.exists = profile.expected.exists() or system.is_link(profile.expected)
+    except OSError as exc:
+        profile.unreadable, profile.exists = True, True
+        problems.append(f"it cannot be inspected ({exc})")
+        return profile
     profile.registered = str(registered) if registered else None
-    profile.exists = profile.expected.exists() or system.is_link(profile.expected)
     if not profile.present:
         return profile
-    problems = profile.problems
     if service_registered:
         problems.append(f"service {service} is still registered")
     if profile.registered is None:
@@ -104,9 +145,13 @@ def inspect(system, service: str, sid: str, *, root: Path | None = None, service
         problems.append(f"owned by {acl.owner}, not by the service account, SYSTEM or Administrators")
     if sid not in acl.grantees():
         problems.append("its permissions do not grant the service account: not a profile Windows made for it")
-    profile.loaded = system.user_hive_loaded(sid)
+    try:
+        profile.loaded = system.user_hive_loaded(sid)
+    except OSError as exc:
+        problems.append(f"whether its registry hive is loaded cannot be read ({exc})")
     if profile.loaded:
-        problems.append("Windows has its registry hive loaded (the account is still signed in)")
+        # Seen natively after the service was deleted: Windows unloads the hive on a restart.
+        problems.append("Windows has its registry hive loaded (restart Windows, then try again)")
     _walk(system, profile)
     if profile.credential_files:
         problems.append(f"it holds {len(profile.credential_files)} Credential Manager file(s) of the service "
@@ -114,8 +159,10 @@ def inspect(system, service: str, sid: str, *, root: Path | None = None, service
     if profile.dpapi_keys and data_kept:
         problems.append("it holds DPAPI master keys and the data root is kept: anything DPAPI-protected "
                         "by the service account would become unreadable")
+    if profile.bad_links:
+        problems.append(f"it holds links that are not Windows' own junctions: {', '.join(profile.bad_links[:10])}")
     if profile.other_data:
-        problems.append(f"it holds data outside what Windows creates: {', '.join(profile.other_data[:10])}")
+        problems.append(f"it holds files Windows does not create: {', '.join(profile.other_data[:10])}")
     return profile
 
 
@@ -135,21 +182,21 @@ def _walk(system, profile: Profile) -> None:
         here = Path(directory)
         for name in list(dirs) + list(names):
             if system.is_link(here / name):
-                # Windows' compatibility junctions ("Application Data", ...) or anything else:
-                # listed, never followed (DeleteProfileW does not follow them either).
+                # Listed, never followed; only Windows' own junctions to their own folder pass.
                 (dirs if name in dirs else names).remove(name)
-                profile.files.append(f"{(here / name).relative_to(root)} (link, not followed)")
-        for name in names + dirs:
+                path = here / name
+                profile.files.append(f"{path.relative_to(root)} (link, not followed)")
+                if not _windows_link(path, root):
+                    profile.bad_links.append(str(path.relative_to(root)))
+        for name in names:
             path = here / name
             rel = _rel(path, root)
-            if here == root and rel not in _WINDOWS_ITEMS and not rel.startswith("ntuser.dat"):
-                profile.other_data.append(name)
-            if name in dirs:
-                continue
             if any(rel.startswith(c + "/") for c in _CREDENTIALS):
                 profile.credential_files.append(str(path.relative_to(root)))
             elif rel.startswith(_DPAPI_KEYS + "/"):
                 profile.dpapi_keys.append(str(path.relative_to(root)))
+            elif not any(fnmatch.fnmatchcase(rel, pattern) for pattern in _WINDOWS_FILES):
+                profile.other_data.append(str(path.relative_to(root)))
             try:
                 size = os.lstat(path).st_size
             except OSError:
@@ -158,6 +205,20 @@ def _walk(system, profile: Profile) -> None:
                 profile.files.append(f"{path.relative_to(root)} ({size} bytes)")
             elif len(profile.files) == _MANIFEST_LIMIT:
                 profile.files.append("...")
+
+
+def _windows_link(path: Path, root: Path) -> bool:
+    """One of Windows' compatibility junctions, pointing to its own folder in this profile."""
+    expected = _WINDOWS_LINKS.get(_rel(path, root))
+    if expected is None:
+        return False
+    try:
+        target = os.readlink(path)
+    except OSError:
+        return False
+    if target.startswith("\\??\\") or target.startswith("\\\\?\\"):  # NT and Win32 long-path prefixes
+        target = target[4:]
+    return _norm(target) == _norm(str(root) + "\\" + expected.replace("/", "\\"))
 
 
 def remove(system, profile: Profile) -> str | None:

@@ -304,7 +304,7 @@ def test_cleanup_of_leftovers_uses_the_e2e_uninstall_and_checks_production(lefto
     assert not module.E2E_PREFIX.parent.exists() and not module.E2E_DATA.parent.exists()
     report = (workdir / "windows-platform-client-e2e-cleanup.md").read_text(encoding="utf-8")
     assert "Result: 3/3 passed" in report and "nothing of the e2e namespace remains" in report
-    assert "kept by Windows (3 files" in report and "removable on request: True" in report
+    assert "kept by Windows (3 entries" in report and "removable on request: True" in report
     assert (workdir / "windows-platform-client-e2e.md").read_text(encoding="utf-8") == "earlier report"
 
 

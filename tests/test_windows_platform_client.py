@@ -138,6 +138,8 @@ class FakeWindows:
         self.busy_ports: set[int] = set()
         self.start_fails_for: set[str] = set()
         self.fail_pip = False
+        self.names: set[str] = set()
+        self.account_sid = SVC
         self.prefix = None
 
     # identity and permissions
@@ -150,7 +152,7 @@ class FakeWindows:
             return self.acls[path]
         if self.prefix and (path == self.prefix or self.prefix in path.parents):
             return Acl(ADMINISTRATORS, False, (Ace(SYSTEM, FULL), Ace(ADMINISTRATORS, FULL), Ace(USERS, READ)))
-        return private_acl()
+        return private_acl(self.account_sid)
 
     def is_link(self, path):
         return Path(path).is_symlink()
@@ -191,13 +193,16 @@ class FakeWindows:
         return subprocess.CompletedProcess(cmd, 0, out, "")
 
     # service
-    def service_status(self):
+    def service_status(self, name):
+        self.names.add(name)
         return Status(self.service) if self.service else None
 
-    def start_service(self, timeout):
+    def start_service(self, name, timeout):
+        self.names.add(name)
         self.service = 4
 
-    def stop_service(self, timeout):
+    def stop_service(self, name, timeout):
+        self.names.add(name)
         if self.service:
             self.service = 1
 
@@ -207,7 +212,8 @@ class FakeWindows:
         current = (self.prefix / "current").read_text()
         if current in self.start_fails_for:
             return None
-        env = dict(v.split("=", 1) for v in self.registry[windows_setup.SERVICE_KEY]["Environment"])
+        key = next(k for k in self.registry if k.startswith("SYSTEM"))
+        env = dict(v.split("=", 1) for v in self.registry[key]["Environment"])
         return {"version": current, "platform": env["NWPC_PLATFORM_ORIGIN"]}
 
     def port_in_use(self, port):
@@ -242,12 +248,14 @@ def source_archive(tmp_path, commit="a" * 40, version="0.2.0"):
 
 
 @pytest.fixture
-def win(tmp_path, monkeypatch):
+def win(tmp_path, monkeypatch, request):
     monkeypatch.setattr(windows_setup, "start_menu", lambda: tmp_path / "start")
+    monkeypatch.delenv("NATURE_WORKER_INSTALL_PREFIX", raising=False)
     fake = FakeWindows(tmp_path)
+    service = getattr(request, "param", None)
     setup = Setup(tmp_path / "Program Files" / "PC", tmp_path / "ProgramData" / "NatureAIWorker" / "PC",
-                  system=fake, say=lambda _m: None)
-    fake.prefix = setup.prefix
+                  service=service, system=fake, say=lambda _m: None)
+    fake.prefix, fake.account_sid = setup.prefix, setup.sid
     # The runtime copy is the installer's own interpreter; emulate it without copying Python.
     def runtime():
         setup.runtime_python.parent.mkdir(parents=True, exist_ok=True)
@@ -279,15 +287,31 @@ def test_install_creates_an_isolated_service_installation(win, tmp_path):
     grant = next(c for c in fake.calls if c[0] == "icacls" and c[1] == str(setup.data) and "/grant:r" in c)
     assert "/inheritance:r" in grant and f"*{SVC}:(OI)(CI)M" in grant
     assert not any(USERS in arg or USER in arg for arg in grant)
-    env = dict(v.split("=", 1) for v in fake.registry[windows_setup.SERVICE_KEY]["Environment"])
+    env = dict(v.split("=", 1) for v in fake.registry[setup.service_key]["Environment"])
     assert env["NWPC_STANDALONE_SID"] == USER and env["NWPC_DATA_DIR"] == str(setup.data)
     assert env["NWPC_HOST"] == "127.0.0.1" and env["NWPC_PORT"] == "8090"
-    assert fake.registry[windows_setup.UNINSTALL_KEY]["DisplayVersion"] == label
+    assert fake.registry[setup.uninstall_key]["DisplayVersion"] == label
     assert json.loads((setup.data / "installation-mode.json").read_text())["mode"] == "platform_client"
     assert not (setup.prefix / "upgrade" / "staging" / "windows-install").exists()
     # The Standalone installation is never touched.
     assert {p: p.read_bytes() for p in standalone.rglob("*") if p.is_file()} == before
     assert not any(str(standalone) in arg for c in fake.calls for arg in c if c[0] != "sc.exe")
+
+
+@pytest.mark.parametrize("win", ["NatureWorkerPlatformClientE2E"], indirect=True)
+def test_a_separate_namespace_never_touches_the_production_names(win, tmp_path):
+    setup, fake, standalone = win
+    install(setup, standalone, tmp_path)
+    setup.uninstall(delete_local_data=True)
+    e2e_sid = service_sid("NatureWorkerPlatformClientE2E")
+    assert setup.account == "NT SERVICE\\NatureWorkerPlatformClientE2E" and setup.sid == e2e_sid != SVC
+    assert fake.names == {"NatureWorkerPlatformClientE2E"}
+    sc_names = {c[2] for c in fake.calls if c[0] == "sc.exe"}
+    assert sc_names == {"NatureWorkerPlatformClientE2E"}
+    assert all(k.endswith("E2E") for k in [setup.service_key, setup.uninstall_key])
+    assert not any(f"*{SVC}" in arg for c in fake.calls for arg in c)  # the production account is never granted
+    assert setup.shortcut.name == "Nature AI Worker Platform Client E2E.url"
+    assert not (tmp_path / "Program Files").exists()  # empty parents created by the install are removed
 
 
 def test_install_refusals(win, tmp_path):
@@ -352,7 +376,7 @@ def test_repair_reapplies_everything_but_keeps_version_origin_and_data(win, tmp_
     assert setup.repair() == label
     assert any(c[:2] == ["sc.exe", "config"] for c in fake.calls)
     assert any(c[0] == "icacls" and "/inheritance:r" in c for c in fake.calls)
-    env = dict(v.split("=", 1) for v in fake.registry[windows_setup.SERVICE_KEY]["Environment"])
+    env = dict(v.split("=", 1) for v in fake.registry[setup.service_key]["Environment"])
     assert env["NWPC_PLATFORM_ORIGIN"] == "https://platform.example"
     assert (setup.data / "conversations.json").read_text() == "kept"
 
@@ -362,7 +386,7 @@ def test_uninstall_keeps_data_unless_asked_and_reports_clean_validation(win, tmp
     install(setup, standalone, tmp_path)
     report = setup.uninstall(delete_local_data=False)
     assert fake.service is None and not setup.prefix.exists()
-    assert windows_setup.UNINSTALL_KEY not in fake.registry
+    assert setup.uninstall_key not in fake.registry
     assert setup.data.exists() and report["failures"] == []
     assert report["checks"]["other_app_locations"] is False and not report["standalone_install_allowed"]
     report = setup.uninstall(delete_local_data=True)

@@ -111,21 +111,21 @@ class WindowsSystem:
                              f"{lines[-1][:300] if lines else 'no output'}")
         return result
 
-    def service_status(self):
+    def service_status(self, name: str):
         from .. import windows_service
-        return windows_service.query(SERVICE_NAME)
+        return windows_service.query(name)
 
-    def start_service(self, timeout: float) -> None:
+    def start_service(self, name: str, timeout: float) -> None:
         from .. import windows_service
         try:
-            windows_service.start(SERVICE_NAME, timeout)
+            windows_service.start(name, timeout)
         except windows_service.ServiceError as exc:
             raise SetupError(str(exc)) from exc
 
-    def stop_service(self, timeout: float) -> None:
+    def stop_service(self, name: str, timeout: float) -> None:
         from .. import windows_service
         try:
-            windows_service.stop(SERVICE_NAME, timeout)
+            windows_service.stop(name, timeout)
         except windows_service.ServiceError as exc:
             raise SetupError(str(exc)) from exc
 
@@ -185,12 +185,26 @@ class WindowsSystem:
 
 class Setup:
     def __init__(self, prefix: Path | None = None, data: Path | None = None, *,
-                 system: WindowsSystem | None = None, say=print):
-        self.prefix = (prefix or default_prefix()).absolute()
-        self.data = (data or default_data()).absolute()
+                 service: str | None = None, system: WindowsSystem | None = None, say=print):
+        """Defaults: the installation this code runs from (the launchers set its prefix), its
+        recorded data root and service; otherwise the standard locations and service name.
+        A different ``service`` gives a fully separate namespace (used by the e2e test)."""
+        env_prefix = os.environ.get("NATURE_WORKER_INSTALL_PREFIX", "").strip()
+        self.prefix = (prefix or (Path(env_prefix) if env_prefix else default_prefix())).absolute()
+        recorded = self.installation() or {}
+        self.data = (data or (Path(recorded["data_dir"]) if recorded.get("data_dir") else default_data())).absolute()
+        self.service = service or recorded.get("service") or SERVICE_NAME
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]{2,63}", self.service):
+            raise SetupError(f"Invalid service name {self.service!r}")
+        self.account = f"NT SERVICE\\{self.service}"
+        self.sid = service_sid(self.service)
+        self.service_key = rf"SYSTEM\CurrentControlSet\Services\{self.service}"
+        suffix = self.service[len(SERVICE_NAME):] if self.service.startswith(SERVICE_NAME) else self.service
+        self.uninstall_key = UNINSTALL_KEY + suffix
+        self.shortcut = start_menu() / (SHORTCUT[:-4] + (f" {suffix}" if suffix else "") + ".url")
+        self.display_name = DISPLAY_NAME + (f" [{suffix}]" if suffix else "")
         self.system = system or WindowsSystem()
         self.say = say
-        self.sid = service_sid(SERVICE_NAME)
 
     # -- paths ------------------------------------------------------------------------
 
@@ -251,7 +265,7 @@ class Setup:
                 raise SetupError(f"{self.data} exists and is not a Platform Client installation; refusing.")
 
     def check_port(self, port: int) -> None:
-        status = self.system.service_status()
+        status = self.system.service_status(self.service)
         ours = status is not None and status.state == 4 and self._registered_port() == port
         if not ours and self.system.port_in_use(port):
             raise SetupError(f"127.0.0.1:{port} is already used by another program; choose another --port.")
@@ -264,7 +278,7 @@ class Setup:
             return None
 
     def service_environment(self) -> dict[str, str]:
-        values = self.system.get_registry(SERVICE_KEY, "Environment") or []
+        values = self.system.get_registry(self.service_key, "Environment") or []
         return dict(v.split("=", 1) for v in values if "=" in v)
 
     # -- install ----------------------------------------------------------------------
@@ -280,7 +294,7 @@ class Setup:
         self.check_data_root()
         self.check_port(port)
         previous = self.current()
-        status = self.system.service_status()
+        status = self.system.service_status(self.service)
         was_running = status is not None and status.state != 1
         self.stop_service(drain=True)
 
@@ -302,7 +316,7 @@ class Setup:
             self.system.run([str(self.version_python(label)), "-I", "-m", "nature_worker.upgrade",
                              "register-local-build", "--prefix", str(self.prefix), "--version", label,
                              "--edition", "platform_client", "--data-dir", str(self.data),
-                             "--account", ACCOUNT, "--service", SERVICE_NAME, "--port", str(port),
+                             "--account", self.account, "--service", self.service, "--port", str(port),
                              "--commit", commit], env=_child_env())
             (self.prefix / "COMMIT").write_text(commit + "\n", encoding="utf-8")
             self.configure_service(origin=origin, standalone_data=standalone_data,
@@ -395,7 +409,7 @@ class Setup:
         self.reset_children(self.data)
         problems = private_problems(self.system.read_acl(self.data), self.sid)
         if problems:
-            raise SetupError(f"{self.data} is not private to {ACCOUNT}: " + "; ".join(problems))
+            raise SetupError(f"{self.data} is not private to {self.account}: " + "; ".join(problems))
 
     def reset_children(self, directory: Path) -> None:
         """Files inside the data root take exactly its permissions (never the root itself)."""
@@ -406,15 +420,15 @@ class Setup:
                           port: int, allow_insecure_loopback: bool) -> None:
         bootstrap = self.prefix / "bin" / "platform-client-service.py"
         bin_path = f'"{self.runtime_python}" -I "{bootstrap}"'
-        verb = "config" if self.system.service_status() is not None else "create"
-        self.say(f"{'Updating' if verb == 'config' else 'Creating'} the {SERVICE_NAME} service ({ACCOUNT})")
-        self.system.run(["sc.exe", verb, SERVICE_NAME, "binPath=", bin_path, "start=", "delayed-auto",
-                         "obj=", ACCOUNT, "DisplayName=", DISPLAY_NAME])
-        self.system.run(["sc.exe", "description", SERVICE_NAME, DESCRIPTION])
-        self.system.run(["sc.exe", "sidtype", SERVICE_NAME, "unrestricted"])
+        verb = "config" if self.system.service_status(self.service) is not None else "create"
+        self.say(f"{'Updating' if verb == 'config' else 'Creating'} the {self.service} service ({self.account})")
+        self.system.run(["sc.exe", verb, self.service, "binPath=", bin_path, "start=", "delayed-auto",
+                         "obj=", self.account, "DisplayName=", self.display_name])
+        self.system.run(["sc.exe", "description", self.service, DESCRIPTION])
+        self.system.run(["sc.exe", "sidtype", self.service, "unrestricted"])
         # Only the privilege every process needs (traverse folders): nothing else.
-        self.system.run(["sc.exe", "privs", SERVICE_NAME, "SeChangeNotifyPrivilege"])
-        self.system.run(["sc.exe", "failure", SERVICE_NAME, "reset=", "86400",
+        self.system.run(["sc.exe", "privs", self.service, "SeChangeNotifyPrivilege"])
+        self.system.run(["sc.exe", "failure", self.service, "reset=", "86400",
                          "actions=", "restart/10000/restart/30000"])
         env = {
             "NWPC_DATA_DIR": str(self.data),
@@ -428,12 +442,12 @@ class Setup:
         }
         if allow_insecure_loopback:
             env["NWPC_ALLOW_INSECURE_LOOPBACK"] = "1"
-        self.system.set_registry(SERVICE_KEY, {"Environment": [f"{k}={v}" for k, v in env.items()]})
+        self.system.set_registry(self.service_key, {"Environment": [f"{k}={v}" for k, v in env.items()]})
 
     def start_and_verify(self, label: str, origin: str, port: int) -> None:
-        self.say(f"Starting {SERVICE_NAME}")
+        self.say(f"Starting {self.service}")
         try:
-            self.system.start_service(90)
+            self.system.start_service(self.service, 90)
         except SetupError as exc:
             raise SetupError(f"{exc}\n{self.log_tail()}") from exc
         for _ in range(60):
@@ -447,12 +461,12 @@ class Setup:
         """After a failed reinstall, the build that was active before is active and serving again."""
         self.say(f"The installation did not complete; reactivating {previous}")
         try:
-            self.system.stop_service(60)
+            self.system.stop_service(self.service, 60)
             if self.current() != previous:
                 tmp = self.prefix / f".current.{os.getpid()}.tmp"
                 tmp.write_text(previous, encoding="utf-8")
                 os.replace(tmp, self.prefix / "current")
-            self.system.start_service(90)
+            self.system.start_service(self.service, 90)
             for _ in range(60):
                 status = self.system.http_status(port)
                 if status and status.get("version") == previous:
@@ -472,15 +486,14 @@ class Setup:
 
     def register_app(self, label: str, port: int) -> None:
         setup = self.prefix / "bin" / "nature-worker-platform-client-setup.cmd"
-        self.system.set_registry(UNINSTALL_KEY, {
-            "DisplayName": DISPLAY_NAME, "DisplayVersion": label, "Publisher": PUBLISHER,
+        self.system.set_registry(self.uninstall_key, {
+            "DisplayName": self.display_name, "DisplayVersion": label, "Publisher": PUBLISHER,
             "InstallLocation": str(self.prefix), "UninstallString": f'"{setup}" uninstall',
             "ModifyPath": f'"{setup}" repair', "NoRepair": 1,
             "URLInfoAbout": "https://github.com/nature-ai-corp/nature-ai-worker",
         })
-        shortcut = start_menu() / SHORTCUT
-        shortcut.parent.mkdir(parents=True, exist_ok=True)
-        shortcut.write_text(f"[InternetShortcut]\r\nURL=http://127.0.0.1:{port}/\r\n", encoding="utf-8")
+        self.shortcut.parent.mkdir(parents=True, exist_ok=True)
+        self.shortcut.write_text(f"[InternetShortcut]\r\nURL=http://127.0.0.1:{port}/\r\n", encoding="utf-8")
 
     def prune_builds(self, active: str) -> None:
         versions = self.prefix / "versions"
@@ -492,19 +505,19 @@ class Setup:
     def stop_service(self, *, drain: bool) -> None:
         """Let running submissions finish (the upgrade drain protocol), then stop; the
         service's shutdown signs out of the Platform."""
-        status = self.system.service_status()
+        status = self.system.service_status(self.service)
         if status is None or status.state == 1:
             return
         if drain and self.data.is_dir():
             self.say("Asking the Platform Client to finish running submissions and sign out")
             maintenance.request_stop(self.data, "windows setup")
             for _ in range(DRAIN_TIMEOUT * 2):
-                status = self.system.service_status()
+                status = self.system.service_status(self.service)
                 if status is None or status.state == 1:
                     break
                 self.system.sleep(0.5)
             maintenance.withdraw_stop(self.data)
-        self.system.stop_service(60)
+        self.system.stop_service(self.service, 60)
 
     # -- repair -----------------------------------------------------------------------
 
@@ -558,18 +571,19 @@ class Setup:
         port = int(self.service_environment().get("NWPC_PORT") or inst.get("port") or DEFAULT_PORT)
         failures: list[str] = []
         self.stop_service(drain=True)
-        if self.system.service_status() is not None:
-            self.system.run(["sc.exe", "delete", SERVICE_NAME], check=False)
+        if self.system.service_status(self.service) is not None:
+            self.system.run(["sc.exe", "delete", self.service], check=False)
             for _ in range(60):
-                if self.system.service_status() is None:
+                if self.system.service_status(self.service) is None:
                     break
                 self.system.sleep(0.5)
-            if self.system.service_status() is not None:
-                failures.append(f"service {SERVICE_NAME} is still registered (close the Services window)")
-        self.system.delete_registry_tree(UNINSTALL_KEY)
-        (start_menu() / SHORTCUT).unlink(missing_ok=True)
+            if self.system.service_status(self.service) is not None:
+                failures.append(f"service {self.service} is still registered (close the Services window)")
+        self.system.delete_registry_tree(self.uninstall_key)
+        self.shortcut.unlink(missing_ok=True)
         if self.prefix.exists() and not _remove_tree(self.prefix, self.system):
             failures.append(f"{self.prefix} could not be removed completely")
+        _remove_if_empty(self.prefix.parent)
 
         self.say("Local Platform Client data manifest:")
         for line in _manifest(self.data, self.system):
@@ -577,9 +591,7 @@ class Setup:
         if delete_local_data and self.data.exists():
             if not _remove_tree(self.data, self.system):
                 failures.append(f"{self.data} could not be removed completely")
-            parent = self.data.parent
-            if parent.is_dir() and not any(parent.iterdir()):
-                parent.rmdir()
+            _remove_if_empty(self.data.parent)
         elif self.data.exists():
             self.say("Data kept. Run `uninstall --delete-local-data` to remove it.")
         report = self.clean_validation(port)
@@ -593,9 +605,9 @@ class Setup:
         probe is verified clean; anything unknown blocks (docs/PLATFORM_CLIENT_SECURITY.md)."""
         processes = self.system.platform_client_processes()
         running = None if processes is None else bool(processes) or self.system.port_in_use(port)
-        registered = (self.system.service_status() is not None
-                      or self.system.get_registry(UNINSTALL_KEY, "DisplayName") is not None)
-        leftovers = [p for p in (self.prefix, self.data, start_menu() / SHORTCUT) if p.exists()]
+        registered = (self.system.service_status(self.service) is not None
+                      or self.system.get_registry(self.uninstall_key, "DisplayName") is not None)
+        leftovers = [p for p in (self.prefix, self.data, self.shortcut) if p.exists()]
         checks = {
             # The Windows Platform Client keeps sessions in memory only: it creates no Credential
             # Manager entry and no DPAPI file; its data root (checked below) is the only storage.
@@ -622,11 +634,11 @@ class Setup:
         inst, label = self.installation(), self.current()
         env = self.service_environment() if sys.platform == "win32" else {}
         port = int(env.get("NWPC_PORT") or (inst or {}).get("port") or DEFAULT_PORT)
-        service = self.system.service_status()
+        service = self.system.service_status(self.service)
         info = {
             "installed": inst is not None, "prefix": str(self.prefix), "data_root": str(self.data),
             "active_version": label, "service": service.name if service else "not installed",
-            "account": ACCOUNT, "platform": env.get("NWPC_PLATFORM_ORIGIN"), "port": port,
+            "account": self.account, "platform": env.get("NWPC_PLATFORM_ORIGIN"), "port": port,
             "answering": self.system.http_status(port),
         }
         try:
@@ -678,6 +690,14 @@ def _manifest(root: Path, system: WindowsSystem) -> list[str]:
                 size = -1
             lines.append(f"{size:>10} {here / name}")
     return lines or ["(empty)"]
+
+
+def _remove_if_empty(directory: Path) -> None:
+    try:
+        if directory.is_dir() and not directory.is_symlink() and not any(directory.iterdir()):
+            directory.rmdir()
+    except OSError:
+        pass
 
 
 def _remove_tree(root: Path, system: WindowsSystem) -> bool:
@@ -767,6 +787,7 @@ def main(argv: list[str] | None = None) -> int:
                                      description="Windows Platform Client (S-C) installer.")
     parser.add_argument("--prefix", type=Path, help=f"installation folder (default {default_prefix()})")
     parser.add_argument("--data", type=Path, help=f"data root (default {default_data()})")
+    parser.add_argument("--service", help=argparse.SUPPRESS)  # a separate namespace, for tests
     parser.add_argument("--pause", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--wait-pid", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--cleanup", type=Path, help=argparse.SUPPRESS)
@@ -788,7 +809,7 @@ def main(argv: list[str] | None = None) -> int:
         print("This installer is for Windows. On Linux use scripts/platform-client-linux-install.sh.",
               file=sys.stderr)
         return 2
-    setup = Setup(args.prefix, args.data)
+    setup = Setup(args.prefix, args.data, service=args.service)
     code = 1
     try:
         if args.wait_pid:

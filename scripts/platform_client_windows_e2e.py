@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -41,7 +42,7 @@ from cryptography.hazmat.primitives import serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 
 from nature_worker.platform_client.windows_setup import (  # noqa: E402
-    ACCOUNT, SERVICE_KEY, UNINSTALL_KEY, Setup, WindowsSystem, default_data, default_prefix,
+    UNINSTALL_KEY, Setup, WindowsSystem, default_data, default_prefix, start_menu,
 )
 from nature_worker.platform_client.winservice import SERVICE_NAME  # noqa: E402
 from nature_worker.upgrade.release import public_key_entry  # noqa: E402
@@ -50,6 +51,10 @@ from nature_worker.windows_security import (  # noqa: E402
 )
 
 USERS = "S-1-5-32-545"
+# Everything this test creates lives in its own namespace, never the production one.
+E2E_SERVICE = SERVICE_NAME + "E2E"
+E2E_PREFIX = default_prefix().parent.parent / "NatureAIWorkerE2E" / "PlatformClient"
+E2E_DATA = default_data().parent.parent / "NatureAIWorkerE2E" / "PlatformClient"
 
 
 class Check(Exception):
@@ -66,13 +71,14 @@ class E2E:
         self.w = workdir.resolve()
         self.archive = archive.resolve()
         self.origin = origin
-        self.prefix, self.data = default_prefix(), default_data()
+        self.prefix, self.data = E2E_PREFIX, E2E_DATA
         self.system = WindowsSystem()
-        self.setup = Setup(self.prefix, self.data, say=self.note)
+        self.setup = Setup(self.prefix, self.data, service=E2E_SERVICE, say=self.note)
+        self.account = self.setup.account
         self.port = self.free_port()
         self.lines: list[str] = []
         self.results: list[tuple[str, bool]] = []
-        self.sid = service_sid(SERVICE_NAME)
+        self.sid = service_sid(E2E_SERVICE)
 
     # -- helpers ------------------------------------------------------------------------
 
@@ -90,7 +96,8 @@ class E2E:
 
     def setup_cmd(self, *args) -> subprocess.CompletedProcess:
         """The installer as a user runs it from the checkout (never from inside the installation)."""
-        return self.run([sys.executable, "-I", REPO / "scripts" / "platform-client-windows.py", *args])
+        return self.run([sys.executable, "-I", REPO / "scripts" / "platform-client-windows.py", "--prefix",
+                         self.prefix, "--data", self.data, "--service", E2E_SERVICE, *args])
 
     def upgrader(self, *args) -> subprocess.CompletedProcess:
         return self.run([self.prefix / "bin" / "nature-worker-upgrade.cmd", *args])
@@ -106,7 +113,7 @@ class E2E:
         return [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
     def service_process(self) -> dict:
-        script = (f"$s = Get-CimInstance Win32_Service -Filter \"Name='{SERVICE_NAME}'\"; "
+        script = (f"$s = Get-CimInstance Win32_Service -Filter \"Name='{E2E_SERVICE}'\"; "
                   "$p = Get-CimInstance Win32_Process -Filter (\"ProcessId=\" + $s.ProcessId); "
                   "$o = Invoke-CimMethod -InputObject $p -MethodName GetOwner; "
                   "@{state=$s.State; start_name=$s.StartName; pid=$s.ProcessId; "
@@ -130,8 +137,8 @@ class E2E:
         problems = admin_only_problems(read_acl(self.prefix))
         expect(not problems, f"code folder not admin-only: {problems}")
         proc = self.service_process()
-        expect(proc["start_name"] == ACCOUNT, f"service account is {proc['start_name']}")
-        expect(proc["owner"].lower() == ACCOUNT.lower(), f"service process runs as {proc['owner']}")
+        expect(proc["start_name"] == self.account, f"service account is {proc['start_name']}")
+        expect(proc["owner"].lower() == self.account.lower(), f"service process runs as {proc['owner']}")
         expect("runtime\\python.exe" in proc["command"], f"unexpected service command line {proc['command']}")
 
     def bundle(self, version: str, *, broken: bool = False) -> Path:
@@ -175,13 +182,39 @@ class E2E:
         self.results.append((name, ok))
         print(f"[{'PASS' if ok else 'FAIL'}] {name}", flush=True)
 
+    def production_state(self) -> dict:
+        """What a real installation consists of: recorded before and compared after."""
+        def acl(path: Path):
+            try:
+                a = read_acl(path)
+                return [a.owner, a.protected, sorted((x.sid, x.mask, x.type, x.flags) for x in a.aces)]
+            except Exception:  # noqa: BLE001 - absent or unreadable is recorded as such
+                return None
+        status = self.system.service_status(SERVICE_NAME)
+        return {
+            "service": status.name if status else None,
+            "uninstall_key": self.system.get_registry(UNINSTALL_KEY, "DisplayVersion"),
+            "paths": {str(p): [p.exists(), acl(p)] for p in (
+                default_prefix(), default_prefix().parent, default_data(), default_data().parent,
+                start_menu() / "Nature AI Worker Platform Client.url",
+                Path(os.environ["LOCALAPPDATA"]) / "NatureAIWorker")},
+            "credential_manager": self.run(["cmdkey", "/list"]).stdout,
+        }
+
     def s_preconditions(self) -> None:
         token = current_token()
         expect(token.administrator and token.elevated, "run this in an elevated (administrator) prompt")
-        expect(self.system.service_status() is None, f"{SERVICE_NAME} is already installed; use a computer "
-               "without a Platform Client")
-        expect(not self.prefix.exists() and not self.data.exists(),
-               f"{self.prefix} or {self.data} already exists; refusing to touch it")
+        expect(E2E_SERVICE != SERVICE_NAME and E2E_PREFIX != default_prefix() and E2E_DATA != default_data(),
+               "the e2e namespace must differ from the production one")
+        expect(self.system.service_status(E2E_SERVICE) is None, f"{E2E_SERVICE} already exists (an earlier "
+               "run did not finish): remove it with the e2e uninstall before running again")
+        for path in (E2E_PREFIX.parent, E2E_DATA.parent, self.setup.shortcut):
+            expect(not path.exists(), f"{path} already exists; refusing to touch it")
+        expect(self.system.get_registry(self.setup.uninstall_key, "DisplayName") is None,
+               f"HKLM\\{self.setup.uninstall_key} already exists; refusing")
+        self.before = self.production_state()
+        self.note(f"production state recorded: service {self.before['service'] or 'not installed'}; "
+                  + ", ".join(f"{Path(k).name} {'exists' if v[0] else 'absent'}" for k, v in self.before["paths"].items()))
         self.w.mkdir(parents=True)
         self.base_src = self.w / "source"
         with tarfile.open(self.archive) as t:
@@ -207,25 +240,36 @@ class E2E:
         status = self.wait_version(self.label)
         expect(status["platform"] == self.origin and status["signed_in"] is False, f"status {status}")
         self.assert_isolated()
-        expect(self.system.get_registry(UNINSTALL_KEY, "DisplayVersion") == self.label, "Apps & Features entry")
+        expect(self.system.get_registry(self.setup.uninstall_key, "DisplayVersion") == self.label, "Apps & Features entry")
         page = self.run(["powershell", "-NoProfile", "-Command",
                          f"(Invoke-WebRequest -UseBasicParsing http://127.0.0.1:{self.port}/).StatusCode"])
         expect(page.stdout.strip() == "200", "the UI page is not served")
         expect((self.standalone / "worker.db").read_bytes() == b"standalone data that S-C must never touch",
                "the Standalone data changed")
-        self.note(f"installed {self.label}; service runs as {ACCOUNT} (process owner checked); data root "
+        runtime = self.prefix / "runtime"
+        version = self.run([runtime / "python.exe", "-I", "-c", "import sys; print(sys.version.split()[0])"])
+        expect(version.stdout.strip() == sys.version.split()[0], f"runtime is {version.stdout.strip()}")
+        expect(not admin_only_problems(read_acl(runtime)), f"runtime not admin-only: {admin_only_problems(read_acl(runtime))}")
+        self.note(f"bundled runtime: {runtime}\\python.exe {version.stdout.strip()}, admin-only")
+        stored = [p.name for p in self.data.rglob("*") if p.suffix == ".dpapi" or p.name in ("credentials", "sessions")]
+        expect(not stored, f"credential storage found in the data root: {stored}")
+        expect(self.run(["cmdkey", "/list"]).stdout == self.before["credential_manager"],
+               "Credential Manager entries of this user changed")
+        self.note("no DPAPI file or credentials folder in the data root; this user's Credential Manager unchanged "
+                  "(the service keeps Platform sessions in memory only)")
+        self.note(f"installed {self.label}; service runs as {self.account} (process owner checked); data root "
                   "private to the service account; code admin-only; UI answers on loopback; Standalone untouched")
 
     def s_repair(self) -> None:
         self.run(["icacls", self.data, "/grant", f"*{USERS}:(OI)(CI)R"])
-        self.run(["sc.exe", "privs", SERVICE_NAME, "SeChangeNotifyPrivilege/SeImpersonatePrivilege"])
-        self.system.stop_service(60)
+        self.run(["sc.exe", "privs", E2E_SERVICE, "SeChangeNotifyPrivilege/SeImpersonatePrivilege"])
+        self.system.stop_service(E2E_SERVICE, 60)
         expect(private_problems(read_acl(self.data), self.sid), "damage was not applied")
         result = self.setup_cmd("repair")
         expect(result.returncode == 0, f"repair failed: {result.stdout[-1500:]}{result.stderr[-1500:]}")
         self.wait_version(self.label)
         self.assert_isolated()
-        privs = self.run(["sc.exe", "qprivs", SERVICE_NAME]).stdout
+        privs = self.run(["sc.exe", "qprivs", E2E_SERVICE]).stdout
         expect("SeImpersonatePrivilege" not in privs, "repair did not reset the service privileges")
         self.note("Users read access added, extra privilege granted, service stopped -> repair: data root private "
                   f"again, privileges reset, {self.label} running")
@@ -314,8 +358,8 @@ class E2E:
         marker.write_text("kept across uninstall", encoding="utf-8")
         result = self.setup_cmd("uninstall")
         expect(result.returncode == 0, f"uninstall failed: {result.stdout[-1500:]}{result.stderr[-800:]}")
-        expect(self.system.service_status() is None and not self.prefix.exists(), "service or code left behind")
-        expect(self.system.get_registry(UNINSTALL_KEY, "DisplayName") is None, "Apps & Features entry left")
+        expect(self.system.service_status(E2E_SERVICE) is None and not self.prefix.exists(), "service or code left behind")
+        expect(self.system.get_registry(self.setup.uninstall_key, "DisplayName") is None, "Apps & Features entry left")
         expect(marker.read_text(encoding="utf-8") == "kept across uninstall", "data was not kept")
         expect("NOT authorized" in result.stdout, "clean validation did not block while data remains")
         self.note("uninstall: service, code and registration removed; data kept; clean validation blocks a "
@@ -332,7 +376,7 @@ class E2E:
         result = self.setup_cmd("uninstall", "--delete-local-data")
         expect(result.returncode == 0, f"uninstall failed: {result.stdout[-1500:]}{result.stderr[-800:]}")
         expect(not self.data.exists() and not self.prefix.exists(), "files left behind")
-        expect(self.system.get_registry(SERVICE_KEY, "Environment") is None, "service registry left behind")
+        expect(self.system.get_registry(self.setup.service_key, "Environment") is None, "service registry left behind")
         for check in ("os_credentials", "running_processes", "installed_packages", "other_app_locations"):
             expect(f"{check}: verified clean" in result.stdout, f"{check} not verified clean")
         expect("device_policy: unverified" in result.stdout, "device policy should be reported unverified")
@@ -341,9 +385,20 @@ class E2E:
                   "locations verified clean; device policy unverified (by design it blocks an automatic "
                   "Standalone reinstall); Standalone data untouched")
 
+    def s_production_untouched(self) -> None:
+        after = self.production_state()
+        for key in ("service", "uninstall_key", "credential_manager"):
+            expect(after[key] == self.before[key], f"production {key} changed")
+        for path, state in self.before["paths"].items():
+            expect(after["paths"][path] == state, f"{path} changed (existence or permissions)")
+        leftovers = [p for p in (E2E_PREFIX.parent, E2E_DATA.parent, self.setup.shortcut) if p.exists()]
+        expect(not leftovers and self.system.service_status(E2E_SERVICE) is None, f"e2e leftovers: {leftovers}")
+        self.note("production service, registry entry, folders and their permissions, the Standalone folder and "
+                  "Credential Manager are exactly as before; no e2e leftovers")
+
     def cleanup(self) -> None:
         """Leave no service behind even when a scenario failed."""
-        if self.system.service_status() is not None:
+        if self.system.service_status(E2E_SERVICE) is not None:
             self.setup_cmd("uninstall", "--delete-local-data")
 
     def report(self) -> int:
@@ -387,6 +442,7 @@ def main() -> int:
             e2e.scenario(name, fn)
     finally:
         e2e.cleanup()
+    e2e.scenario("Production installation and Standalone untouched", e2e.s_production_untouched)
     return e2e.report()
 
 

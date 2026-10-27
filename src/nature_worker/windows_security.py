@@ -109,6 +109,18 @@ def parent_problems(acl: Acl) -> list[str]:
     return ["lets " + ", ".join(sorted(replacers)) + " replace its contents"] if replacers else []
 
 
+def system_tool(*parts: str) -> str:
+    """Absolute path of a Windows system program. Elevated code never runs a tool by bare name:
+    Windows would look in the calling interpreter's folder first, which may be user-writable."""
+    root = r"C:\Windows\System32"
+    import ctypes
+    if sys.platform == "win32" and hasattr(ctypes, "windll"):
+        buf = ctypes.create_unicode_buffer(260)
+        if ctypes.windll.kernel32.GetSystemDirectoryW(buf, 260):
+            root = buf.value
+    return "\\".join((root, *parts))
+
+
 # -- native reads (Windows only) ------------------------------------------------------
 
 def _require_windows() -> None:

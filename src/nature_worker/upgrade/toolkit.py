@@ -556,11 +556,13 @@ class WindowsPlatformClientToolkit(PlatformClientToolkit):
 
     def _hand_back(self, path: Path) -> None:
         """Give files the data root's own permissions; the data root's DACL itself is never reset."""
+        from ..windows_security import system_tool
+        icacls = system_tool("icacls.exe")
         if path == self.inst.data_dir:
             if any(path.iterdir()):
-                self.runner.run(["icacls", str(path / "*"), "/reset", "/T", "/C", "/Q"])
+                self.runner.run([icacls, str(path / "*"), "/reset", "/T", "/C", "/Q"])
         elif path.exists():
-            self.runner.run(["icacls", str(path), "/reset", "/T", "/C", "/Q"])
+            self.runner.run([icacls, str(path), "/reset", "/T", "/C", "/Q"])
 
 
 def toolkit_for(layout: Layout, inst: Installation, **kwargs) -> BaseToolkit:

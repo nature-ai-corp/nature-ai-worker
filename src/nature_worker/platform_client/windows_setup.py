@@ -44,7 +44,7 @@ from ..installation_mode import PLATFORM_CLIENT, ModeError, read_mode
 from ..install_gate import CleanEvidence, standalone_install_decision
 from ..windows_security import (
     ADMINISTRATORS, MACHINE_ADMINS, SYSTEM, Acl, WindowsSecurityError, admin_only_problems,
-    private_problems, service_sid,
+    private_problems, service_sid, system_tool,
 )
 from .winservice import SERVICE_NAME, service_log
 
@@ -172,7 +172,7 @@ class WindowsSystem:
                   "'nature_worker\\.platform_client|platform-client-service\\.py' -and "
                   "$_.ProcessId -ne $PID } | ForEach-Object { [string]$_.ProcessId + ' ' + $_.CommandLine }")
         try:
-            result = self.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            result = self.run([system_tool("WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-Command", script],
                               timeout=120)
         except SetupError:
             return None
@@ -399,7 +399,7 @@ class Setup:
         """Parent: administrators only. Data root: also the service account (modify), nothing else."""
         parent = self.data.parent
         self.data.mkdir(parents=True, exist_ok=True)
-        icacls = ["icacls"]
+        icacls = [system_tool("icacls.exe")]
         self.system.run([*icacls, str(parent), "/setowner", f"*{ADMINISTRATORS}"])
         self.system.run([*icacls, str(parent), "/inheritance:r", "/grant:r",
                          f"*{SYSTEM}:(OI)(CI)F", f"*{ADMINISTRATORS}:(OI)(CI)F"])
@@ -414,7 +414,7 @@ class Setup:
     def reset_children(self, directory: Path) -> None:
         """Files inside the data root take exactly its permissions (never the root itself)."""
         if directory.is_dir() and any(directory.iterdir()):
-            self.system.run(["icacls", str(directory / "*"), "/reset", "/T", "/C", "/Q"])
+            self.system.run([system_tool("icacls.exe"), str(directory / "*"), "/reset", "/T", "/C", "/Q"])
 
     def configure_service(self, *, origin: str, standalone_data: Path | None, standalone_sid: str,
                           port: int, allow_insecure_loopback: bool) -> None:
@@ -422,13 +422,13 @@ class Setup:
         bin_path = f'"{self.runtime_python}" -I "{bootstrap}"'
         verb = "config" if self.system.service_status(self.service) is not None else "create"
         self.say(f"{'Updating' if verb == 'config' else 'Creating'} the {self.service} service ({self.account})")
-        self.system.run(["sc.exe", verb, self.service, "binPath=", bin_path, "start=", "delayed-auto",
+        self.system.run([system_tool("sc.exe"), verb, self.service, "binPath=", bin_path, "start=", "delayed-auto",
                          "obj=", self.account, "DisplayName=", self.display_name])
-        self.system.run(["sc.exe", "description", self.service, DESCRIPTION])
-        self.system.run(["sc.exe", "sidtype", self.service, "unrestricted"])
+        self.system.run([system_tool("sc.exe"), "description", self.service, DESCRIPTION])
+        self.system.run([system_tool("sc.exe"), "sidtype", self.service, "unrestricted"])
         # Only the privilege every process needs (traverse folders): nothing else.
-        self.system.run(["sc.exe", "privs", self.service, "SeChangeNotifyPrivilege"])
-        self.system.run(["sc.exe", "failure", self.service, "reset=", "86400",
+        self.system.run([system_tool("sc.exe"), "privs", self.service, "SeChangeNotifyPrivilege"])
+        self.system.run([system_tool("sc.exe"), "failure", self.service, "reset=", "86400",
                          "actions=", "restart/10000/restart/30000"])
         env = {
             "NWPC_DATA_DIR": str(self.data),
@@ -572,7 +572,7 @@ class Setup:
         failures: list[str] = []
         self.stop_service(drain=True)
         if self.system.service_status(self.service) is not None:
-            self.system.run(["sc.exe", "delete", self.service], check=False)
+            self.system.run([system_tool("sc.exe"), "delete", self.service], check=False)
             for _ in range(60):
                 if self.system.service_status(self.service) is None:
                     break

@@ -13,7 +13,7 @@ import tarfile
 import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -160,6 +160,11 @@ class FakeWindows:
     # commands
     def run(self, cmd, *, env=None, timeout=0, check=True):
         cmd = [str(c) for c in cmd]
+        if "\\" in cmd[0] and PureWindowsPath(cmd[0]).name in ("sc.exe", "icacls.exe"):
+            assert PureWindowsPath(cmd[0]).parent.name.lower() == "system32"  # never a bare name
+            cmd[0] = PureWindowsPath(cmd[0]).stem if cmd[0].endswith("icacls.exe") else "sc.exe"
+        elif cmd[0] in ("sc.exe", "icacls", "powershell"):
+            raise AssertionError(f"{cmd[0]} run by bare name in elevated code")
         self.calls.append(cmd)
         if self.fail_pip and "pip" in cmd:
             raise SetupError("python -I -m pip failed (exit 1): no matching distribution")
@@ -469,8 +474,9 @@ def test_windows_toolkit_selection_data_work_and_permission_hand_back(tmp_path, 
     assert runner.calls[-1][0] is None  # no runuser: administrators may work in the data root
     toolkit._hand_back(inst.data_dir)
     toolkit._hand_back(inst.data_dir / "backups")  # missing: nothing to do
-    resets = [cmd for _, cmd in runner.calls if cmd[0] == "icacls"]
-    assert resets == [["icacls", str(inst.data_dir / "*"), "/reset", "/T", "/C", "/Q"]]  # never the root itself
+    resets = [cmd for _, cmd in runner.calls if cmd[0].endswith("icacls.exe")]
+    assert resets == [[resets[0][0], str(inst.data_dir / "*"), "/reset", "/T", "/C", "/Q"]]  # never the root itself
+    assert PureWindowsPath(resets[0][0]).parent.name.lower() == "system32"
 
 
 def test_linux_toolkit_is_unchanged_on_linux(tmp_path, monkeypatch):

@@ -38,7 +38,12 @@ The Linux rules apply, using Windows mechanisms:
   - the two data roots don't overlap.
 - **Credentials.** As on Linux, Platform session cookies are held in memory only. Nothing is written to Credential Manager or DPAPI, and the password is never stored.
 
-Not covered, and stated rather than assumed: administrators, including an administrator user who approves a UAC prompt, can read any file or process. The Standalone Agent runs with the user's non-elevated token, in which Administrators is deny-only.
+- **Elevated tools.** The installer and upgrader run `sc.exe`, `icacls.exe` and PowerShell by their absolute System32 path, never by bare name. Windows would otherwise look in the calling interpreter's folder first, which can be user-writable.
+
+Not covered, and stated rather than assumed:
+
+- **Runtime provenance.** The runtime is copied from the Python that runs the installer, and is trusted at that moment. If that Python lives in a user-writable folder, as a uv-managed or per-user install does, malware already running as that user before installation could have altered it. Prefer an all-users python.org installation under Program Files as the source.
+- **Administrators.** Administrators, including an administrator user who approves a UAC prompt, can read any file or process. The Standalone Agent runs with the user's non-elevated token, in which Administrators is deny-only.
 
 ## Install
 

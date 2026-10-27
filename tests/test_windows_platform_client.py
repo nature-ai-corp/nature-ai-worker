@@ -7,6 +7,7 @@ at the end; everything else runs on any OS."""
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -18,7 +19,7 @@ from pathlib import Path, PureWindowsPath
 import pytest
 
 from nature_worker.installation_mode import ModeError
-from nature_worker.platform_client import windows_setup, winservice
+from nature_worker.platform_client import windows_profile, windows_setup, winservice
 from nature_worker.platform_client.windows_setup import ACCOUNT, Setup, SetupError
 from nature_worker.windows_isolation import evaluate_windows_isolation
 from nature_worker.windows_security import (
@@ -144,6 +145,8 @@ class FakeWindows:
         self.resolve_override = None
         self.status_override = None
         self.prefix = None
+        self.profiles = tmp_path / "ServiceProfiles"
+        self.loaded_hives: set[str] = set()
 
     # identity and permissions
     def token(self):
@@ -230,6 +233,24 @@ class FakeWindows:
     def start_service(self, name, timeout):
         self.names.add(name)
         self.service = 4
+        # Like Windows: the first start creates the virtual account's profile and registers it.
+        sid = service_sid(name)
+        profile = self.profiles / name
+        if not profile.exists():
+            (profile / "AppData" / "Local" / "Temp").mkdir(parents=True)
+            (profile / "NTUSER.DAT").write_bytes(b"\0" * 64)
+            (profile / "ntuser.dat.LOG1").write_bytes(b"")
+            self.registry[rf"{windows_profile.PROFILE_LIST}\{sid}"] = {
+                "ProfileImagePath": rf"%SystemRoot%\ServiceProfiles\{name}"}
+
+    def user_hive_loaded(self, sid):
+        return sid in self.loaded_hives
+
+    def delete_profile(self, sid):
+        self.calls.append(["DeleteProfileW", sid])
+        key = rf"{windows_profile.PROFILE_LIST}\{sid}"
+        path = self.registry.pop(key)["ProfileImagePath"]
+        shutil.rmtree(self.profiles / PureWindowsPath(path).name)
 
     def stop_service(self, name, timeout):
         self.names.add(name)
@@ -288,6 +309,8 @@ def source_archive(tmp_path, commit="a" * 40, version="0.2.0"):
 def win(tmp_path, monkeypatch, request):
     monkeypatch.setattr(windows_setup, "start_menu", lambda: tmp_path / "start")
     monkeypatch.delenv("NATURE_WORKER_INSTALL_PREFIX", raising=False)
+    monkeypatch.setenv("SystemRoot", str(tmp_path))
+    monkeypatch.setattr(windows_profile, "profiles_root", lambda: tmp_path / "ServiceProfiles")
     fake = FakeWindows(tmp_path)
     service = getattr(request, "param", None)
     setup = Setup(tmp_path / "Program Files" / "PC", tmp_path / "ProgramData" / "NatureAIWorker" / "PC",
@@ -430,6 +453,152 @@ def test_uninstall_keeps_data_unless_asked_and_reports_clean_validation(win, tmp
     # Enterprise device policy cannot be verified locally, so a Standalone reinstall stays blocked.
     assert report["checks"]["device_policy"] is None and not report["standalone_install_allowed"]
     assert standalone.exists() and (standalone / "worker.db").read_text() == "standalone work"
+
+
+# -- the service account's Windows profile -----------------------------------------------
+
+def profile_of(setup, fake):
+    return fake.profiles / setup.service
+
+
+def test_ordinary_uninstall_keeps_the_service_profile_and_says_so(win, tmp_path):
+    setup, fake, standalone = win
+    install(setup, standalone, tmp_path)
+    profile = profile_of(setup, fake)
+    assert (profile / "NTUSER.DAT").exists()  # Windows made it on the first start
+    report = setup.uninstall(delete_local_data=True)
+    assert (profile / "NTUSER.DAT").exists() and not any(c[0] == "DeleteProfileW" for c in fake.calls)
+    summary = report["service_profile"]
+    assert summary["exists"] and summary["removable"] and summary["credential_files"] == []
+    # No credential file in the only place the service's Credential Manager entries could be.
+    assert report["checks"]["os_credentials"] is True and report["failures"] == []
+
+
+def test_remove_service_profile_uses_deleteprofile_for_the_verified_profile_only(win, tmp_path):
+    setup, fake, standalone = win
+    install(setup, standalone, tmp_path)
+    sibling = fake.profiles / "LocalService"
+    (sibling / "AppData").mkdir(parents=True)
+    report = setup.uninstall(delete_local_data=True, remove_service_profile=True)
+    assert ["DeleteProfileW", setup.sid] in fake.calls and report["failures"] == []
+    assert not profile_of(setup, fake).exists()
+    assert rf"{windows_profile.PROFILE_LIST}\{setup.sid}" not in fake.registry
+    assert (sibling / "AppData").is_dir()  # no other ServiceProfiles folder is touched
+    assert report["service_profile"]["exists"] is False
+
+
+def credential_file(profile):
+    path = profile / "AppData" / "Local" / "Microsoft" / "Credentials" / "0123ABCD"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"opaque")
+
+
+def dpapi_key(profile):
+    path = profile / "AppData" / "Roaming" / "Microsoft" / "Protect" / "S-1-5-80-1" / "key"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"opaque")
+
+
+def other_data(profile):
+    (profile / "Documents").mkdir()
+    (profile / "Documents" / "notes.txt").write_text("someone's")
+
+
+@pytest.mark.parametrize("damage, reason, os_credentials", [
+    (credential_file, "Credential Manager file", False),
+    (dpapi_key, "DPAPI master keys and the data root is kept", True),
+    (other_data, "data outside what Windows creates: Documents", True),
+])
+def test_remove_service_profile_refuses_meaningful_state(win, tmp_path, damage, reason, os_credentials):
+    setup, fake, standalone = win
+    install(setup, standalone, tmp_path)
+    profile = profile_of(setup, fake)
+    damage(profile)
+    report = setup.uninstall(delete_local_data=False, remove_service_profile=True)
+    assert not any(c[0] == "DeleteProfileW" for c in fake.calls)
+    assert any("service account profile" in f and reason in f for f in report["failures"])
+    assert report["checks"]["os_credentials"] is os_credentials
+    files = [p for p in profile.rglob("*") if p.is_file()]
+    assert files and all(p.read_bytes() for p in files if p.name != "ntuser.dat.LOG1")  # nothing deleted
+
+
+def test_dpapi_keys_alone_do_not_block_removal_when_the_data_is_deleted_too(win, tmp_path):
+    setup, fake, standalone = win
+    install(setup, standalone, tmp_path)
+    dpapi_key(profile_of(setup, fake))
+    report = setup.uninstall(delete_local_data=True, remove_service_profile=True)
+    assert report["failures"] == [] and not profile_of(setup, fake).exists()
+
+
+@pytest.mark.parametrize("tamper, reason", [
+    ("elsewhere", "ProfileList names"),
+    ("unregistered", "ProfileList has no entry"),
+    ("owner", "owned by"),
+    ("ungranted", "do not grant the service account"),
+    ("loaded", "registry hive loaded"),
+])
+def test_remove_service_profile_refuses_unverified_identity(win, tmp_path, tamper, reason):
+    setup, fake, standalone = win
+    install(setup, standalone, tmp_path)
+    profile, key = profile_of(setup, fake), rf"{windows_profile.PROFILE_LIST}\{setup.sid}"
+    other = tmp_path / "Users" / "someone"
+    other.mkdir(parents=True)
+    (other / "keep.txt").write_text("not ours")
+    if tamper == "elsewhere":
+        fake.registry[key]["ProfileImagePath"] = str(other)
+    elif tamper == "unregistered":
+        del fake.registry[key]
+    elif tamper == "owner":
+        fake.acls[profile] = Acl(USER, True, (Ace(SYSTEM, FULL), Ace(setup.sid, FULL)))
+    elif tamper == "ungranted":
+        fake.acls[profile] = Acl(SYSTEM, True, (Ace(SYSTEM, FULL), Ace(ADMINISTRATORS, FULL)))
+    else:
+        fake.loaded_hives.add(setup.sid)
+    report = setup.uninstall(delete_local_data=True, remove_service_profile=True)
+    assert not any(c[0] == "DeleteProfileW" for c in fake.calls)
+    assert any(reason in f for f in report["failures"]), report["failures"]
+    assert (profile / "NTUSER.DAT").exists() and (other / "keep.txt").read_text() == "not ours"
+
+
+def test_remove_service_profile_refuses_a_linked_profile_folder(win, tmp_path):
+    setup, fake, standalone = win
+    install(setup, standalone, tmp_path)
+    profile = profile_of(setup, fake)
+    target = tmp_path / "elsewhere"
+    profile.rename(target)
+    try:
+        os.symlink(target, profile, target_is_directory=True)
+    except OSError:
+        pytest.skip("symbolic links not permitted")
+    report = setup.uninstall(delete_local_data=True, remove_service_profile=True)
+    assert not any(c[0] == "DeleteProfileW" for c in fake.calls)
+    assert any("link or junction" in f for f in report["failures"])
+    assert (target / "NTUSER.DAT").exists()
+
+
+def test_service_profile_links_inside_are_listed_not_followed(win, tmp_path):
+    setup, fake, standalone = win
+    install(setup, standalone, tmp_path)
+    outside = tmp_path / "outside"
+    (outside / "Documents").mkdir(parents=True)
+    (outside / "Documents" / "keep.txt").write_text("not ours")
+    try:
+        os.symlink(outside, profile_of(setup, fake) / "AppData" / "Application Data", target_is_directory=True)
+    except OSError:
+        pytest.skip("symbolic links not permitted")
+    profile = setup.service_profile()
+    assert any("(link, not followed)" in f for f in profile.files)
+    assert not any("keep.txt" in f for f in profile.files)
+    assert profile.problems == [f"service {setup.service} is still registered"]  # the link is no problem
+
+
+def test_remove_service_profile_is_refused_while_the_service_is_registered(win, tmp_path):
+    setup, fake, standalone = win
+    install(setup, standalone, tmp_path)
+    profile = windows_profile.inspect(fake, setup.service, setup.sid, service_registered=True, data_kept=False)
+    assert any("still registered" in p for p in profile.problems)
+    with pytest.raises(ValueError):
+        windows_profile.remove(fake, profile)
 
 
 def test_uninstall_never_follows_links_out_of_the_data_root(win, tmp_path):
@@ -618,6 +787,28 @@ def test_service_host_outside_the_scm_says_how_to_start_it():
     from nature_worker.windows_service import ServiceError, ServiceHost
     with pytest.raises(ServiceError, match="sc.exe start"):
         ServiceHost("NatureWorkerTest", lambda *_: 0).dispatch()
+
+
+@windows_only
+def test_native_service_profile_inspection_is_read_only():
+    """LocalService's own profile, as Windows registers it: identity matched, never removable
+    (its hive is loaded), and nothing is deleted. Without elevation the folder may be unreadable."""
+    import ctypes
+
+    class NoDelete(windows_setup.WindowsSystem):
+        def delete_profile(self, sid):
+            raise AssertionError("an inspection must never delete")
+
+    system = NoDelete()
+    assert system.user_hive_loaded("S-1-5-19") is True
+    assert system.user_hive_loaded("S-1-5-80-0-0-0-0-1") is False
+    profile = windows_profile.inspect(system, "LocalService", "S-1-5-19", service_registered=False,
+                                      data_kept=False)
+    assert profile.exists and profile.registered
+    assert not any("ProfileList" in p for p in profile.problems), profile.problems
+    assert profile.problems  # loaded, or unreadable without elevation: never removable
+    assert profile.unreadable or profile.loaded
+    assert ctypes.WinDLL("userenv").DeleteProfileW  # the Windows API the removal uses exists
 
 
 # -- runtime copy and diagnostics (first native e2e run: venv launcher missing) ------------

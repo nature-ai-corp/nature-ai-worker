@@ -84,9 +84,10 @@ ACTIVE_PATTERN = (r"platform_client_windows_e2e\.py|platform-client-windows\.py|
                   r"nature-worker-upgrade|nature-worker-platform-client-setup|windows_setup|nwpc-uninstall")
 # Credential Manager entries Windows maintains for the signed-in user itself (Microsoft account and
 # Web Account Manager single sign-on, Office, OneDrive, Xbox): TokenBroker refreshes them in the
-# background at any time (e2e-4952 cleanup: one was rewritten mid-uninstall, as the Start menu
-# re-indexed). A change to one of them is reported, never counted as Nature AI Worker's; every
-# other added, removed or changed entry fails the run.
+# background at any time (e2e-4952 cleanup: the user's credential file was rewritten mid-uninstall,
+# as the Start menu re-indexed). Only a refresh is accepted: the same target before and after with
+# changed metadata, recorded with both versions and its impact. Every entry added or removed, of
+# these targets too, and every change to any other entry fails the run.
 WINDOWS_MANAGED_TARGET = re.compile(
     r"^(?:\w+:target=)?(?:MicrosoftAccount:|SSO_POP_(?:Device|User)|virtualapp/didlogical|WindowsLive:|"
     r"MicrosoftOffice\d*_Data:|OneDrive Cached Credential|XblGrts|XboxLive|Xbl\|)", re.IGNORECASE)
@@ -131,11 +132,22 @@ def redact(target: str) -> str:
 
 
 def credential_changes(before: str, after: str) -> tuple[list[str], list[str]]:
-    """Targets added, removed or changed between two listings: (Windows-maintained, all others)."""
+    """Targets that differ between two listings: (Windows-maintained entries refreshed in place,
+    every other change: any entry added or removed, and any other entry changed)."""
     old, new = credential_entries(before), credential_entries(after)
     changed = sorted({e[0] for e in old ^ new})
-    managed = [t for t in changed if WINDOWS_MANAGED_TARGET.search(t)]
-    return managed, [t for t in changed if t not in managed]
+    kept = {e[0] for e in old} & {e[0] for e in new}
+    refreshed = [t for t in changed if t in kept and WINDOWS_MANAGED_TARGET.search(t)]
+    return refreshed, [t for t in changed if t not in refreshed]
+
+
+def describe_change(target: str, before: str, after: str) -> str:
+    """One changed target with its metadata before and after (no secret, no user name)."""
+    def versions(listing: str) -> str:
+        found = sorted(f"[{kind or '?'}, {persist or '?'}, user {user or '-'}]"
+                       for t, kind, persist, user in credential_entries(listing) if t == target)
+        return " ".join(found) or "absent"
+    return f"{redact(target)}: before {versions(before)}, after {versions(after)}"
 
 
 def service_profile(system, sid: str, service: str) -> Path | None:
@@ -248,6 +260,23 @@ class E2E:
         """The installer as a user runs it from the checkout (never from inside the installation)."""
         return self.run([sys.executable, "-I", REPO / "scripts" / "platform-client-windows.py", "--prefix",
                          self.prefix, "--data", self.data, "--service", E2E_SERVICE, *args])
+
+    def inspect_service_profile(self) -> dict:
+        """The installer's read-only inspection of the e2e service account's Windows profile, which
+        Windows keeps after the service is deleted (removed only by an explicit
+        ``uninstall --remove-service-profile``, which the e2e never runs)."""
+        result = self.setup_cmd("service-profile")
+        expect(result.returncode == 0, f"service-profile failed: {result.stdout[-800:]}{result.stderr[-800:]}")
+        summary = json.loads(result.stdout)
+        self.journal(f"service account profile: {json.dumps(summary)}")
+        expect(not summary["credential_files"],
+               f"the service account stored Credential Manager files: {summary['credential_files']}")
+        expect(not summary["other_data"], f"the service account profile holds data: {summary['other_data']}")
+        self.note(f"service account profile {summary['path']}: "
+                  + (f"kept by Windows ({summary['file_count']} files, names in e2e-journal.log), no credential "
+                     f"files, no data; DPAPI master keys: {len(summary['dpapi_master_keys'])}; "
+                     f"removable on request: {summary['removable']}" if summary["exists"] else "not created"))
+        return summary
 
     def upgrader(self, *args) -> subprocess.CompletedProcess:
         return self.run([self.prefix / "bin" / "nature-worker-upgrade.cmd", *args])
@@ -399,12 +428,17 @@ class E2E:
     def check_credentials(self, after: str) -> None:
         """Nature AI Worker added, removed or changed no Credential Manager entry of this user, and
         its service account stored none in its own profile (which this user's listing cannot show)."""
-        managed, other = credential_changes(self.before["credential_manager"], after)
-        if managed:
-            self.note("Credential Manager: entries Windows maintains for the signed-in account changed during "
-                      f"the run (TokenBroker refresh, not Nature AI Worker): {', '.join(map(redact, managed))}")
+        before = self.before["credential_manager"]
+        refreshed, other = credential_changes(before, after)
+        for target in refreshed:
+            self.note("Credential Manager: Windows refreshed an entry it maintains for the signed-in account "
+                      f"(TokenBroker; Nature AI Worker uses no Credential Manager API): "
+                      f"{describe_change(target, before, after)}. Impact: none on the Worker's isolation; the "
+                      "entry is in this user's vault, encrypted for this user, which the service account "
+                      "cannot open; only this user's sign-in to Microsoft services uses it.")
         expect(not other, "Credential Manager entries of this user were added, removed or changed: "
-               f"{', '.join(map(redact, other))} (metadata of both listings: e2e-journal.log)")
+               + "; ".join(describe_change(t, before, after) for t in other)
+               + " (metadata of both listings: e2e-journal.log)")
         profile = service_profile(self.system, self.sid, E2E_SERVICE)
         stored = profile_credential_files(profile) if profile else []
         expect(not stored, f"the service account stored Credential Manager files: {stored}")
@@ -604,6 +638,7 @@ class E2E:
             expect(f"{check}: verified clean" in result.stdout, f"{check} not verified clean")
         expect("device_policy: unverified" in result.stdout, "device policy should be reported unverified")
         expect((self.standalone / "worker.db").exists(), "the Standalone data was removed")
+        self.inspect_service_profile()
         self.note("uninstall --delete-local-data: everything removed; credentials, processes, packages and "
                   "locations verified clean; device policy unverified (by design it blocks an automatic "
                   "Standalone reinstall); Standalone data untouched")
@@ -712,6 +747,7 @@ class E2E:
         expect(result.returncode == 0 and not remaining,
                f"e2e uninstall exit {result.returncode}; still present: {remaining or 'none'}\n{output}")
         self.note(f"removed {leftovers} with the e2e uninstall (exit 0); nothing of the e2e namespace remains")
+        self.inspect_service_profile()
 
     # -- abnormal termination -----------------------------------------------------------
 

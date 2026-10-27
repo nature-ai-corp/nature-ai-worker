@@ -17,6 +17,11 @@ SCENARIOS = ("s_install", "s_repair", "s_signed_upgrade", "s_failed_upgrade_roll
              "s_uninstall_with_data", "s_production_untouched")
 
 
+PROFILE = {"path": "C:\\Windows\\ServiceProfiles\\NatureWorkerPlatformClientE2E", "exists": True,
+           "credential_files": [], "dpapi_master_keys": [], "other_data": [], "file_count": 3,
+           "removable": True, "problems": []}
+
+
 @pytest.fixture
 def e2e(tmp_path, monkeypatch):
     spec = importlib.util.spec_from_file_location("platform_client_windows_e2e", SCRIPT)
@@ -33,6 +38,8 @@ def e2e(tmp_path, monkeypatch):
             shutil.rmtree(module.E2E_PREFIX, ignore_errors=True)
             shutil.rmtree(module.E2E_DATA, ignore_errors=True)
             self.system.service = None
+        if args[0] == "service-profile":  # read-only; Windows keeps the profile after the uninstall
+            return subprocess.CompletedProcess(args, 0, json.dumps(PROFILE), "")
         return subprocess.CompletedProcess(args, 0, "", "")
     monkeypatch.setattr(module.E2E, "setup_cmd", setup_cmd)
 
@@ -292,10 +299,12 @@ def test_cleanup_of_leftovers_uses_the_e2e_uninstall_and_checks_production(lefto
     workdir.mkdir()
     (workdir / "windows-platform-client-e2e.md").write_text("earlier report", encoding="utf-8")
     assert module.cleanup_leftovers(workdir, "https://x.invalid") == 0
-    assert calls == [("uninstall", "--delete-local-data")]
+    # The service profile is inspected, never removed (no --remove-service-profile).
+    assert calls == [("uninstall", "--delete-local-data"), ("service-profile",)]
     assert not module.E2E_PREFIX.parent.exists() and not module.E2E_DATA.parent.exists()
     report = (workdir / "windows-platform-client-e2e-cleanup.md").read_text(encoding="utf-8")
     assert "Result: 3/3 passed" in report and "nothing of the e2e namespace remains" in report
+    assert "kept by Windows (3 files" in report and "removable on request: True" in report
     assert (workdir / "windows-platform-client-e2e.md").read_text(encoding="utf-8") == "earlier report"
 
 
@@ -369,7 +378,9 @@ def test_a_windows_sign_in_refresh_is_reported_not_failed(e2e, tmp_path):
     runner = module.E2E(tmp_path, None, "https://x.invalid")
     runner.before = {"credential_manager": LISTING}
     runner.check_credentials(after)
-    assert any("TokenBroker refresh, not Nature AI Worker" in line for line in runner.lines)
+    note = next(line for line in runner.lines if "Windows refreshed an entry" in line)
+    assert "before [Generic, Saved for this logon only, user " in note and "Impact:" in note
+    assert "02abcdefghijkl" not in note and "02zzzzzzzzzzzz" not in note
     runner.journal.close()
 
 
@@ -380,6 +391,9 @@ def test_a_windows_sign_in_refresh_is_reported_not_failed(e2e, tmp_path):
               "    User: svc\n    Local machine persistence\n",                            # added (any name)
     LISTING.replace("    Target: LegacyGeneric:target=git:https://github.com", "    Target: LegacyGeneric:target=x"),
     LISTING.replace("User: someone@example.com", "User: other@example.com"),           # user changed
+    LISTING.replace("    Target: MicrosoftAccount:target=SSO_POP_Device", "    Target: x"),  # managed removed
+    LISTING + "    Target: MicrosoftAccount:target=SSO_POP_User\n    Type: Generic \n"
+              "    User: 02x\n    Saved for this logon only\n",                           # managed added
 ])
 def test_every_other_credential_change_still_fails(e2e, tmp_path, after):
     module, _ = e2e

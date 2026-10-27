@@ -48,6 +48,7 @@ from ..windows_security import (
     ADMINISTRATORS, FILE_ALL_ACCESS, FILE_MODIFY, MACHINE_ADMINS, SYSTEM, Acl, WindowsSecurityError,
     admin_only_problems, private_problems, service_sid, system_tool,
 )
+from . import windows_profile
 from .winservice import SERVICE_NAME, service_log
 
 ACCOUNT = f"NT SERVICE\\{SERVICE_NAME}"
@@ -178,6 +179,25 @@ class WindowsSystem:
             winreg.DeleteKey(winreg.HKEY_LOCAL_MACHINE, key)
         except FileNotFoundError:
             pass
+
+    def user_hive_loaded(self, sid: str) -> bool:
+        import winreg
+        try:
+            winreg.OpenKey(winreg.HKEY_USERS, sid, 0, winreg.KEY_READ).Close()
+            return True
+        except FileNotFoundError:
+            return False
+
+    def delete_profile(self, sid: str) -> None:
+        """Windows' own profile removal (userenv DeleteProfileW): its folder and ProfileList entry."""
+        import ctypes
+        from ctypes import wintypes
+        userenv = ctypes.WinDLL("userenv", use_last_error=True)
+        userenv.DeleteProfileW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR]
+        userenv.DeleteProfileW.restype = wintypes.BOOL
+        if not userenv.DeleteProfileW(sid, None, None):
+            raise SetupError(f"Windows could not delete the profile of {sid} (DeleteProfileW error "
+                             f"{ctypes.get_last_error()})")
 
     def http_status(self, port: int) -> dict | None:
         answer = self.http_probe(port)
@@ -646,9 +666,17 @@ class Setup:
 
     # -- uninstall --------------------------------------------------------------------
 
-    def uninstall(self, *, delete_local_data: bool) -> dict:
+    def service_profile(self) -> windows_profile.Profile:
+        """The profile Windows made for the service account (read-only; names and sizes only)."""
+        return windows_profile.inspect(self.system, self.service, self.sid,
+                                       service_registered=self.system.service_status(self.service) is not None,
+                                       data_kept=self.data.exists())
+
+    def uninstall(self, *, delete_local_data: bool, remove_service_profile: bool = False) -> dict:
         """Remove the service, code and registration. Local data only with ``delete_local_data``,
-        after its manifest is shown. Platform server data and Standalone are never touched."""
+        after its manifest is shown; the service account's Windows profile only with
+        ``remove_service_profile``, and only if it is verifiably this service's and holds nothing
+        meaningful. Platform server data and Standalone are never touched."""
         self.require_admin()
         inst = self.installation() or {}
         port = int(self.service_environment().get("NWPC_PORT") or inst.get("port") or DEFAULT_PORT)
@@ -677,6 +705,23 @@ class Setup:
             _remove_if_empty(self.data.parent)
         elif self.data.exists():
             self.say("Data kept. Run `uninstall --delete-local-data` to remove it.")
+        profile = self.service_profile()
+        if profile.present:
+            self.say(f"Service account profile {profile.expected} (created by Windows):")
+            for line in profile.files or ["(empty)"]:
+                self.say(f"  {line}")
+        if profile.present and remove_service_profile:
+            if profile.problems:
+                failures.append(f"service account profile {profile.expected} kept: {'; '.join(profile.problems)}")
+            else:
+                left = windows_profile.remove(self.system, profile)
+                if left:
+                    failures.append(f"service account profile not completely removed: {left}")
+                else:
+                    self.say(f"Removed the service account profile {profile.expected} (DeleteProfileW)")
+        elif profile.present:
+            self.say("Service account profile kept. Run `uninstall --remove-service-profile` to remove it"
+                     + (f" (not possible now: {'; '.join(profile.problems)})" if profile.problems else "") + ".")
         report = self.clean_validation(port)
         report["failures"] = failures
         for failure in failures:
@@ -694,10 +739,12 @@ class Setup:
         registered = (self.system.service_status(self.service) is not None
                       or self.system.get_registry(self.uninstall_key, "DisplayName") is not None)
         leftovers = [p for p in (self.prefix, self.data, self.shortcut) if p.exists()]
+        # The Windows Platform Client keeps sessions in memory only and uses no Credential Manager
+        # and no DPAPI. Evidence: the service account's profile (the only place its Credential
+        # Manager entries could be) holds no credential file. A kept, empty profile is not residue.
+        profile = self.service_profile()
         checks = {
-            # The Windows Platform Client keeps sessions in memory only: it creates no Credential
-            # Manager entry and no DPAPI file; its data root (checked below) is the only storage.
-            "os_credentials": True,
+            "os_credentials": False if profile.credential_files else None if profile.unreadable else True,
             "running_processes": None if running is None else not running,
             "installed_packages": not registered,
             "other_app_locations": not leftovers,
@@ -714,7 +761,8 @@ class Setup:
         for blocker in decision.blockers:
             self.say(f"  blocker: {blocker}")
         return {"checks": checks, "standalone_install_allowed": decision.allowed,
-                "blockers": list(decision.blockers), "processes": processes or []}
+                "blockers": list(decision.blockers), "processes": processes or [],
+                "service_profile": profile.summary()}
 
     # -- status -----------------------------------------------------------------------
 
@@ -920,7 +968,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("repair", help="re-apply service, permissions and registration of the active build")
     p = sub.add_parser("uninstall", help="remove the service and code; data only with --delete-local-data")
     p.add_argument("--delete-local-data", action="store_true")
+    p.add_argument("--remove-service-profile", action="store_true",
+                   help="also remove the service account's Windows profile (DeleteProfileW), "
+                        "only if it is verifiably this service's and holds no credentials or data")
     sub.add_parser("status", help="show the installation and service state")
+    sub.add_parser("service-profile", help="inspect the service account's Windows profile (read-only)")
     args = parser.parse_args(argv)
 
     if sys.platform != "win32":
@@ -943,9 +995,13 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "repair":
             setup.repair()
         elif args.command == "uninstall":
-            report = setup.uninstall(delete_local_data=args.delete_local_data)
+            report = setup.uninstall(delete_local_data=args.delete_local_data,
+                                     remove_service_profile=args.remove_service_profile)
             code = 1 if report["failures"] else 0
             return code
+        elif args.command == "service-profile":
+            profile = setup.service_profile()
+            print(json.dumps({**profile.summary(), "files": profile.files}, indent=2))
         else:
             print(json.dumps(setup.status(), indent=2, default=str))
         code = 0

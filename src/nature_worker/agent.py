@@ -19,21 +19,24 @@ from typing import Callable, Iterator
 
 from .db import Database
 from .providers import Provider, ProviderError
-from .tools import ApprovalRequired, ToolContext, ToolError, available_tools, execute
+from .tools import ApprovalRequired, ToolContext, ToolError, ToolOutput, available_tools, execute, owned_files
 
 log = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are Nature AI Worker, a capable general-purpose assistant that completes tasks for the user.
 
-You work inside a local workspace folder and can use tools to list, read, search, write and delete files,
-summarize tables, do exact arithmetic{web}.
+You work inside a local workspace folder and can use tools to list, read, search, write, append to and
+delete files, summarize tables, do exact arithmetic{web}.
 
 How to work:
 - Understand the user's goal. If it is genuinely ambiguous, ask a short clarifying question; otherwise act.
 - Use tools to look at real data instead of guessing. Use list_files first when you do not know file names.
 - For multi-step tasks, work step by step: gather information, process it, then produce the result.
 - When asked to create a document or report, write it to the workspace with write_file (Markdown unless
-  another format is requested) and tell the user the file name.
+  another format is requested) and tell the user the file name. For a long document, write it in parts:
+  write_file with the first section, then append_file for each further section, so that no single reply
+  becomes too long. You may revise files you created in this conversation; changing other files needs
+  the user's approval.
 - Use the calculate tool for any non-trivial arithmetic.
 - All paths are relative to the workspace root. You cannot access files outside the workspace.
 - Some operations (overwriting or deleting files, fetching web pages) require the user's approval. When the
@@ -47,6 +50,15 @@ How to work:
 - Finish with a concise answer summarizing what you did and the result.
 
 Today's date is {date}."""
+
+
+# A reply that stopped at the model's output limit may hold half-written arguments (for example a
+# write_file with only part of the document): such calls are never executed.
+TRUNCATED_CALL = ("Not performed: your reply reached the model's output limit before this call was complete, "
+                  "so its arguments may be cut off. Send long content in smaller parts: write_file with the "
+                  "first part, then append_file for each further part.")
+TRUNCATED_TEXT = ("The model's reply reached its output limit and may be incomplete. Send a message such as "
+                  "'continue' to let the agent finish.")
 
 
 class ConversationBusy(Exception):
@@ -94,7 +106,7 @@ class Agent:
                 return "stale"
             name, args = approval["tool_name"], approval["arguments"]
             if approve:
-                self._run_tool(conv_id, self.context_factory(), approval["tool_call_id"], name, args, approved=True)
+                self._run_tool(conv_id, self._context(conv_id), approval["tool_call_id"], name, args, approved=True)
             else:
                 self.db.add_message(
                     conv_id, "tool", "The user denied this operation. It was not performed.",
@@ -115,6 +127,12 @@ class Agent:
         finally:
             lock.release()
 
+    def _context(self, conv_id: str) -> ToolContext:
+        """The tool context of one conversation, with the files the Worker created in it."""
+        ctx = self.context_factory()
+        ctx.owned = owned_files(self.db.get_messages(conv_id))
+        return ctx
+
     def _system_prompt(self, ctx: ToolContext) -> str:
         return SYSTEM_PROMPT.format(
             web=", and fetch public web pages" if ctx.web_fetch_enabled else "",
@@ -134,7 +152,7 @@ class Agent:
 
     def _run(self, conv_id: str) -> str:
         try:
-            ctx = self.context_factory()
+            ctx = self._context(conv_id)
             provider = self.provider_factory()
         except ProviderError as e:
             self.db.add_message(conv_id, "notice", e.message, meta={"error": e.kind})
@@ -176,12 +194,18 @@ class Agent:
                 return "error"
 
             _ensure_unique_ids(result.tool_calls, messages)
+            if result.truncated:
+                for call in result.tool_calls:
+                    call.extra["argument_error"] = TRUNCATED_CALL
+            meta = {**(result.meta or {}), **({"truncated": True} if result.truncated else {})}
             self.db.add_message(
                 conv_id, "assistant", result.text,
                 tool_calls=[tc.to_dict() for tc in result.tool_calls] or None,
-                meta=result.meta or None,
+                meta=meta or None,
             )
             if not result.tool_calls:
+                if result.truncated:
+                    self.db.add_message(conv_id, "notice", TRUNCATED_TEXT, meta={"error": "truncated"})
                 return "done"
 
     def _run_tool(self, conv_id: str, ctx: ToolContext, call_id: str, name: str, args: dict, approved: bool = False) -> bool:
@@ -189,6 +213,8 @@ class Agent:
         try:
             output = execute(ctx, name, args, approved=approved)
             meta = None
+            if isinstance(output, ToolOutput):
+                output, meta = str(output), output.meta
         except ApprovalRequired as e:
             self.db.add_approval(conv_id, call_id, name, args, e.reason)
             return False

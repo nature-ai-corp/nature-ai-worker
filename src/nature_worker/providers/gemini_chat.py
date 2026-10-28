@@ -130,4 +130,5 @@ class GeminiChat:
                 )
             elif part.text and not part.thought:
                 texts.append(part.text)
-        return ChatResult(text="".join(texts), tool_calls=calls)
+        finish = getattr(resp.candidates[0].finish_reason, "name", resp.candidates[0].finish_reason)
+        return ChatResult(text="".join(texts), tool_calls=calls, truncated=str(finish) == "MAX_TOKENS")

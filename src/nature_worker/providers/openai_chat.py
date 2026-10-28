@@ -96,4 +96,5 @@ class OpenAIChat:
         reasoning = (msg.model_extra or {}).get("reasoning_content")
         if reasoning and calls:
             meta["reasoning_content"] = reasoning
-        return ChatResult(text=msg.content or "", tool_calls=calls, meta=meta)
+        return ChatResult(text=msg.content or "", tool_calls=calls, meta=meta,
+                          truncated=resp.choices[0].finish_reason == "length")

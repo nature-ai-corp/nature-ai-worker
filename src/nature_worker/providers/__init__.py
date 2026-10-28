@@ -42,6 +42,10 @@ class ChatResult:
     tool_calls: list[ToolCall]
     # Provider-specific data stored with the assistant message (e.g. reasoning content).
     meta: dict[str, Any] = field(default_factory=dict)
+    # The reply stopped at the model's output limit: its text and any tool-call arguments
+    # may be incomplete (OpenAI finish_reason "length", Anthropic stop_reason "max_tokens",
+    # Gemini MAX_TOKENS, Ollama done_reason "length").
+    truncated: bool = False
 
 
 class ProviderError(Exception):

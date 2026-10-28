@@ -14,7 +14,7 @@ Connect the model you already use, describe a task in plain language, and approv
 ## Highlights
 
 - **One built-in General Agent.** No agents, workflows or code to set up. It reads, searches and writes files, summarizes CSV/TSV/JSON tables, does exact arithmetic, and can fetch web pages if you turn that on.
-- **You stay in control.** Overwriting or deleting a file and fetching a web page always wait for your approval. This is enforced where tools run, not just requested in the prompt.
+- **You stay in control.** Changing or deleting one of your files and fetching a web page always wait for your approval. The agent may revise only the files it created itself in the same conversation, and only while they are exactly as it left them. This is enforced where tools run, not just requested in the prompt.
 - **Confined to one workspace folder.** Paths outside it, `..` traversal and escaping symlinks are blocked. There is no shell or code-execution tool.
 - **Your model, your choice:** OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Ollama (local models), or any OpenAI-compatible API.
 - **Small and local.** One Python process, SQLite, and a plain web UI. API keys are encrypted at rest and only sent to the endpoint you configured.
@@ -169,7 +169,8 @@ Statuses describe how the agent's last run ended, not whether your goal was met.
 | `search_text` | Find text or a regex across workspace files | No |
 | `table_summary` | Row and column statistics for CSV, TSV or JSON tables | No |
 | `calculate` | Exact arithmetic (safe expression evaluator, no code execution) | No |
-| `write_file` | Create a file | No for new files; **yes to overwrite** |
+| `write_file` | Create or replace a file | No for new files and for files the agent created in this conversation; **yes for any other existing file** |
+| `append_file` | Add text to the end of a file, to write long documents in parts (1 MB per call, 5 MB per file) | Same as `write_file` |
 | `delete_file` | Delete a file | **Always** |
 | `web_fetch` | Fetch a public web page as text (only when enabled in Settings) | **Always** |
 

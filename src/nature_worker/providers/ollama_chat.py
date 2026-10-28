@@ -62,8 +62,9 @@ class OllamaChat:
             raise classify_status(resp.status_code, str(detail))
 
         try:
-            msg = resp.json().get("message") or {}
-        except ValueError as e:
+            answer = resp.json()
+            msg = answer.get("message") or {}
+        except (ValueError, AttributeError) as e:
             raise provider_error("unknown", "Ollama returned an invalid response") from e
         calls = []
         for tc in msg.get("tool_calls") or []:
@@ -77,4 +78,5 @@ class OllamaChat:
                     extra={} if isinstance(args, dict) else {"argument_error": f"Invalid arguments: {args!r}"[:200]},
                 )
             )
-        return ChatResult(text=msg.get("content") or "", tool_calls=calls)
+        return ChatResult(text=msg.get("content") or "", tool_calls=calls,
+                          truncated=answer.get("done_reason") == "length")

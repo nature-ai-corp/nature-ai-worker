@@ -96,11 +96,14 @@ def summarize(conv: dict, messages: list[dict], approvals: list[dict], running: 
     for r in results:
         meta = r["meta"] or {}
         call = calls.get(r["tool_call_id"])
-        if meta or not call or not isinstance((call.get("arguments") or {}).get("path"), str):
+        if meta.get("error") or meta.get("denied") or not call \
+                or not isinstance((call.get("arguments") or {}).get("path"), str):
             continue  # only successful calls with a path count
         path = _normalize(workspace, call["arguments"]["path"])
         if r["tool_name"] == "write_file":
             deliverables[path] = {"written_at": r["created_at"], "action": r["content"].split(" ", 1)[0]}
+        elif r["tool_name"] == "append_file":
+            deliverables.setdefault(path, {"action": "Appended"})["written_at"] = r["created_at"]
         elif r["tool_name"] == "delete_file":
             deliverables.pop(path, None)
         elif r["tool_name"] in INPUT_TOOLS:

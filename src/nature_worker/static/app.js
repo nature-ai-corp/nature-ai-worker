@@ -526,8 +526,8 @@ function toolCard(call, result, time) {
       time ? el("time", { class: "time muted small", datetime: new Date(time * 1000).toISOString(), title: formatTime(time) }, formatClock(time)) : null,
       el("span", { class: "state " + cls }, stateText)));
   const body = [];
-  if (call.name === "write_file" && call.arguments && typeof call.arguments.content === "string") {
-    body.push("Content written:\n" + call.arguments.content);
+  if ((call.name === "write_file" || call.name === "append_file") && call.arguments && typeof call.arguments.content === "string") {
+    body.push((call.name === "append_file" ? "Content appended:\n" : "Content written:\n") + call.arguments.content);
   }
   if (result) body.push("Result:\n" + result.content);
   if (body.length) details.append(el("pre", {}, body.join("\n\n")));

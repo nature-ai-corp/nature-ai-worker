@@ -429,6 +429,31 @@ def test_reinstall_that_fails_to_build_restarts_the_running_build(win, tmp_path)
     assert setup.current() == first and fake.service == 4 and fake.http_status(8090)["build"] == first
 
 
+@pytest.mark.parametrize("win", ["NatureWorkerPlatformClientUIAcceptance"], indirect=True)
+def test_reinstall_over_a_running_named_namespace_keeps_data_identity_and_privacy(win, tmp_path):
+    """The UIAcceptance update (6fca3ff -> b145c63): same service, SID, port and data; the data
+    root's DACL is rewritten to exactly the private entries; the old build stays for rollback."""
+    setup, fake, standalone = win
+    first = install(setup, standalone, tmp_path, port=8091)
+    (setup.data / "kept.json").write_text("kept")
+    fake.busy_ports.add(8091)  # held by this namespace's own running service
+    sid, env_before = setup.sid, fake.registry[setup.service_key]["Environment"]
+    fake.calls.clear()
+    second = install(setup, standalone, tmp_path, port=8091, archive=source_archive(tmp_path, "e" * 40))
+    assert second == "0.2.0+geeeeeeeeeeee" != first and setup.current() == second and fake.service == 4
+    assert (setup.data / "kept.json").read_text() == "kept"
+    assert fake.http_status(8091)["build"] == second
+    assert setup.sid == sid == service_sid("NatureWorkerPlatformClientUIAcceptance")
+    assert any(c[:3] == ["sc.exe", "config", setup.service] for c in fake.calls)
+    assert not any(c[:2] == ["sc.exe", "create"] for c in fake.calls)
+    assert fake.registry[setup.service_key]["Environment"] == env_before  # same origin, port, Standalone SID
+    acl = fake.acls[setup.data]
+    assert acl.protected and acl.grantees() == {SYSTEM, ADMINISTRATORS, sid}
+    assert private_problems(acl, sid) == []
+    assert (setup.prefix / "versions" / first).is_dir()  # kept for rollback
+    assert "UIAcceptance" in setup.uninstall_key and "UIAcceptance" in setup.shortcut.name
+
+
 def test_repair_reapplies_everything_but_keeps_version_origin_and_data(win, tmp_path):
     setup, fake, standalone = win
     label = install(setup, standalone, tmp_path)

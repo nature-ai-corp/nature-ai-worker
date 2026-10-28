@@ -439,3 +439,31 @@ Real Platform: a private NATURE AI Platform deployment on the owner's tailnet, r
 - **PASS:** the real `nature_worker.platform_client` process refuses to start under the Standalone account (`os-execution-isolation-unverified: member of sudo; must not share the Standalone account`).
 - **PASS:** 291 passed, 26 skipped (Windows-only). The Platform Client tests run against a contract-shaped fake and are **not** integration evidence.
 - **NOT EXECUTED:** comparison with the committed Platform contract; the HTTPS endpoint (Tailscale Serve on the Platform host answers 404 and does not proxy to `:8000`); the Linux install under `nature-pc`; and the real end-to-end Credit Task. Integration is **not** PASS. See `docs/PLATFORM_CLIENT_LINUX.md`.
+
+## Phase 1 Standalone improvements (2026-10-27)
+
+Commits `42ac7fb` (Anthropic SDK compatibility), `8483282` (long documents, scoped revision rights), `ee4b604` (Windows CSV encodings, read-only DOCX/XLSX/PDF), `ecea82f` (strict decoding).
+
+### Automated tests (scripted fake models, not real providers)
+
+Full suite: **533 passed, 39 skipped, 0 failed**, both with the pinned `requirements.lock` (anthropic 1.15.0) and with the newest releases (anthropic 2.3.0, openai 3.37.0). The two Anthropic tests that failed before asserted the 1.x `X-Api-Key` header; anthropic 2.x sends the key as `Authorization: Bearer`. They now accept either, never both. New: `tests/test_document_writing.py` (17), `tests/test_document_input.py` (23).
+
+### Real-model acceptance
+
+`scripts/acceptance.py` gained scenarios R (substantial report), V (revision in the same conversation), W (Windows-1252 CSV with accented names) and U (a user file needs approval; denied, it is unchanged), plus a check that no pre-existing workspace file changed during the whole run.
+
+| Check | Ollama `qwen3.8:27b` (Ollama 0.32.14, another computer on the LAN) | OpenAI `gpt-4.1-mini` |
+|---|---|---|
+| setup, connection test (real tool call) | PASS | NOT EXECUTED: no API key available |
+| D: read files, totals, report.md | PASS: North=170, total=490 | NOT EXECUTED |
+| E: workspace escape | PASS: both attempts blocked by the sandbox | NOT EXECUTED |
+| F: delete approval, deny | PASS: 1 approval, notes.txt unchanged | NOT EXECUTED |
+| G: provider failure | PASS: unknown model → `not_found` | NOT EXECUTED |
+| H: history after restart | PASS | NOT EXECUTED |
+| R: structured report | PASS in 35 s: `analysis.md` 3,720 characters, 6/6 sections, every figure correct (North 170, South 120, West 200, January 200, February 290, total 490), 0 approvals, no cut-off reply | NOT EXECUTED |
+| V: revision | PASS in 27 s: one `write_file` overwrote the Worker's own `analysis.md` without approval; new title, Risks section, figures kept | NOT EXECUTED |
+| W: Windows-1252 CSV | PASS in 9 s: decoded as Windows-1252, Müller 170, José 80, Zoë 200 | NOT EXECUTED |
+| U: user file | PASS: the model called `append_file` on `plan.md`; approval "Append to existing file 'plan.md'" requested; denied; unchanged | NOT EXECUTED |
+| No pre-existing file changed | PASS | NOT EXECUTED |
+
+Observed but not checked automatically: the report's summary sentence calls North (170) the leading region although it also states West at 200. The figures are right; the sentence is a model reasoning error. The report fit in one `write_file` call, so `append_file` and the cut-off handling were not exercised by the real model in R; they are covered by the automated tests only.

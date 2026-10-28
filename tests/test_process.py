@@ -94,7 +94,8 @@ def test_no_platform_dependencies():
     """Acceptance I: the package imports only the standard library, its own
     modules and its declared third-party dependencies."""
     allowed_third_party = {"fastapi", "uvicorn", "httpx", "httpcore", "httpx2", "openai", "anthropic",
-                           "google", "cryptography", "pydantic"}
+                           "google", "cryptography", "pydantic",
+                           "openpyxl", "pypdf", "defusedxml"}  # the optional `documents` extra
     found = set()
     for path in (SRC / "nature_worker").rglob("*.py"):
         for node in ast.walk(ast.parse(path.read_text())):

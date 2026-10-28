@@ -165,7 +165,7 @@ Statuses describe how the agent's last run ended, not whether your goal was met.
 | Tool | What it does | Approval |
 |---|---|---|
 | `list_files` | List files and folders in the workspace | No |
-| `read_file` | Read a text file (long files are read in chunks) | No |
+| `read_file` | Read a text file, or the text of a .docx, .xlsx or .pdf file (long content is read in chunks) | No |
 | `search_text` | Find text or a regex across workspace files | No |
 | `table_summary` | Row and column statistics for CSV, TSV or JSON tables | No |
 | `calculate` | Exact arithmetic (safe expression evaluator, no code execution) | No |
@@ -283,7 +283,7 @@ The automated tests never contact a real AI provider. To check a provider yourse
 ## Known limitations
 
 - **Single user, local use only.** There is no login and no user separation: anyone who can reach the port can use the agent, read the workspace and use your configured provider. The server listens on `127.0.0.1` by default, and Docker Compose publishes the port on `127.0.0.1` only. Do not bind to `0.0.0.0` or expose the port to a network without an authenticating reverse proxy in front. See [SECURITY.md](SECURITY.md) for the security model and residual risks.
-- **Text files only.** The agent reads UTF-8 text, CSV/TSV and JSON. PDF, Word, Excel and images are not supported.
+- **Text and common documents, read-only.** The agent reads text files (UTF-8, UTF-16 and Windows-1252, as Excel saves CSV on Windows), CSV/TSV and JSON, and the text of Word (.docx) files. Excel (.xlsx) and PDF need the optional extra: `pip install -c requirements.lock '.[documents]'`. Formulas are read as the values Excel saved, never calculated; macros, scripts, links and embedded objects are ignored. Scanned PDFs (no text layer), images and old .doc/.xls files are not supported. Limits: 20 MB per document, 300 PDF pages, 10,000 rows per sheet, 2 million extracted characters. The agent cannot write Word, Excel or PDF files.
 - **No streaming.** Replies appear when each step finishes. The UI polls for progress every second.
 - **No context management.** The whole conversation is sent to the model on every step. Very long conversations eventually exceed the model's context window. The app reports this clearly; start a new conversation.
 - **One run at a time per conversation.** Runs happen inside the HTTP request. If the server stops in the middle of a task, the task is not resumed. Unanswered tool calls are closed out the next time you send a message.

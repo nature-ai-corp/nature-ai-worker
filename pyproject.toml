@@ -21,6 +21,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# Read-only text extraction from Excel and PDF files (Word files need no extra).
+documents = ["openpyxl>=3.1", "defusedxml>=0.7", "pypdf>=4.0"]
 
 [project.scripts]
 nature-worker = "nature_worker.__main__:main"

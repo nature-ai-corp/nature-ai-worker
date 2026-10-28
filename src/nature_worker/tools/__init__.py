@@ -165,7 +165,8 @@ TOOLS: dict[str, Tool] = {
         ),
         Tool(
             "read_file",
-            "Read a UTF-8 text file from the workspace. Long files are returned in chunks.",
+            "Read a text file (UTF-8, UTF-16 or Windows-1252), or the text of a Word (.docx), Excel (.xlsx) "
+            "or PDF file, from the workspace. Long content is returned in chunks.",
             _obj(
                 {
                     "path": {"type": "string", "description": "File path relative to the workspace."},
@@ -230,9 +231,12 @@ TOOLS: dict[str, Tool] = {
         ),
         Tool(
             "table_summary",
-            "Summarize a CSV, TSV or JSON table: row count, columns, and per-column statistics "
-            "(sum, min, max, mean, median for numbers; top values for text).",
-            _obj({"path": {"type": "string", "description": "Table file path relative to the workspace."}}, ["path"]),
+            "Summarize a CSV, TSV, JSON or Excel (.xlsx) table: row count, columns, and per-column statistics "
+            "(sum, min, max, mean, median for numbers; top values for text). The first row of a sheet is "
+            "its header.",
+            _obj({"path": {"type": "string", "description": "Table file path relative to the workspace."},
+                  "sheet": {"type": "string", "description": "Excel only: the sheet name. Default: the first sheet."}},
+                 ["path"]),
             data.table_summary,
         ),
         Tool(

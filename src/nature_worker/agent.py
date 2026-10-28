@@ -31,6 +31,8 @@ delete files, summarize tables, do exact arithmetic{web}.
 How to work:
 - Understand the user's goal. If it is genuinely ambiguous, ask a short clarifying question; otherwise act.
 - Use tools to look at real data instead of guessing. Use list_files first when you do not know file names.
+  read_file also reads the text of Word (.docx), Excel (.xlsx) and PDF files; use table_summary for
+  CSV and Excel tables, and search_text to find things in large text files instead of reading them whole.
 - For multi-step tasks, work step by step: gather information, process it, then produce the result.
 - When asked to create a document or report, write it to the workspace with write_file (Markdown unless
   another format is requested) and tell the user the file name. For a long document, write it in parts:

@@ -68,6 +68,19 @@ def _write_all(fd: int, data: bytes) -> None:
         view = view[os.write(fd, view):]
 
 
+def decode_text(data: bytes, rel: str = "file") -> tuple[str, str]:
+    if data.startswith(b"\xef\xbb\xbf"):
+        return data[3:].decode("utf-8", errors="replace"), "UTF-8 (with BOM)"
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16", errors="replace"), "UTF-16"
+    if b"\x00" in data[:8192]:
+        raise ToolError(f"'{rel}' appears to be a binary file and cannot be read as text.")
+    try:
+        return data.decode("utf-8"), "UTF-8"
+    except UnicodeDecodeError:
+        return data.decode("cp1252", errors="replace"), "Windows-1252"
+
+
 class Workspace:
     def __init__(self, root: Path):
         self.root = Path(os.path.realpath(root))
@@ -100,13 +113,15 @@ class Workspace:
             return f.read(MAX_WRITE_BYTES + 1)
 
     def read_text(self, rel: str) -> str:
+        return self.read_text_info(rel)[0]
+
+    def read_text_info(self, rel: str) -> tuple[str, str]:
+        """The text of a file and the encoding it was decoded with: UTF-8 (with or without BOM),
+        UTF-16 with BOM (Excel "Unicode text"), else Windows-1252 (Excel's CSV on Windows)."""
         path = self.resolve(rel)
         if path.is_dir():
             raise ToolError(f"'{rel}' is a directory. Use list_files instead.")
-        data = self._open_read(path)
-        if b"\x00" in data[:8192]:
-            raise ToolError(f"'{rel}' appears to be a binary file and cannot be read as text.")
-        return data.decode("utf-8", errors="replace")
+        return decode_text(self._open_read(path), rel)
 
     def exists(self, rel: str) -> bool:
         return self.resolve(rel).exists()
@@ -248,9 +263,16 @@ def list_files(ws: Workspace, args: dict) -> str:
 
 def read_file(ws: Workspace, args: dict) -> str:
     path = _require(args, "path")
-    text = ws.read_text(path)
+    from .documents import extract, is_document  # optional formats, read-only
+    note = ""
+    if is_document(path):
+        text, note = extract(ws, path)
+    else:
+        text, encoding = ws.read_text_info(path)
+        if encoding not in ("UTF-8", "UTF-8 (with BOM)"):
+            note = f"[Decoded as {encoding}; the file is not UTF-8.]\n"
     offset = max(int(args.get("offset") or 0), 0)
-    chunk = text[offset : offset + MAX_READ_CHARS]
+    chunk = (note if offset == 0 else "") + text[offset : offset + MAX_READ_CHARS]
     if offset + MAX_READ_CHARS < len(text):
         chunk += (
             f"\n\n[Truncated: showing characters {offset}-{offset + len(chunk)} of {len(text)}. "

@@ -57,9 +57,9 @@ jobs:
           python-version: "3.12"
       - name: Install the package with unpinned dependencies
         run: |
-          python -m pip install ".[dev]"
+          python -m pip install ".[dev,documents]"
           python -m pip check
-          python -m pip freeze | grep -iE "^(anthropic|openai|google-genai|httpx)=="
+          python -m pip freeze | grep -iE "^(anthropic|openai|google-genai|httpx|openpyxl|pypdf)=="
       - name: Run tests
         run: python -m pytest -q
 

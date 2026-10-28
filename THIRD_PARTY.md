@@ -1,6 +1,6 @@
 # Third-party dependencies
 
-Runtime dependencies installed by `pip install .`, pinned in `requirements.lock`, with the license metadata declared by each installed package. Re-verified on 2026-10-26 from the installed package metadata with `python scripts/repo_checks.py --print-licenses` (CI runs `--licenses`, which fails on an unknown or incompatible license and on a pinned package missing from this table).
+Runtime dependencies installed by `pip install .` (and by the optional `documents` extra: defusedxml, et_xmlfile, openpyxl, pypdf), pinned in `requirements.lock`, with the license metadata declared by each installed package. Re-verified on 2026-10-26 from the installed package metadata with `python scripts/repo_checks.py --print-licenses` (CI runs `--licenses`, which fails on an unknown or incompatible license and on a pinned package missing from this table).
 
 All runtime dependencies are under permissive licenses compatible with distributing this project under Apache-2.0, except `certifi`, which is MPL-2.0. MPL-2.0 is a file-level copyleft: using certifi unmodified as a separate library, as this project does, is permitted. Modifying certifi's own files would oblige us to publish those modifications under MPL-2.0.
 
@@ -26,8 +26,10 @@ No third-party code or assets are copied into this repository; the web UI uses n
 | charset-normalizer | 3.5.2 | MIT |
 | click | 8.5.0 | BSD-3-Clause |
 | cryptography | 50.0.2 | Apache-2.0 OR BSD-3-Clause |
+| defusedxml | 0.7.1 | Python Software Foundation License |
 | distro | 1.9.0 | Apache Software License |
 | docstring_parser | 0.18.0 | MIT License |
+| et_xmlfile | 2.0.0 | MIT |
 | fastapi | 0.143.3 | MIT |
 | google-auth | 2.62.0 | Apache Software License |
 | google-genai | 2.31.0 | Apache-2.0 |
@@ -39,19 +41,21 @@ No third-party code or assets are copied into this repository; the web UI uses n
 | idna | 3.20 | BSD-3-Clause |
 | jiter | 0.17.0 | MIT |
 | openai | 3.33.0 | Apache-2.0 |
+| openpyxl | 3.1.5 | MIT |
 | opentelemetry-api | 1.45.1 | Apache-2.0 |
 | pyasn1 | 0.6.4 | BSD-2-Clause |
 | pyasn1_modules | 0.4.2 | BSD License |
 | pycparser | 3.11 | BSD-3-Clause |
 | pydantic | 2.14.1 | MIT |
 | pydantic_core | 2.50.1 | MIT |
+| pypdf | 6.21.3 | BSD-3-Clause |
 | requests | 2.34.2 | Apache Software License |
 | sniffio | 1.3.1 | MIT License; Apache Software License |
 | starlette | 1.8.0 | BSD-3-Clause |
 | tenacity | 9.1.4 | Apache Software License |
 | truststore | 0.10.5 | MIT |
-| typing-inspection | 0.4.4 | MIT |
 | typing_extensions | 4.16.0 | PSF-2.0 |
+| typing-inspection | 0.4.4 | MIT |
 | urllib3 | 2.8.0 | MIT |
 | uvicorn | 0.54.0 | BSD-3-Clause |
 | websockets | 16.1.1 | BSD-3-Clause |

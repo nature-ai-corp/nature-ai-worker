@@ -852,6 +852,7 @@ function updateProviderFields() {
   const spec = state.settings.providers[id];
   $("#s-model").placeholder = MODEL_HINTS[id] || "";
   $("#s-endpoint-row").hidden = !spec.needs_endpoint;
+  $("#s-context-row").hidden = $("#s-provider").value !== "ollama";
   $("#s-endpoint").placeholder = ENDPOINT_HINTS[id] || "";
   if (id === "ollama" && !$("#s-endpoint").value) $("#s-endpoint").value = spec.default_endpoint;
   $("#s-key-row").firstChild.textContent = spec.needs_key ? "API key" : "API key (optional)";
@@ -888,6 +889,7 @@ function openSettings(firstRun = false) {
   $("#s-key").value = "";
   $("#s-web").checked = !!s.web_fetch_enabled;
   $("#s-steps").value = s.max_steps;
+  $("#s-context").value = s.context_window || "";
   $("#s-version").textContent = versionLine(s);
   $("#setup-intro").hidden = !firstRun;
   $("#settings-heading").textContent = firstRun ? "Set up your AI model" : "Settings";
@@ -904,6 +906,7 @@ function settingsBody() {
     api_key: $("#s-key").value.trim() || null,
     web_fetch_enabled: $("#s-web").checked,
     max_steps: parseInt($("#s-steps").value, 10) || 20,
+    context_window: $("#s-context-row").hidden ? null : (parseInt($("#s-context").value, 10) || null),
   };
 }
 

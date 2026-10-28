@@ -47,6 +47,8 @@ class SettingsIn(BaseModel):
     clear_api_key: bool = False
     web_fetch_enabled: bool = False
     max_steps: int = Field(default=DEFAULT_MAX_STEPS, ge=1, le=100)
+    # Ollama only: the context window to request (num_ctx). None: the Ollama server's default.
+    context_window: int | None = Field(default=None, ge=2048, le=1_048_576)
 
 
 class TestIn(BaseModel):
@@ -54,6 +56,7 @@ class TestIn(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     endpoint: str | None = Field(default=None, max_length=500)
     api_key: str | None = Field(default=None, max_length=1000)
+    context_window: int | None = Field(default=None, ge=2048, le=1_048_576)
 
 
 class MessageIn(BaseModel):
@@ -103,17 +106,17 @@ def create_app(config: Config | None = None) -> FastAPI:
         return s
 
     def build_provider(provider: str | None, model: str, endpoint: str | None, api_key: str | None = None,
-                       retry: bool = True):
+                       retry: bool = True, context_window: int | None = None):
         if not provider:
             from .providers import provider_error
 
             raise provider_error("config", "No model provider configured. Open Settings to add one.")
         key = api_key or creds.get(provider, effective_endpoint(provider, endpoint))[0]
-        return make_provider(provider, model, key, endpoint, retry=retry)
+        return make_provider(provider, model, key, endpoint, retry=retry, context_window=context_window)
 
     def current_provider():
         s = settings()
-        return build_provider(s["provider"], s["model"], s["endpoint"])
+        return build_provider(s["provider"], s["model"], s["endpoint"], context_window=s.get("context_window"))
 
     agent = Agent(
         db,
@@ -179,6 +182,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "api_key_source": key_source,  # never the key itself
             "web_fetch_enabled": s["web_fetch_enabled"],
             "max_steps": s["max_steps"],
+            "context_window": s.get("context_window"),
             "configured": configured,
             "workspace": str(config.workspace_dir),
             "providers": PROVIDERS,
@@ -210,6 +214,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "endpoint": endpoint,
                 "web_fetch_enabled": body.web_fetch_enabled,
                 "max_steps": body.max_steps,
+                "context_window": body.context_window,
             }
         )
         return settings_view()
@@ -220,7 +225,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         try:
             provider = build_provider(
                 body.provider, body.model.strip(), _validate_endpoint(body.endpoint),
-                (body.api_key or "").strip() or None, retry=False,
+                (body.api_key or "").strip() or None, retry=False, context_window=body.context_window,
             )
             result = provider.chat(
                 "You are a connection test. Follow the instruction exactly.",

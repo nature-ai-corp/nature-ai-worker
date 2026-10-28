@@ -30,6 +30,8 @@ class ToolContext:
     web_fetch_enabled: bool = False
     # Files the Worker created in this conversation: canonical path -> last fingerprint.
     owned: dict[str, Fingerprint] = field(default_factory=dict)
+    # Characters one read_file chunk may use (a small local context window), else the default.
+    read_budget: Callable[[], int | None] = lambda: None
 
 
 class ToolOutput(str):
@@ -174,7 +176,8 @@ TOOLS: dict[str, Tool] = {
                 },
                 ["path"],
             ),
-            read_file,
+            lambda ctx, args, approved: read_file(ctx.workspace, args, ctx.read_budget()),
+            contextual=True,
         ),
         Tool(
             "write_file",

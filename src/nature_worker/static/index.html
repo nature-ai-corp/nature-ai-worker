@@ -168,6 +168,8 @@
         <summary>Advanced</summary>
         <label class="check"><input id="s-web" type="checkbox"> Allow web fetching (each request still needs your approval)</label>
         <label>Max agent steps per run <input id="s-steps" type="number" min="1" max="100"></label>
+        <label id="s-context-row">Context size (Ollama, tokens) <input id="s-context" type="number" min="2048" max="1048576" step="1024" placeholder="server default">
+          <span class="muted small">Empty uses the Ollama server's default. A conversation that no longer fits is stopped with a message instead of losing its instructions.</span></label>
       </details>
       <p id="s-version" class="muted small"></p>
       <div id="settings-result" role="status"></div>

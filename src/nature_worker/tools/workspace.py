@@ -280,7 +280,12 @@ def list_files(ws: Workspace, args: dict) -> str:
     return "\n".join(lines)
 
 
-def read_file(ws: Workspace, args: dict) -> str:
+MIN_READ_CHARS = 2_000
+
+
+def read_file(ws: Workspace, args: dict, budget: int | None = None) -> str:
+    """One chunk of a file: MAX_READ_CHARS, or less when the model's context window is small."""
+    size = max(MIN_READ_CHARS, min(MAX_READ_CHARS, budget)) if budget else MAX_READ_CHARS
     path = _require(args, "path")
     from .documents import extract, is_document  # optional formats, read-only
     note = ""
@@ -291,11 +296,13 @@ def read_file(ws: Workspace, args: dict) -> str:
         if encoding not in ("UTF-8", "UTF-8 (with BOM)"):
             note = f"[Decoded as {encoding}; the file is not UTF-8.]\n"
     offset = max(int(args.get("offset") or 0), 0)
-    chunk = (note if offset == 0 else "") + text[offset : offset + MAX_READ_CHARS]
-    if offset + MAX_READ_CHARS < len(text):
+    body = text[offset : offset + size]
+    chunk = (note if offset == 0 else "") + body
+    if offset + size < len(text):
         chunk += (
-            f"\n\n[Truncated: showing characters {offset}-{offset + len(chunk)} of {len(text)}. "
-            f"Call read_file again with offset={offset + MAX_READ_CHARS} to continue.]"
+            f"\n\n[Truncated: showing characters {offset}-{offset + len(body)} of {len(text)}. "
+            f"Call read_file again with offset={offset + size} to continue, or use search_text to find "
+            "the part you need.]"
         )
     return chunk
 

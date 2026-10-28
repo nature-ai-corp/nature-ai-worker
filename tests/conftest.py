@@ -29,6 +29,7 @@ class FakeModelServer:
         self.responses: list[tuple[int, dict]] = []
         self.requests: list[dict] = []
         self.delay = 0.0  # seconds to wait before each reply, to observe a run in progress
+        self.get_payload: dict = {"data": [], "models": []}  # GET answers (model lists, Ollama /api/ps)
         server = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -36,7 +37,7 @@ class FakeModelServer:
                 pass
 
             def do_GET(self):
-                self._reply(200, {"data": [], "models": []})
+                self._reply(200, server.get_payload)
 
             def do_POST(self):
                 length = int(self.headers.get("content-length") or 0)

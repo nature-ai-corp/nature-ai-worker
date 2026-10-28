@@ -176,11 +176,20 @@ def effective_endpoint(provider: str, endpoint: str | None) -> str | None:
     return normalize_endpoint(endpoint or spec.get("default_endpoint"))
 
 
+def read_budget(provider) -> int | None:
+    """Characters one tool result should use for this provider, if it knows its context window."""
+    budget = getattr(provider, "read_budget", None)
+    return budget() if callable(budget) else None
+
+
 class _RedactingProvider:
     """Keeps the API key out of error messages and replies even if an endpoint echoes it."""
 
     def __init__(self, inner: Provider, secret: str | None):
         self.inner, self.secret = inner, secret
+
+    def read_budget(self) -> int | None:
+        return read_budget(self.inner)
 
     def _clean(self, text: str) -> str:
         return text.replace(self.secret, "[REDACTED]") if self.secret and len(self.secret) >= 6 else text
@@ -208,6 +217,9 @@ class _RetryingProvider:
     def __init__(self, inner: Provider, delays: tuple[float, ...] | None = None, sleep=time.sleep):
         self.inner, self.delays, self.sleep = inner, RETRY_DELAYS if delays is None else delays, sleep
 
+    def read_budget(self) -> int | None:
+        return read_budget(self.inner)
+
     def chat(self, system: str, messages: list[dict], tools: list[dict]) -> ChatResult:
         for attempt, delay in enumerate((*self.delays, None)):
             try:
@@ -222,8 +234,9 @@ class _RetryingProvider:
 
 
 def make_provider(provider: str, model: str, api_key: str | None, endpoint: str | None, *,
-                  retry: bool = True) -> Provider:
-    """``retry=False`` for the connection test in Settings, which should answer at once."""
+                  retry: bool = True, context_window: int | None = None) -> Provider:
+    """``retry=False`` for the connection test in Settings, which should answer at once.
+    ``context_window``: Ollama's num_ctx (other providers manage their own context)."""
     if provider not in PROVIDERS:
         raise provider_error("config", f"Unknown provider '{provider}'")
     if not model:
@@ -252,7 +265,7 @@ def make_provider(provider: str, model: str, api_key: str | None, endpoint: str 
         else:
             from .ollama_chat import OllamaChat
 
-            adapter = OllamaChat(model, endpoint, api_key)
+            adapter = OllamaChat(model, endpoint, api_key, context_window=context_window)
     if retry and provider in ("gemini", "ollama"):
         adapter = _RetryingProvider(adapter)
     return _RedactingProvider(adapter, api_key)

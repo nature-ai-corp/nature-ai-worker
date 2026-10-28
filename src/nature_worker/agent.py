@@ -189,6 +189,8 @@ class Agent:
             self.db.add_message(conv_id, "notice", e.message, meta={"error": e.kind})
             return "error"
 
+        from .providers import read_budget
+        ctx.read_budget = lambda: read_budget(provider)
         tools = [t.schema() for t in available_tools(ctx)]
         system = self._system_prompt(ctx)
         limit = self.max_steps()

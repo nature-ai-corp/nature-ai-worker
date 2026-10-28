@@ -34,6 +34,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import threading
 import shutil
 import signal
 import socket
@@ -51,7 +53,9 @@ SECRET = "OUTSIDE-SECRET-7319"
 # Phase 1 (document writing, revision, Windows CSV): R report, V revision, W cp1252 CSV, U user file kept.
 WIN_SALES = "owner;region;amount\nMüller;North;120\nJosé;South;80\nMüller;North;50\nZoë;West;200\n"
 PLAN = "Plan for Q2\n- keep this file exactly as it is\n"
-SCENARIOS = ("D", "E", "F", "G", "H", "R", "V", "W", "U")
+# Phase 2: Q ranking/comparison accuracy, L long document under a small context window, S Stop,
+# X real DOCX/XLSX/PDF files (with --documents DIR).
+SCENARIOS = ("D", "E", "F", "G", "H", "R", "V", "W", "U", "Q", "L", "S", "X")
 
 
 class Run:
@@ -65,6 +69,10 @@ class Run:
         (self.ws / "sales_windows.csv").write_bytes(WIN_SALES.encode("cp1252"))   # as Excel saves CSV on Windows
         (self.ws / "plan.md").write_text(PLAN)
         (self.tmp / "outside_secret.txt").write_text(SECRET)
+        if args.documents:
+            for doc in sorted(Path(args.documents).iterdir()):
+                if doc.is_file():
+                    shutil.copyfile(doc, self.ws / doc.name)
         self.user_files = {p.name: p.read_bytes() for p in self.ws.iterdir()}   # never changed by any scenario
         self.conv_r = None
         with socket.socket() as s:
@@ -222,6 +230,14 @@ class Run:
                 self.scenario_w(transcripts)
             if only is None or "U" in only:
                 self.scenario_u(transcripts)
+            if only is None or "Q" in only:
+                self.scenario_q(transcripts)
+            if only is None or "X" in only:
+                self.scenario_x(transcripts)
+            if only is None or "S" in only:
+                self.scenario_s(transcripts)
+            if only is None or "L" in only:
+                self.scenario_l(transcripts, key)
             changed = sorted(n for n, data in self.user_files.items()
                              if not (self.ws / n).exists() or (self.ws / n).read_bytes() != data)
             self.record("user-files-unchanged", not changed, f"pre-existing files changed or removed: {changed or 'none'}")
@@ -253,17 +269,125 @@ class Run:
             "breakdown, Observations, Recommendations, Appendix (the raw data as a Markdown table). "
             "Use exact figures. Reply with one line when done.")
         report = (self.ws / "analysis.md").read_text() if (self.ws / "analysis.md").exists() else ""
+        reread = [tc["arguments"].get("path") for m in conv["messages"] if m["role"] == "assistant"
+                  for tc in (m.get("tool_calls") or []) if tc["name"] == "read_file"].count("analysis.md")
         sections = [h for h in ("Summary", "Totals by region", "Monthly breakdown", "Observations",
                                 "Recommendations", "Appendix") if h.lower() in report.lower()]
         approvals = [a for a in conv["approvals"]]
         figures = all(f in report for f in ("170", "120", "200", "290", "490"))
-        ok = status == "done" and len(sections) == 6 and figures and not approvals and len(report) >= 1200
+        ok = status == "done" and len(sections) == 6 and figures and not approvals and len(report) >= 1200 \
+            and not self.wrong_leader(report)
         self.record("R-report", ok, f"status={status} seconds={self.last_seconds:.0f} tools={self.calls(conv)} "
                     f"chars={len(report)} sections={len(sections)}/6 figures North170/South120/West200+Jan200/Feb290/total490="
-                    f"{figures} approvals={len(approvals)} truncation notices="
+                    f"{figures} wrong-leader sentences={self.wrong_leader(report)} read back={reread} "
+                    f"approvals={len(approvals)} truncation notices="
                     f"{sum(1 for m in conv['messages'] if (m.get('meta') or {}).get('error') == 'truncated')}")
         transcripts["R"] = self.transcript(conv)
         transcripts["analysis.md (after R)"] = report
+
+    @staticmethod
+    def wrong_leader(text: str) -> list[str]:
+        """Sentences that call North or South the leading region (West, 200, leads; North has 170),
+        e.g. Phase 1's "The North region led overall revenue with 170, followed by ... West at 200"."""
+        claim = re.compile(r"\b(North|South)\b[^.\n]{0,40}?\b(led|leads|leading|highest|largest|top|strongest|best)\b"
+                           r"|\b(led by|highest|largest|top|leading|strongest|best)\b[^.\n]{0,25}?\b(North|South)\b", re.I)
+        qualified = re.compile(r"\b(established|existing|original|excluding|except|other than|second|lowest|"
+                               r"smallest|weakest|before|January|Jan)\b", re.I)
+        return [x.strip()[:160] for x in re.split(r"(?<=[.!?])\s+|\n", text)
+                if claim.search(x) and not qualified.search(x)]
+
+    def scenario_q(self, transcripts):
+        """Q: a ranking and comparison question whose answer must follow from the computed figures."""
+        _, status, conv = self.task(
+            "From sales.csv: which region had the highest total sales, how much more did it sell than the "
+            "second-highest region, and what share of the overall total was that? Then rank all regions.")
+        answer = conv["messages"][-1]["content"] if conv["messages"] else ""
+        ok = (status == "done" and "West" in answer and "30" in answer and "40.8" in answer
+              and not self.wrong_leader(answer) and answer.find("West") < answer.find("North"))
+        self.record("Q-ranking", ok, f"status={status} seconds={self.last_seconds:.0f} tools={self.calls(conv)} "
+                    f"West first={answer.find('West') < answer.find('North')} difference 30={'30' in answer} "
+                    f"share 40.8%={'40.8' in answer} wrong-leader sentences={self.wrong_leader(answer)} "
+                    f"answer={answer[:300]!r}")
+        transcripts["Q"] = self.transcript(conv)
+
+    def scenario_x(self, transcripts):
+        """X: real DOCX, XLSX and PDF files (made by python-docx, openpyxl and reportlab)."""
+        names = {"terms.docx", "budget.xlsx", "policy.pdf"}
+        if not names <= {p.name for p in self.ws.iterdir()}:
+            self.record("X-documents", False, "NOT EXECUTED: pass --documents DIR with terms.docx, budget.xlsx, policy.pdf")
+            return
+        _, status, conv = self.task(
+            "Answer from the workspace documents: (1) within how many days must invoices be paid "
+            "(terms.docx)? (2) what is the total Q2 budget across all departments (budget.xlsx)? (3) what "
+            "is the late-payment penalty (policy.pdf)? (4) what does confused_fox.pdf say, if anything?")
+        answer = conv["messages"][-1]["content"] if conv["messages"] else ""
+        read = [tc["arguments"].get("path") for m in conv["messages"] if m["role"] == "assistant"
+                for tc in (m.get("tool_calls") or []) if tc["name"] in ("read_file", "table_summary")]
+        ok = (status == "done" and "45" in answer and re.search(r"27[,.]?500", answer) is not None
+              and "1.5" in answer and names <= set(read))
+        self.record("X-documents", ok, f"status={status} seconds={self.last_seconds:.0f} files read={read} "
+                    f"45 days={'45' in answer} Q2 total 27,500={re.search(r'27[,.]?500', answer) is not None} "
+                    f"penalty 1.5%={'1.5' in answer} answer={answer[:400]!r}")
+        transcripts["X"] = self.transcript(conv)
+
+    def scenario_s(self, transcripts):
+        """S: Stop a real run after its first tool step; finished writes are complete, nothing more runs."""
+        conv = self.api("POST", "/api/conversations")["id"]
+        out = {}
+        task = ("Write five separate files part1.md ... part5.md in the workspace, one per step, each with "
+                "a 300-word essay about a different region's sales strategy. Write them one at a time.")
+        thread = threading.Thread(target=lambda: out.setdefault("status", self.api(
+            "POST", f"/api/conversations/{conv}/messages", json={"text": task})["status"]))
+        thread.start()
+        stop_sent = None
+        deadline = time.monotonic() + 1800
+        while thread.is_alive() and time.monotonic() < deadline:
+            msgs = self.api("GET", f"/api/conversations/{conv}")["messages"]
+            if stop_sent is None and any(m["role"] == "tool" for m in msgs):
+                stop_sent = self.api("POST", f"/api/conversations/{conv}/stop")["stopping"]
+            time.sleep(1)
+        thread.join(5)
+        view = self.api("GET", f"/api/conversations/{conv}")
+        writes = {tc["id"]: tc for m in view["messages"] if m["role"] == "assistant"
+                  for tc in (m.get("tool_calls") or []) if tc["name"] == "write_file"}
+        done = [m for m in view["messages"] if m["role"] == "tool" and m["tool_call_id"] in writes
+                and not (m.get("meta") or {}).get("error") and not (m.get("meta") or {}).get("denied")]
+        complete = all((self.ws / writes[m["tool_call_id"]]["arguments"]["path"]).read_text()
+                       == writes[m["tool_call_id"]]["arguments"]["content"] for m in done)
+        written = sorted(p.name for p in self.ws.glob("part*.md"))
+        ok = (stop_sent is True and out.get("status") == "stopped" and complete
+              and view["work"]["status"] == "stopped" and len(written) < 5)
+        self.record("S-stop", ok, f"stop accepted={stop_sent} run status={out.get('status')} work status="
+                    f"{view['work']['status']} files written={written} every finished write complete={complete}")
+        transcripts["S"] = self.transcript(view)
+
+    def scenario_l(self, transcripts, key):
+        """L: a long document with Ollama's context window set to 8,192 tokens: the reply limit is hit,
+        the cut-off call is refused, and the document is written in parts with append_file."""
+        if self.args.provider != "ollama":
+            self.record("L-long-document", False, "NOT EXECUTED: the small-window stress run is for Ollama")
+            return
+        self.api("PUT", "/api/settings", json={"provider": "ollama", "model": self.args.model,
+                                               "endpoint": self.args.endpoint, "context_window": 8192, "max_steps": 20})
+        try:
+            conv, status, view = self.task(
+                "Write a detailed handbook for new sales staff to handbook.md: ten sections (Welcome, Products, "
+                "Pricing, Regions, Customers, Sales process, Objections, Tools, Reporting, Glossary), each at "
+                "least 250 words. Use sales.csv for any figures.")
+        finally:
+            self.configure(key=key)  # back to the server's default window
+        text = (self.ws / "handbook.md").read_text() if (self.ws / "handbook.md").exists() else ""
+        sections = len(re.findall(r"^#{1,3} ", text, re.M))
+        tools = self.calls(view)
+        cut = sum(1 for m in view["messages"] if m["role"] == "tool" and "output limit" in m["content"])
+        notices = [m["content"][:160] for m in view["messages"] if m["role"] == "notice"]
+        ok = status == "done" and len(text) >= 12_000 and sections >= 10 and tools.count("append_file") >= 1 \
+            and not view["approvals"]
+        self.record("L-long-document", ok, f"status={status} seconds={self.last_seconds:.0f} chars={len(text)} "
+                    f"headings={sections} write_file={tools.count('write_file')} append_file={tools.count('append_file')} "
+                    f"cut-off calls refused={cut} notices={notices} approvals={len(view['approvals'])}")
+        transcripts["L"] = self.transcript(view)
+        transcripts["handbook.md"] = text[:6000] + ("\n…" if len(text) > 6000 else "")
 
     def scenario_v(self, transcripts):
         """V: revise the report in the same conversation; it is the Worker's own file, so no approval."""
@@ -409,6 +533,7 @@ def main():
     p.add_argument("--key-env", help="Name of the environment variable holding the API key")
     p.add_argument("--only", type=lambda v: sorted({x.strip().upper() for x in v.split(",") if x.strip()}),
                    help=f"Comma-separated scenarios to run ({','.join(SCENARIOS)}); default: all")
+    p.add_argument("--documents", help="Folder of reference files for X (terms.docx, budget.xlsx, policy.pdf)")
     p.add_argument("--out")
     p.add_argument("--keep", action="store_true",
                    help="Keep the temporary directory (it then contains the encrypted key and its master key)")

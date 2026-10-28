@@ -467,3 +467,34 @@ Full suite: **533 passed, 39 skipped, 0 failed**, both with the pinned `requirem
 | No pre-existing file changed | PASS | NOT EXECUTED |
 
 Observed but not checked automatically: the report's summary sentence calls North (170) the leading region although it also states West at 200. The figures are right; the sentence is a model reasoning error. The report fit in one `write_file` call, so `append_file` and the cut-off handling were not exercised by the real model in R; they are covered by the automated tests only.
+
+## Phase 2 Standalone improvements (2026-10-27)
+
+Commits `112103d` (Stop between steps; bounded retry for Ollama and Gemini), `b4eccc8` (Ollama context guard), `8a6519d` (result-checking instructions) and the cut-off continuation below.
+
+### Real Ollama context behaviour (measured before the change)
+
+qwen3.8:27b on Ollama 0.32.14: a system instruction ("always begin with PINEAPPLE") plus 3,000 numbered records (71,873 characters).
+
+| Request | Prompt tokens evaluated | done_reason | System instruction followed | Answer |
+|---|---|---|---|---|
+| Server default (65,536-token window, from `/api/ps`) | 41,733 (all) | stop | yes | correct |
+| `num_ctx` 32,768 | 16,386 (cut silently) | stop | **no** | **wrong** (first record's value 768 instead of 7) |
+
+Ollama reports no error when it cuts a prompt. `prompt_eval_count` counts the whole prompt even when it is cached, so a drop between two calls of one run means the prompt was cut.
+
+### Automated tests (scripted fake models)
+
+**558 passed, 39 skipped, 0 failed.** New: `tests/test_stop.py`, `tests/test_retry.py`, `tests/test_ollama_context.py`, `tests/test_agent_instructions.py`, and cut-off continuation tests in `tests/test_document_writing.py`.
+
+### Real-model acceptance (Ollama `qwen3.8:27b`; OpenAI NOT EXECUTED, no API key)
+
+| Check | Result |
+|---|---|
+| D, E, F, G, H, R, V, W, U (Phase 1 checks) | All PASS again. R's report now ranks correctly ("West is the strongest region overall with 200 … followed by North with 170"); the automatic wrong-leader check found no contradicting sentence. The model did not read R's report back after writing it; it did in D and V. |
+| Q: ranking and comparison | PASS: West 200 first, 30 more than North, 40.8% of 490 |
+| X: real documents (python-docx, openpyxl, reportlab, and Firefox's image-only `confused_fox.pdf`) | PASS: read all four; 45 days (DOCX), Q2 total 27,500 (XLSX), 1.5% per month (PDF), and "no text layer" for the image-only PDF |
+| S: Stop during a real run | PASS: stopped after the first file; `part1.md` complete (2,147 bytes); the already-requested `part2.md` write was not performed; status Stopped |
+| L: long handbook with an 8,192-token window, first run | **FAIL**, found a defect: after `write_file` (11,266 bytes), the model's `append_file` reply hit the output limit; Ollama returned the half-written call as text, so the run ended with 3 of 10 sections. Fixed: such a reply now gets a labelled Worker note ("write in smaller append_file parts") and the run continues within the step limit. |
+| L, rerun with the fix | **FAIL by its criterion, behaviour correct**: one `write_file` and four `append_file` calls wrote all ten sections (22,711 characters, 11 headings); then the context guard ended the run before the final reply ("about 7,653 tokens … no longer fits the model's context window of 8,192 tokens") instead of letting Ollama drop the instructions. The written content stays in the conversation history, which fills a small window. |
+| No pre-existing file changed | PASS |

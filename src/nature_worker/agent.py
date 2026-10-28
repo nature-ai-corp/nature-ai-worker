@@ -70,6 +70,12 @@ TRUNCATED_CALL = ("Not performed: your reply reached the model's output limit be
 STOPPED_CALL = "Not performed: the user stopped the task before this call ran."
 STOPPED_TEXT = ("Stopped at your request. Steps that had finished, and files already written, are kept. "
                 "Send a message to continue.")
+# A cut-off reply without a usable tool call (Ollama returns a half-generated call as text) ends
+# nothing: the model gets this note, from the Worker and labelled as such, and the run continues
+# within the same step limit.
+TRUNCATED_NOTE = ("Your previous reply reached the model's output limit and was cut off; nothing in it was "
+                  "carried out. Continue the task. Keep each reply short: add long content in several smaller "
+                  "append_file calls (a section or two each) instead of one large call.")
 TRUNCATED_TEXT = ("The model's reply reached its output limit and may be incomplete. Send a message such as "
                   "'continue' to let the agent finish.")
 
@@ -246,6 +252,9 @@ class Agent:
                 meta=meta or None,
             )
             if not result.tool_calls:
+                if result.truncated and _steps_since_user(self.db.get_messages(conv_id)) < limit:
+                    self.db.add_message(conv_id, "notice", TRUNCATED_NOTE, meta={"to_model": True})
+                    continue
                 if result.truncated:
                     self.db.add_message(conv_id, "notice", TRUNCATED_TEXT, meta={"error": "truncated"})
                 return "done"
@@ -316,6 +325,8 @@ def _history(messages: list[dict]) -> list[dict]:
             out.append({"role": "assistant", "content": m["content"], "tool_calls": m["tool_calls"], "meta": m["meta"]})
         elif m["role"] == "tool":
             out.append({"role": "tool", "tool_call_id": m["tool_call_id"], "name": m["tool_name"], "content": m["content"]})
+        elif m["role"] == "notice" and (m["meta"] or {}).get("to_model"):
+            out.append({"role": "user", "content": f"[Automatic note from Nature AI Worker, not from the user] {m['content']}"})
     return out
 
 

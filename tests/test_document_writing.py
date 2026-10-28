@@ -174,11 +174,30 @@ def test_a_cut_off_tool_call_is_never_executed(worker):
     assert "output limit" in model.requests[1]["body"]["messages"][-1]["content"]
 
 
-def test_a_cut_off_text_reply_is_reported(worker):
-    client, _ws, model = worker
-    model.queue(cut_off(openai_text("The report begins with")))
+def test_a_cut_off_reply_without_a_call_continues_the_run_with_a_labelled_note(worker):
+    """Ollama returns a half-generated tool call as plain text: the run goes on (real L run)."""
+    client, ws, model = worker
+    model.queue(openai_tool_call(("write_file", {"path": "h.md", "content": "# Part 1\n"})),
+                cut_off(openai_text('{"name": "append_file", "arguments": {"content": "## Part 2 ... (cut')),
+                openai_tool_call(("append_file", {"path": "h.md", "content": "## Part 2\n"})),
+                openai_text("Done."))
+    conv_id = new_conversation(client)
+    assert send(client, conv_id, "write a long handbook") == "done"
+    assert (ws / "h.md").read_text() == "# Part 1\n## Part 2\n"
+    note = model.requests[2]["body"]["messages"][-1]
+    assert note["role"] == "user" and note["content"].startswith("[Automatic note from Nature AI Worker, not from the user]")
+    assert "smaller append_file calls" in note["content"]
+    messages = conversation(client, conv_id)["messages"]
+    assert [m["role"] for m in messages].count("user") == 1          # the note is not shown as the user's
+    assert not approvals(client, conv_id)
+
+
+def test_a_cut_off_reply_at_the_step_limit_ends_with_a_notice(client, fake_model):
+    configure(client, endpoint=fake_model.url + "/v1", max_steps=2)
+    fake_model.queue(cut_off(openai_text("part")), cut_off(openai_text("part again")))
     conv_id = new_conversation(client)
     assert send(client, conv_id, "write it here") == "done"
+    assert len(fake_model.requests) == 2                              # the 20-step style boundary holds
     last = conversation(client, conv_id)["messages"][-1]
     assert last["role"] == "notice" and "output limit" in last["content"]
 

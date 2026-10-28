@@ -45,6 +45,14 @@ class FakePlatform:
         self.idempotency: dict[str, dict] = {}
         self.password = "correct horse"
         self.ignore_logout = False  # simulate a logout that answers 204 but keeps the session
+        # Misbehaviour to simulate: the conversation named to continue Task n continues another
+        # Task (n -> other), or a message posted in a Task's conversation starts a new Task.
+        self.continue_elsewhere: dict[int, int] = {}
+        self.new_task_on_response = False
+
+    def _task(self, n: int) -> dict | None:
+        """A live Task, or the detail of a recorded one (the same object, so it can change)."""
+        return self.tasks.get(n) or (self.recorded[n]["detail"] if n in self.recorded else None)
 
     def transport(self):
         return httpx.MockTransport(self.handle)
@@ -102,7 +110,7 @@ class FakePlatform:
                 return httpx.Response(200, json=self.conversations[cid])
             if sub == "/task":
                 n = self.conversations[cid]["task_id"]
-                t = self.tasks[int(n)]
+                t = self._task(int(n))
                 return httpx.Response(200, json={"task_number": t["task_number"], "title": t["title"],
                                                  "continued": False, "continued_from_email": False,
                                                  "work_pending": t["work_pending"], "task_status": t["status"]})
@@ -111,6 +119,25 @@ class FakePlatform:
             key = request.headers.get("idempotency-key")
             if key in self.idempotency:
                 return httpx.Response(200, json=self.idempotency[key], headers={"Idempotent-Replayed": "true"})
+            bound = self.conversations[cid]["task_id"]
+            if bound and not self.new_task_on_response:  # the conversation continues its Task
+                n = int(bound)
+                t = self._task(n)
+                t.setdefault("history", []).append({"role": "user", "content": body["content"], "channel": "portal",
+                                                    "created_at": NOW, "platform_notice": False, "agent_name": None})
+                msg = {"id": f"m-{n}-{len(self.messages[cid])}", "tenant_id": "t-1", "conversation_id": cid,
+                       "role": "user", "content": body["content"], "created_at": NOW}
+                agent = dict(msg, id=msg["id"] + "a", role="agent", content="Continuing the Task.")
+                self.messages[cid] += [msg, agent]
+                out = {"conversation": self.conversations[cid], "user_message": msg, "agent_message": agent,
+                       "execution_status": "accepted", "task": {"task_number": n, "created": False},
+                       "execution": {"routing_outcome": "continue_task", "routing_result": "", "agent_id": "g",
+                                     "agent_name": "General", "agent_type": "general", "module_id": None,
+                                     "module_name": None, "work_item_id": None, "execution_id": "e-2",
+                                     "result_id": None, "delegations": []}}
+                if key:
+                    self.idempotency[key] = out
+                return httpx.Response(200, json=out)
             n = len(self.tasks) + 1
             self.tasks[n] = {"task_number": n, "title": body["content"][:40], "status": "open",
                              "last_activity_at": NOW, "history": [], "can_continue_in_chat": True,
@@ -138,6 +165,21 @@ class FakePlatform:
                                              "page_size": 25, "modules": []})
         if m:
             n, sub = int(m.group(1)), m.group(2) or ""
+            if sub == "/portal-conversation" and method == "POST":
+                t = self._task(n)
+                if t is None:
+                    return problem(404, "Not Found")
+                if not t.get("can_continue_in_chat"):
+                    return problem(422, "Unprocessable", "The Task cannot be continued")
+                bound = str(self.continue_elsewhere.get(n, n))
+                cid = next((c for c, v in self.conversations.items() if v["task_id"] == bound), None)
+                if cid is None:
+                    cid = f"c-{len(self.conversations) + 1}"
+                    self.conversations[cid] = {"created_at": NOW, "updated_at": NOW, "id": cid, "tenant_id": "t-1",
+                                               "owner_user_id": "u-1", "title": t["title"], "status": "active",
+                                               "module_id": None, "task_id": bound, "channel": "portal"}
+                    self.messages[cid] = []
+                return httpx.Response(200, json=self.conversations[cid])
             if n in self.recorded:
                 part = {"": "detail", "/work-history": "work_history", "/approvals": "approvals",
                         "/results": "results", "/files": "files"}.get(sub)

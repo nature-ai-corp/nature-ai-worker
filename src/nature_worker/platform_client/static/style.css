@@ -57,4 +57,5 @@ dl.facts dt { font-weight: 600; } dl.facts dd { margin: 0; } .fact { display: co
 pre.content { white-space: pre-wrap; background: var(--surface); padding: 10px; border-radius: 8px; overflow-wrap: anywhere; }
 dl.update { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 8px 0 0; }
 dl.update dt { color: var(--muted); }
+dl.details { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; } dl.details dt { color: var(--muted); } dl.details dd { margin: 0; }
 @media (max-width: 800px) { #app { flex-direction: column; } #sidebar { width: auto; } .split { grid-template-columns: 1fr; } main { padding: 16px; } }

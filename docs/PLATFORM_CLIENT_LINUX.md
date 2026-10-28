@@ -46,6 +46,8 @@ Operations used: native login and logout, `/auth/me`, conversations (create, lis
   - The read timeout is 20 minutes.
   - If the Platform does not answer, the state is "unknown - check My Tasks", not "failed".
 - **Progress** comes only from Platform facts: `work_pending`, the newest work period, `latest_work_failed`/`latest_work_interrupted`, pending approvals, and the Agent's own Task Update.
+- **Task page:** details (goal, module, Agent, Platform work status, what the Platform asks of you), Agent execution, approvals, results, files, work periods, saved Task Updates, and communications with their channel and Platform notices. Lifecycle, Agent execution and your approval decisions are shown as separate facts.
+- **Responding to a Task:** *Submit Response* and *Continue in Chat* both use the conversation the Platform names for that Task (`continueTaskInConversation`), and only after `getConversationTask` confirms it continues that Task number. A response is posted there with `start_task: false`; no conversation or Task is created. If the Platform's answer files it under a new or different Task, the UI reports that instead of hiding it. Approvals are decided only through the approval operations.
 - **Polling:** the UI polls every 3 s for the first minute, every 10 s up to 15 minutes, and every 30 s after that. Polling never stops on its own, and elapsed time is shown but never treated as a failure.
 
 ## Install (requires sudo; the user runs this)

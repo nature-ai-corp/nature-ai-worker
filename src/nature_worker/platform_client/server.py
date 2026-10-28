@@ -50,6 +50,7 @@ _MEDIA = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=
 UI_COOKIE = "nwpc_ui"
 LOGIN_ATTEMPTS_PER_MINUTE = 5
 _FILENAME = re.compile(r"[^A-Za-z0-9._ -]")
+_RESPOND = re.compile(r"/api/tasks/\d+/respond")
 
 
 @dataclass
@@ -86,9 +87,17 @@ class Submission:
     conversation_id: str
     state: str = "running"   # running | done | error | unknown
     task_number: int | None = None
+    expected_task: int | None = None   # a response to this Task: the Platform must keep it there
     execution_status: str | None = None
     error: str | None = None
     started_at: float = field(default_factory=time.time)
+
+
+class TaskConversationMismatch(Exception):
+    def __init__(self, task_number: int, continued: int | None):
+        super().__init__(f"The Platform named a conversation that continues "
+                         f"{f'Task #{continued}' if continued else 'no Task'}, not Task #{task_number}; "
+                         "nothing was opened or sent.")
 
 
 class Account:
@@ -177,6 +186,10 @@ class SubmitIn(BaseModel):
     conversation_id: str | None = Field(default=None, max_length=256)
 
 
+class RespondIn(BaseModel):
+    content: str = Field(min_length=1, max_length=50000)
+
+
 class DecisionIn(BaseModel):
     approve: bool
     comment: str | None = Field(default=None, max_length=2000)
@@ -235,7 +248,8 @@ def create_app(settings: ClientSettings | None = None, *,
             origin = request.headers.get("origin")
             if origin and urlsplit(origin).netloc != request.headers.get("host"):
                 return JSONResponse({"detail": "Cross-origin request blocked."}, status_code=403)
-            if app.state.draining and request.url.path in ("/api/submit", "/api/login"):
+            if app.state.draining and (request.url.path in ("/api/submit", "/api/login")
+                                       or _RESPOND.fullmatch(request.url.path)):
                 return JSONResponse({"detail": "The Platform Client is stopping for an upgrade. "
                                      "Submit again after it restarts."}, status_code=503)
         path = request.url.path
@@ -417,9 +431,40 @@ def create_app(settings: ClientSettings | None = None, *,
     def complete(n: int):
         return api.complete(account.cookies(), n)
 
+    def task_conversation(s: SessionCookies, n: int) -> dict:
+        """The Conversation the Platform names for continuing Task ``n``, verified to continue
+        exactly that Task (getConversationTask) before anything is shown or sent in it."""
+        conv = api.continue_in_conversation(s, n)
+        continued = api.conversation_task(s, conv["id"]) if conv.get("task_id") else {}
+        if continued.get("task_number") != n:
+            raise TaskConversationMismatch(n, continued.get("task_number"))
+        return conv
+
+    @app.exception_handler(TaskConversationMismatch)
+    async def mismatch(_r, exc: TaskConversationMismatch):
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+
     @app.post("/api/tasks/{n}/continue")
     def continue_task(n: int):
-        return api.continue_in_conversation(account.cookies(), n)
+        return task_conversation(account.cookies(), n)
+
+    @app.post("/api/tasks/{n}/respond")
+    def respond(n: int, body: RespondIn):
+        """Additional instructions, feedback or a response for an open Task: posted in the Task's
+        own Conversation (never a new Conversation or Task); the Platform routes and authorizes it."""
+        s = account.cookies()
+        content = body.content.strip()
+        if not content:
+            return JSONResponse({"detail": "Enter your response."}, status_code=422)
+        if not api.task(s, n).get("can_continue_in_chat"):
+            return JSONResponse({"detail": f"Task #{n} cannot take a response now (the Platform reports it "
+                                           "cannot be continued)."}, status_code=409)
+        cid = task_conversation(s, n)["id"]
+        sid = secrets.token_urlsafe(12)
+        submissions[sid] = Submission(conversation_id=cid, expected_task=n)
+        threading.Thread(target=run_submission, daemon=True,
+                         args=(sid, s, content, False, None, new_idempotency_key())).start()
+        return {"submission_id": sid, "conversation_id": cid, "task_number": n}
 
     # -- Chat -------------------------------------------------------------------
 
@@ -459,8 +504,15 @@ def create_app(settings: ClientSettings | None = None, *,
                              "running - check My Tasks.")
                 return
             sub.execution_status = out.get("execution_status")
-            sub.task_number = (out.get("task") or {}).get("task_number")
+            task = out.get("task") or {}
+            sub.task_number = task.get("task_number")
             sub.state = "done"
+            if sub.expected_task is not None and (task.get("created") or sub.task_number != sub.expected_task):
+                # Reported, never hidden: the Platform decided where the message went.
+                sub.state = "error"
+                sub.error = (f"The Platform recorded this response under "
+                             f"{'a new Task' if task.get('created') else 'no Task' if sub.task_number is None else 'another Task'}"
+                             f"{f' #{sub.task_number}' if sub.task_number else ''}, not Task #{sub.expected_task}.")
             return
 
     @app.post("/api/submit")
@@ -498,7 +550,8 @@ def create_app(settings: ClientSettings | None = None, *,
         if sub is None:
             return JSONResponse({"detail": "Unknown submission."}, status_code=404)
         return {"state": sub.state, "conversation_id": sub.conversation_id,
-                "task_number": sub.task_number, "execution_status": sub.execution_status,
+                "task_number": sub.task_number, "expected_task": sub.expected_task,
+                "execution_status": sub.execution_status,
                 "error": sub.error, "elapsed_seconds": int(time.time() - sub.started_at)}
 
     @app.get("/api/health")

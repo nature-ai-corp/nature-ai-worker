@@ -213,7 +213,9 @@ function trackSubmission(sub) {
 function renderMessages(container, messages) {
   container.replaceChildren(...messages.map((m) => el("div", { class: `msg ${m.role}` },
     el("span", { class: "who" }, m.role === "user" ? "You" : (m.executing_agent_name || m.agent_name || "Agent"),
-      " · ", new Date(m.created_at).toLocaleString()),
+      " · ", new Date(m.created_at).toLocaleString(),
+      m.channel && m.channel !== "portal" ? el("span", { class: "tag" }, m.channel) : null,
+      m.platform_notice ? el("span", { class: "tag" }, "Platform notice") : null),
     m.content)));
   container.scrollTop = container.scrollHeight;
 }
@@ -358,10 +360,54 @@ async function renderResults(n) {
 function renderHistory(task, history) {
   $("task-history").replaceChildren(...(history.periods.length ? history.periods.map((p) => el("div", { class: "small" },
     `${new Date(p.started_at).toLocaleString()} - ${p.ended_at ? new Date(p.ended_at).toLocaleString() : "running"}: `,
-    `${p.status} (${p.trigger})${p.agent_name ? ` by ${p.agent_name}` : ""}${p.failure_reason ? ` - ${p.failure_reason}` : ""}`))
+    `${p.status} (${p.trigger})${p.agent_name ? ` by ${p.agent_name}` : ""}${p.failure_reason ? ` - ${p.failure_reason}` : ""}`,
+    p.results.length ? ` · ${p.results.length} work product${p.results.length > 1 ? "s" : ""}` : ""))
     : [el("p", { class: "muted" }, "No recorded work yet.")]));
+  // The Agent's saved Task Updates, newest first, as the Platform recorded them.
+  $("task-updates").replaceChildren(...(history.updates.length ? [...history.updates]
+    .sort((a, b) => (a.saved_at < b.saved_at ? 1 : -1)).map((u) => el("div", { class: "card small" },
+      el("strong", {}, u.status), u.current ? el("span", { class: "tag" }, "current") : null,
+      el("span", { class: "muted" }, ` saved ${when(u.saved_at)}`),
+      el("dl", { class: "update" },
+        ...[["Completed", u.completed], ["Work product", u.important_work_product], ["Remaining", u.remaining],
+            ["Dependency", u.dependency], ["Next", u.next_action], ["Asks you", u.user_action]]
+          .flatMap(([k, v]) => v ? [el("dt", {}, k), el("dd", {}, v)] : []))))
+    : [el("p", { class: "muted" }, "No saved Task Updates.")]));
   renderMessages($("task-conversation"), task.history);
 }
+
+// What the Platform says the Task is; separate from Agent execution and your decisions.
+function renderDetails(t) {
+  const facts = [["Status", t.status === "completed" ? "Closed" : "Open"], ["Goal", t.goal], ["Module", t.module_name],
+    ["Agent", t.agent_name], ["Platform work status", t.work_status], ["The Platform asks you", t.user_action]];
+  $("task-details").replaceChildren(...facts.flatMap(([k, v]) => v ? [el("dt", {}, k), el("dd", {}, v)] : []));
+}
+
+// A response to this Task: the server posts it in the Task's own, verified conversation.
+let respondTask = null;
+$("task-respond").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const n = respondTask, input = $("task-respond-input"), status = $("task-respond-status");
+  const content = input.value.trim();
+  if (!n || !content) return;
+  try {
+    const sub = await api(`/api/tasks/${n}/respond`, { json: { content } });
+    input.value = "";
+    status.textContent = "Sent to the Platform - waiting for its answer.";
+    const tick = async () => {
+      const s = await api(`/api/submissions/${sub.submission_id}`);
+      if (s.state === "running") {
+        status.textContent = `Sent to the Platform - waiting for its answer (${elapsed(s.elapsed_seconds)}).`;
+        setTimeout(() => tick().catch(fail), pollDelay(s.elapsed_seconds));
+        return;
+      }
+      status.textContent = s.state === "done" ? `The Platform accepted the response (${s.execution_status}).` : "";
+      if (s.state !== "done") banner(s.error);
+      if (location.hash === `#/task/${n}`) loadTask(n).catch(fail);
+    };
+    await tick();
+  } catch (err) { fail(err); }
+});
 
 let lastResultsKey = null;
 
@@ -370,6 +416,7 @@ async function loadTask(n) {
   const view = await api(`/api/tasks/${n}`);
   const t = view.task, p = view.progress;
   $("task-title").textContent = `Task #${t.task_number}: ${t.title}`;
+  renderDetails(t);
   renderProgress(p);
   renderApprovals(n, view.approvals);
   renderHistory(t, view.work_history);
@@ -377,6 +424,8 @@ async function loadTask(n) {
   if (key !== lastResultsKey) { lastResultsKey = key; await renderResults(n); }
   $("task-close").hidden = t.status === "completed";
   $("task-continue").hidden = !t.can_continue_in_chat;
+  if (respondTask !== n) { respondTask = n; $("task-respond-input").value = ""; $("task-respond-status").textContent = ""; }
+  $("task-respond").hidden = !t.can_continue_in_chat;
   $("task-close").onclick = async () => {
     try { await api(`/api/tasks/${n}/complete`, { method: "POST" }); loadTask(n); } catch (err) { fail(err); }
   };

@@ -10,7 +10,7 @@ bound to the endpoint they were saved for.
 
 import pytest
 
-from conftest import (FakeModelServer, anthropic_response, configure, conversation, gemini_response,
+from conftest import (FakeModelServer, anthropic_key_sent, anthropic_response, configure, conversation, gemini_response,
                       new_conversation, openai_error, openai_text, send)
 from nature_worker import providers
 from nature_worker.credentials import CredentialStore
@@ -89,7 +89,7 @@ def test_anthropic_ambient_credentials_are_not_injected(client, fake_model, monk
     fake_model.queue(anthropic_response(text="ok"))
     send(client, new_conversation(client), "hi")
     headers = fake_model.requests[0]["headers"]
-    assert headers["x-api-key"] == KEY
+    assert anthropic_key_sent(headers) == KEY  # the configured key, not the ambient token
     assert "AMBIENT" not in str(headers) and "x-leak" not in headers
 
 

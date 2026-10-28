@@ -11,7 +11,7 @@ import socket
 
 import pytest
 
-from conftest import (anthropic_response, configure, conversation, gemini_response, new_conversation,
+from conftest import (anthropic_key_sent, anthropic_response, configure, conversation, gemini_response, new_conversation,
                       ollama_response, openai_error, openai_text, openai_tool_call, send)
 
 
@@ -106,7 +106,7 @@ def test_anthropic_adapter(client, config, fake_model, monkeypatch):
 
     req = fake_model.requests[-1]
     assert req["path"] == "/v1/messages"
-    assert req["headers"]["x-api-key"] == "sk-ant-test-123456"
+    assert anthropic_key_sent(req["headers"]) == "sk-ant-test-123456"
     body = req["body"]
     assert body["system"].startswith("You are Nature AI Worker")
     assert body["tools"][0]["input_schema"]["type"] == "object"

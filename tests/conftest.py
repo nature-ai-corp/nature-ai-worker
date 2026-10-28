@@ -100,6 +100,18 @@ def openai_error(status: int, message: str) -> tuple[int, dict]:
     return status, {"error": {"message": message, "type": "error", "code": None}}
 
 
+def anthropic_key_sent(headers: dict) -> str | None:
+    """The API key an Anthropic SDK request carried. The official SDK sends it as `X-Api-Key`
+    up to 1.x and as `Authorization: Bearer` from 2.0 on; pyproject.toml supports both, so
+    tests accept either form, but never both and never anything else."""
+    bearer = headers.get("authorization", "")
+    forms = [headers["x-api-key"]] if "x-api-key" in headers else []
+    if bearer.startswith("Bearer "):
+        forms.append(bearer[len("Bearer "):])
+    assert len(forms) <= 1, f"the key was sent twice: {sorted(headers)}"
+    return forms[0] if forms else None
+
+
 def anthropic_response(*calls: tuple[str, dict], text: str | None = None) -> tuple[int, dict]:
     content = []
     if text:

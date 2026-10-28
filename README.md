@@ -28,7 +28,7 @@ Requires Python 3.11–3.14 and a model that supports tool calling (for example,
 git clone https://github.com/nature-ai-corp/nature-ai-worker.git
 cd nature-ai-worker
 python3 -m venv .venv && source .venv/bin/activate
-pip install .
+pip install -c requirements.lock .
 nature-worker
 ```
 
@@ -75,9 +75,11 @@ git clone https://github.com/nature-ai-corp/nature-ai-worker.git
 cd nature-ai-worker
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install .
+pip install -c requirements.lock .
 nature-worker
 ```
+
+`-c requirements.lock` installs exactly the dependency versions the tests and releases use. Plain `pip install .` also works and may pick newer releases of the provider SDKs; CI tests those too, but they have not been checked against the real services.
 
 Open **http://127.0.0.1:8080** in your browser.
 

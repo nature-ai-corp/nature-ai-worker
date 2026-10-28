@@ -41,6 +41,28 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
+  newest-dependencies:
+    # pyproject.toml allows newer SDK releases than requirements.lock pins (anthropic 2.x sends
+    # the key as a Bearer token where 1.x used X-Api-Key). This job installs what a plain
+    # `pip install .` resolves today, so such changes show up here, not at users.
+    name: Tests with the newest supported dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install the package with unpinned dependencies
+        run: |
+          python -m pip install ".[dev]"
+          python -m pip check
+          python -m pip freeze | grep -iE "^(anthropic|openai|google-genai|httpx)=="
+      - name: Run tests
+        run: python -m pytest -q
+
   windows-security:
     name: Windows client security (Python ${{ matrix.python }})
     runs-on: windows-2022

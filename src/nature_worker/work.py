@@ -43,7 +43,7 @@ def _status(messages: list[dict], pending: list[dict], running: bool) -> tuple[s
         return "not_started", ""
     last = messages[-1]
     if last["role"] == "notice":
-        if (last["meta"] or {}).get("error") == "step_limit":
+        if (last["meta"] or {}).get("error") in ("step_limit", "stopped", "truncated"):
             return "stopped", last["content"]
         return "failed", last["content"]
     if last["role"] == "assistant" and not last["tool_calls"]:

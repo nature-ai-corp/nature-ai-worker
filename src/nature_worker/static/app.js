@@ -611,9 +611,21 @@ function buildUpdate(box, conv, w, status) {
   if (status === "working") {
     const calls = conv.messages.filter((m) => m.role === "assistant").flatMap((m) => m.tool_calls || []);
     const last = calls[calls.length - 1];
+    const stopping = state.stopping === conv.id;
+    const stop = el("button", { class: "secondary small", type: "button",
+      title: "Stops before the next step. A step already running (for example a file being written) finishes first." },
+      stopping ? "Stopping after the current step…" : "Stop");
+    stop.disabled = stopping;
+    stop.addEventListener("click", async () => {
+      state.stopping = conv.id;
+      stop.disabled = true;
+      stop.textContent = "Stopping after the current step…";
+      try { await api("POST", `/api/conversations/${conv.id}/stop`); } catch (e) { showError(e.message); }
+    });
     box.append(el("div", { class: "update working-box" },
       el("span", { class: "working" }, "Working"),
-      el("p", { class: "muted small" }, last ? `Latest step: ${last.name} ${argsSummary(last.arguments)}` : "Waiting for the model's first step.")));
+      el("p", { class: "muted small" }, last ? `Latest step: ${last.name} ${argsSummary(last.arguments)}` : "Waiting for the model's first step."),
+      stop));
     return;
   }
   if (status === "needs_approval") {
@@ -749,6 +761,7 @@ async function runWithPolling(fn) {
   stopPolling();
   state.busy = false;
   state.busyId = null;
+  state.stopping = null;
   await refreshCurrent();
   if (error && state.current && state.current.id === id) showError(error.message);  // never in other work
   loadWork(true);

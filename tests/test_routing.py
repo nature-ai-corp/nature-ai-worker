@@ -55,7 +55,7 @@ def test_official_endpoints_are_explicit_defaults(monkeypatch):
     assert str(providers.make_provider("openai", "m", KEY, None).inner.client.base_url) == "https://api.openai.com/v1/"
     assert str(providers.make_provider("anthropic", "m", KEY, None).inner.client.base_url) == "https://api.anthropic.com"
     assert str(providers.make_provider("deepseek", "m", KEY, None).inner.client.base_url) == "https://api.deepseek.com"
-    gem = providers.make_provider("gemini", "m", KEY, None).inner.client
+    gem = providers.make_provider("gemini", "m", KEY, None).inner.inner.client  # inside the retry wrapper
     assert gem._api_client.vertexai is False
     assert gem._api_client._http_options.base_url == "https://generativelanguage.googleapis.com/"
 

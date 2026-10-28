@@ -14,6 +14,8 @@ Each adapter converts this to its own API format and returns a ``ChatResult``.
 from __future__ import annotations
 
 import contextlib
+import logging
+import time
 import os
 import threading
 from dataclasses import dataclass, field
@@ -192,7 +194,36 @@ class _RedactingProvider:
         return result
 
 
-def make_provider(provider: str, model: str, api_key: str | None, endpoint: str | None) -> Provider:
+# Transient failures worth one more try. A model request changes nothing anywhere, so repeating
+# it is safe; a timeout is not retried (a slow local model would then block for many minutes).
+RETRY_KINDS = ("network", "server", "rate_limit")
+RETRY_DELAYS = (2.0, 6.0)   # at most two retries, then the error is reported as before
+log = logging.getLogger(__name__)
+
+
+class _RetryingProvider:
+    """Bounded retries for adapters whose SDK does not retry itself (Ollama, Gemini). The OpenAI
+    and Anthropic SDKs already retry connection errors, 408/409/429 and 5xx twice."""
+
+    def __init__(self, inner: Provider, delays: tuple[float, ...] | None = None, sleep=time.sleep):
+        self.inner, self.delays, self.sleep = inner, RETRY_DELAYS if delays is None else delays, sleep
+
+    def chat(self, system: str, messages: list[dict], tools: list[dict]) -> ChatResult:
+        for attempt, delay in enumerate((*self.delays, None)):
+            try:
+                return self.inner.chat(system, messages, tools)
+            except ProviderError as e:
+                if e.kind not in RETRY_KINDS or delay is None:
+                    raise
+                log.warning("Model request failed (%s), retry %d of %d in %.0f s", e.kind, attempt + 1,
+                            len(self.delays), delay)
+                self.sleep(delay)
+        raise AssertionError("unreachable")
+
+
+def make_provider(provider: str, model: str, api_key: str | None, endpoint: str | None, *,
+                  retry: bool = True) -> Provider:
+    """``retry=False`` for the connection test in Settings, which should answer at once."""
     if provider not in PROVIDERS:
         raise provider_error("config", f"Unknown provider '{provider}'")
     if not model:
@@ -222,4 +253,6 @@ def make_provider(provider: str, model: str, api_key: str | None, endpoint: str 
             from .ollama_chat import OllamaChat
 
             adapter = OllamaChat(model, endpoint, api_key)
+    if retry and provider in ("gemini", "ollama"):
+        adapter = _RetryingProvider(adapter)
     return _RedactingProvider(adapter, api_key)

@@ -102,13 +102,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         s.setdefault("max_steps", DEFAULT_MAX_STEPS)
         return s
 
-    def build_provider(provider: str | None, model: str, endpoint: str | None, api_key: str | None = None):
+    def build_provider(provider: str | None, model: str, endpoint: str | None, api_key: str | None = None,
+                       retry: bool = True):
         if not provider:
             from .providers import provider_error
 
             raise provider_error("config", "No model provider configured. Open Settings to add one.")
         key = api_key or creds.get(provider, effective_endpoint(provider, endpoint))[0]
-        return make_provider(provider, model, key, endpoint)
+        return make_provider(provider, model, key, endpoint, retry=retry)
 
     def current_provider():
         s = settings()
@@ -219,7 +220,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         try:
             provider = build_provider(
                 body.provider, body.model.strip(), _validate_endpoint(body.endpoint),
-                (body.api_key or "").strip() or None,
+                (body.api_key or "").strip() or None, retry=False,
             )
             result = provider.chat(
                 "You are a connection test. Follow the instruction exactly.",
@@ -302,6 +303,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         except ConversationBusy:
             raise HTTPException(409, "The agent is still working on the previous message.") from None
         return {"status": status}
+
+    @app.post("/api/conversations/{conv_id}/stop")
+    def stop_run(conv_id: str):
+        """Stop the running work before its next step (a step already running finishes)."""
+        conversation_or_404(conv_id)
+        return {"stopping": agent.stop(conv_id)}
 
     @app.post("/api/approvals/{approval_id}")
     def resolve_approval(approval_id: str, body: ApprovalIn):

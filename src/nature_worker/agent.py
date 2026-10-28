@@ -3,9 +3,12 @@
 """The built-in General Agent: a bounded model/tool loop for one conversation.
 
 A run starts when the user sends a message and ends when the model replies
-without tool calls, an error occurs, the step limit is reached, or a tool
-call needs approval. In the last case the run pauses; it continues when the
-user approves or denies the call.
+without tool calls, an error occurs, the step limit is reached, the user stops
+it, or a tool call needs approval. In the last case the run pauses; it continues
+when the user approves or denies the call.
+
+Stopping takes effect between steps: a model call or tool already running (a file
+write included) finishes first, and nothing after it starts. Completed results stay.
 """
 
 from __future__ import annotations
@@ -59,6 +62,9 @@ Today's date is {date}."""
 TRUNCATED_CALL = ("Not performed: your reply reached the model's output limit before this call was complete, "
                   "so its arguments may be cut off. Send long content in smaller parts: write_file with the "
                   "first part, then append_file for each further part.")
+STOPPED_CALL = "Not performed: the user stopped the task before this call ran."
+STOPPED_TEXT = ("Stopped at your request. Steps that had finished, and files already written, are kept. "
+                "Send a message to continue.")
 TRUNCATED_TEXT = ("The model's reply reached its output limit and may be incomplete. Send a message such as "
                   "'continue' to let the agent finish.")
 
@@ -81,12 +87,33 @@ class Agent:
         self.max_steps = max_steps
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
+        self._stop: dict[str, threading.Event] = {}
 
     # -- public API -----------------------------------------------------------
 
     def is_running(self, conv_id: str) -> bool:
         lock = self._locks.get(conv_id)
         return bool(lock and lock.locked())
+
+    def stop(self, conv_id: str) -> bool:
+        """Ask a running run to stop before its next model call or tool call."""
+        if not self.is_running(conv_id):
+            return False
+        with self._locks_guard:
+            self._stop.setdefault(conv_id, threading.Event()).set()
+        return True
+
+    def _stopping(self, conv_id: str) -> bool:
+        event = self._stop.get(conv_id)
+        return bool(event and event.is_set())
+
+    def _stopped(self, conv_id: str) -> str:
+        """End the run: every call the model asked for that has not run gets a result."""
+        for call in _open_calls(self.db.get_messages(conv_id)):
+            self.db.add_message(conv_id, "tool", STOPPED_CALL, tool_call_id=call["id"], tool_name=call["name"],
+                                meta={"denied": True, "stopped": True})
+        self.db.add_message(conv_id, "notice", STOPPED_TEXT, meta={"error": "stopped"})
+        return "stopped"
 
     def active_runs(self) -> int:
         """Runs in progress in any conversation (a run paused for approval is not)."""
@@ -124,6 +151,8 @@ class Agent:
             lock = self._locks.setdefault(conv_id, threading.Lock())
         if not lock.acquire(blocking=False):
             raise ConversationBusy()
+        with self._locks_guard:
+            self._stop.setdefault(conv_id, threading.Event()).clear()  # a stop asked earlier is not for this run
         try:
             yield
         finally:
@@ -167,6 +196,8 @@ class Agent:
         while True:
             messages = self.db.get_messages(conv_id)
             for call in _open_calls(messages):
+                if self._stopping(conv_id):
+                    return self._stopped(conv_id)
                 if call.get("extra", {}).get("argument_error"):
                     self.db.add_message(
                         conv_id, "tool", f"Error: {call['extra']['argument_error']}",
@@ -176,6 +207,8 @@ class Agent:
                 if not self._run_tool(conv_id, ctx, call["id"], call["name"], call["arguments"]):
                     return "needs_approval"
 
+            if self._stopping(conv_id):
+                return self._stopped(conv_id)
             messages = self.db.get_messages(conv_id)
             if _steps_since_user(messages) >= limit:
                 self.db.add_message(

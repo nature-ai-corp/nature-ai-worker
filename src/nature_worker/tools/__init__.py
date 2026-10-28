@@ -173,6 +173,7 @@ TOOLS: dict[str, Tool] = {
                 {
                     "path": {"type": "string", "description": "File path relative to the workspace."},
                     "offset": {"type": "integer", "description": "Character offset to start from (for long files)."},
+                    "limit": {"type": "integer", "description": "Maximum characters to return, to read one part."},
                 },
                 ["path"],
             ),
@@ -225,7 +226,7 @@ TOOLS: dict[str, Tool] = {
             _obj(
                 {
                     "query": {"type": "string", "description": "Text or regular expression to find."},
-                    "path": {"type": "string", "description": "Folder to search. Default '.'"},
+                    "path": {"type": "string", "description": "Folder or file to search. Default '.'"},
                     "regex": {"type": "boolean", "description": "Treat query as a regular expression."},
                 },
                 ["query"],

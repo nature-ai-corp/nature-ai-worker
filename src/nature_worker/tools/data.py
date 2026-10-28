@@ -29,7 +29,12 @@ def search_text(ws: Workspace, args: dict) -> str:
         raise ToolError(f"Invalid regular expression: {e}") from None
 
     results: list[str] = []
-    for entry in ws.list(args.get("path") or ".", recursive=True):
+    path = args.get("path") or "."
+    target = ws.resolve(path)
+    # A single file may be searched too (a model checking the document it just wrote passes its path).
+    entries = [{"path": ws.display(target), "type": "file", "size": target.stat().st_size}] \
+        if target.is_file() else ws.list(path, recursive=True)
+    for entry in entries:
         if entry["type"] != "file" or (entry["size"] or 0) > MAX_SEARCH_FILE_BYTES:
             continue
         try:

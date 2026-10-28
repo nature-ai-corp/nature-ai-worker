@@ -82,3 +82,32 @@ def test_without_a_known_window_nothing_is_refused_or_cut(ollama):
     assert send(client, conv_id, "read big.txt") == "done"
     result = [m for m in conversation(client, conv_id)["messages"] if m["role"] == "tool"][0]["content"]
     assert result.startswith("y" * 100_000) and "offset=100000" in result   # the previous behaviour
+
+
+def test_a_run_the_window_cannot_finish_keeps_and_reports_what_was_written(ollama):
+    """Real L run: the handbook was written in full, then the next prompt no longer fit the window."""
+    client, ws, model = ollama(context_window=8192)
+    part = "# Handbook\n\n" + "A sentence of the handbook. " * 357          # 10,008 characters
+    model.queue(ollama_response(("write_file", {"path": "handbook.md", "content": part})))
+    conv_id = new_conversation(client)
+    assert send(client, conv_id, "write the handbook") == "error"
+    assert len(model.requests) == 1                                       # the prompt that cannot fit is not sent
+    assert (ws / "handbook.md").read_text() == part                       # kept exactly as written
+    text = notice(client, conv_id)["content"]
+    assert "no longer fits" in text
+    assert "Written before the task ended, and kept: handbook.md (10,008 bytes). The task did not finish" in text
+
+
+def test_the_step_limit_reports_written_files_too(client, fake_model):
+    from conftest import openai_tool_call
+    configure(client, endpoint=fake_model.url + "/v1", max_steps=2)
+    fake_model.queue(openai_tool_call(("write_file", {"path": "a.md", "content": "# A\n"})),
+                     openai_tool_call(("append_file", {"path": "a.md", "content": "more\n"})))
+    conv_id = new_conversation(client)
+    assert send(client, conv_id, "write a.md") == "limit"
+    assert notice(client, conv_id)["content"].endswith(
+        "Written before the task ended, and kept: a.md (9 bytes). The task did not finish, so check it before relying on it.")
+    # Only this run's files: after a new message without writes, nothing is listed.
+    fake_model.queue(openai_tool_call(("calculate", {"expression": "1+1"})), openai_tool_call(("calculate", {"expression": "2+2"})))
+    assert send(client, conv_id, "continue") == "limit"
+    assert "Written before" not in notice(client, conv_id)["content"]

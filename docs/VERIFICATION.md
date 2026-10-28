@@ -498,3 +498,61 @@ Ollama reports no error when it cuts a prompt. `prompt_eval_count` counts the wh
 | L: long handbook with an 8,192-token window, first run | **FAIL**, found a defect: after `write_file` (11,266 bytes), the model's `append_file` reply hit the output limit; Ollama returned the half-written call as text, so the run ended with 3 of 10 sections. Fixed: such a reply now gets a labelled Worker note ("write in smaller append_file parts") and the run continues within the step limit. |
 | L, rerun with the fix | **FAIL by its criterion, behaviour correct**: one `write_file` and four `append_file` calls wrote all ten sections (22,711 characters, 11 headings); then the context guard ended the run before the final reply ("about 7,653 tokens … no longer fits the model's context window of 8,192 tokens") instead of letting Ollama drop the instructions. The written content stays in the conversation history, which fills a small window. |
 | No pre-existing file changed | PASS |
+
+## Phase 2 completion: long documents (2026-10-28)
+
+Real Ollama `qwen3.8:27b` (Ollama 0.32.14, on another computer on the LAN), the same handbook task as L. Ten named sections of at least 250 words each, from `sales.csv`.
+
+### Tried and rejected: shortening finished writes in the history sent to the model
+
+Ten real L runs at 8,192 tokens. Compaction saved real tokens: 4,123 of 12,046 by the end of one run, measured with Ollama's `prompt_eval_count`. But the model copied every shortened form it was shown:
+
+- A stand-in text in place of `content` was taken for what the model had written; the model rewrote the file and once appended the stand-in to it.
+- Calls without `content` were copied: three appends failed with "'content' must be a string", and one run read them as empty appends and rewrote the file.
+- A true first line plus an elision marker was copied as new appends. A guard refused the exact marker, and the model then wrote `## 9. Reporting\n[…]` into the document.
+
+Two of the four runs with the last form passed. The approach was reverted: tool calls and results go to the model exactly as stored.
+
+### What changed
+
+- **Instructions:**
+  - Write a long document in parts of one to three sections, about 400–1,000 words, close to the requested length.
+  - Don't rewrite or extend a part that was written successfully.
+  - Check a document written in parts with `search_text` on the file and bounded `read_file` (`offset` and `limit`), not by reading it back whole or to count words.
+  - Say in the answer what was checked; structural checks don't prove the content is right.
+- **`read_file`:** `limit` reads one bounded part; it never widens the chunk the context window allows.
+- **`search_text`:** also accepts a single file.
+- **Partial completion:** when the context guard, the step limit or Stop ends a run, the notice names the files written since the user's last message with their sizes, and says the task did not finish. The files are kept exactly as written.
+- **Unchanged:** the context guard, the step limit (20), approvals and the saved history.
+
+### Automated tests
+
+**562 passed, 39 skipped, 0 failed.** Repo checks: 0 findings.
+
+### Real Ollama acceptance: every run of the final code
+
+The `scripts/acceptance.py` checks are:
+
+- **L:** 8,192 tokens. Passes when the run either finishes, or ends early with the notice naming the file at its real size.
+- **M:** 16,384 tokens. Must finish.
+- **Both:**
+  - the file must equal the text of the successful writes exactly;
+  - no placeholder or elision line;
+  - no approval.
+
+Runs 1–2 came before the "close to the requested length" sentence; runs 3–4 came after it.
+
+| Run | L, 8,192 tokens | M, 16,384 tokens |
+|---|---|---|
+| 1 | PASS, ended early and reported: 7 sections (384–459 words), 17,515 bytes, file = writes | **FAIL**: 10 sections (391–616 words, 28,164 characters, 12 writes including two "extend" appends). The context guard ended it after the heading check, 72 tokens over its limit (14,818 estimated). |
+| 2 | PASS, ended early and reported: 7 sections, 17,569 bytes | **PASS, finished**: 10 sections (307–394 words), 20,432 characters, 3 writes, `search_text` checks, normal final reply in 363 s |
+| 3 | PASS, ended early and reported: 8 sections, 17,646 bytes; one bounded read | **FAIL**: 10 sections in three 7–10 KB parts, larger than instructed. Three bounded reads found a real error ("four-month total" for two months), and the context guard ended the run. |
+| 4 | PASS, ended early and reported: all 10 sections (254–377 words), 19,725 bytes, before the final reply | **FAIL**: 10 sections, 22,459 characters. `search_text` and one 500-character read found a real error ("four" observations, five listed). With no edit tool, the model tried to rewrite the whole file (cut off at the output limit, not executed), then asked to delete it. The run paused for that approval with the file unchanged. |
+
+In every run, the file equals the text of its successful writes, no placeholder or elision line entered a file, and no pre-existing workspace file changed.
+
+**L never finished at 8,192 tokens.** Without compaction, a 17–25 K-character handbook plus about 2,300 tokens of instructions and tools does not leave room for the final reply. The intended behaviour there is a graceful, reported end, and that happened in 4 of 4 runs.
+
+**M finished in 1 of 4 runs.** The failures were the model writing far more than asked (sections up to 616 words, parts up to 10 KB), checks that used the remaining room, and the lack of a way to correct one sentence without rewriting the file.
+
+Same session, default window: **E** (workspace escape blocked), **F** (delete approval denied, file unchanged), **U** (append to the user's `plan.md` needs approval; denied, unchanged) and **S** (Stop: `part1.md` complete, nothing after it ran) all PASS.

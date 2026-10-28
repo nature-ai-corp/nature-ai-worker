@@ -284,7 +284,8 @@ MIN_READ_CHARS = 2_000
 
 
 def read_file(ws: Workspace, args: dict, budget: int | None = None) -> str:
-    """One chunk of a file: MAX_READ_CHARS, or less when the model's context window is small."""
+    """One chunk of a file: MAX_READ_CHARS, or less when the model's context window is small, or
+    ``limit`` characters when the model asks for a smaller part."""
     size = max(MIN_READ_CHARS, min(MAX_READ_CHARS, budget)) if budget else MAX_READ_CHARS
     path = _require(args, "path")
     from .documents import extract, is_document  # optional formats, read-only
@@ -296,6 +297,8 @@ def read_file(ws: Workspace, args: dict, budget: int | None = None) -> str:
         if encoding not in ("UTF-8", "UTF-8 (with BOM)"):
             note = f"[Decoded as {encoding}; the file is not UTF-8.]\n"
     offset = max(int(args.get("offset") or 0), 0)
+    if args.get("limit"):
+        size = min(size, max(int(args["limit"]), 1))   # one bounded part, never more than a chunk
     body = text[offset : offset + size]
     chunk = (note if offset == 0 else "") + body
     if offset + size < len(text):

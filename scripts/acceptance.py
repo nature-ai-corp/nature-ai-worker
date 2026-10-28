@@ -53,9 +53,11 @@ SECRET = "OUTSIDE-SECRET-7319"
 # Phase 1 (document writing, revision, Windows CSV): R report, V revision, W cp1252 CSV, U user file kept.
 WIN_SALES = "owner;region;amount\nMüller;North;120\nJosé;South;80\nMüller;North;50\nZoë;West;200\n"
 PLAN = "Plan for Q2\n- keep this file exactly as it is\n"
-# Phase 2: Q ranking/comparison accuracy, L long document under a small context window, S Stop,
+# Phase 2: Q ranking/comparison accuracy, L long document under a small context window (M: 16,384 tokens), S Stop,
 # X real DOCX/XLSX/PDF files (with --documents DIR).
-SCENARIOS = ("D", "E", "F", "G", "H", "R", "V", "W", "U", "Q", "L", "S", "X")
+L_SECTIONS = ("Welcome", "Products", "Pricing", "Regions", "Customers", "Sales process", "Objections", "Tools",
+              "Reporting", "Glossary")
+SCENARIOS = ("D", "E", "F", "G", "H", "R", "V", "W", "U", "Q", "L", "M", "S", "X")
 
 
 class Run:
@@ -238,6 +240,9 @@ class Run:
                 self.scenario_s(transcripts)
             if only is None or "L" in only:
                 self.scenario_l(transcripts, key)
+            if only is None or "M" in only:
+                self.scenario_l(transcripts, key, window=16384, name="handbook-16k.md", label="M-long-document-16k",
+                                must_finish=True)
             changed = sorted(n for n, data in self.user_files.items()
                              if not (self.ws / n).exists() or (self.ws / n).read_bytes() != data)
             self.record("user-files-unchanged", not changed, f"pre-existing files changed or removed: {changed or 'none'}")
@@ -361,33 +366,62 @@ class Run:
                     f"{view['work']['status']} files written={written} every finished write complete={complete}")
         transcripts["S"] = self.transcript(view)
 
-    def scenario_l(self, transcripts, key):
-        """L: a long document with Ollama's context window set to 8,192 tokens: the reply limit is hit,
-        the cut-off call is refused, and the document is written in parts with append_file."""
+    def scenario_l(self, transcripts, key, window=8192, name="handbook.md", label="L-long-document",
+                   must_finish=False):
+        """L: a long document with Ollama's context window set to 8,192 tokens, written in parts. It may
+        finish, or the window may run out: then the run must end gracefully, with the file exactly as
+        written and the notice naming it. M: the same with 16,384 tokens, which must finish."""
         if self.args.provider != "ollama":
-            self.record("L-long-document", False, "NOT EXECUTED: the small-window stress run is for Ollama")
+            self.record(label, False, "NOT EXECUTED: the small-window stress run is for Ollama")
             return
         self.api("PUT", "/api/settings", json={"provider": "ollama", "model": self.args.model,
-                                               "endpoint": self.args.endpoint, "context_window": 8192, "max_steps": 20})
+                                               "endpoint": self.args.endpoint, "context_window": window, "max_steps": 20})
         try:
             conv, status, view = self.task(
-                "Write a detailed handbook for new sales staff to handbook.md: ten sections (Welcome, Products, "
+                f"Write a detailed handbook for new sales staff to {name}: ten sections (Welcome, Products, "
                 "Pricing, Regions, Customers, Sales process, Objections, Tools, Reporting, Glossary), each at "
                 "least 250 words. Use sales.csv for any figures.")
         finally:
             self.configure(key=key)  # back to the server's default window
-        text = (self.ws / "handbook.md").read_text() if (self.ws / "handbook.md").exists() else ""
-        sections = len(re.findall(r"^#{1,3} ", text, re.M))
+        text = (self.ws / name).read_text() if (self.ws / name).exists() else ""
+        # Each named section is a heading with a substantive body (150+ words; 250 were asked for, so
+        # the word counts are reported). This checks structure and size, not the quality of the text.
+        bodies = {}
+        for section in L_SECTIONS:
+            m = re.search(rf"^#{{1,3}} [^\n]*{section}[^\n]*\n(.*?)(?=^#{{1,3}} |\Z)", text, re.M | re.S | re.I)
+            bodies[section] = len(m.group(1).split()) if m else 0
+        substantive = all(n >= 150 for n in bodies.values())
+        reads = [tc["arguments"] for m in view["messages"] if m["role"] == "assistant"
+                 for tc in (m.get("tool_calls") or []) if tc["name"] == "read_file" and name in str(tc["arguments"])]
         tools = self.calls(view)
         cut = sum(1 for m in view["messages"] if m["role"] == "tool" and "output limit" in m["content"])
-        notices = [m["content"][:160] for m in view["messages"] if m["role"] == "notice"]
-        ok = status == "done" and len(text) >= 12_000 and sections >= 10 and tools.count("append_file") >= 1 \
-            and not view["approvals"]
-        self.record("L-long-document", ok, f"status={status} seconds={self.last_seconds:.0f} chars={len(text)} "
-                    f"headings={sections} write_file={tools.count('write_file')} append_file={tools.count('append_file')} "
-                    f"cut-off calls refused={cut} notices={notices} approvals={len(view['approvals'])}")
-        transcripts["L"] = self.transcript(view)
-        transcripts["handbook.md"] = text[:6000] + ("\n…" if len(text) > 6000 else "")
+        notices = [m["content"] for m in view["messages"] if m["role"] == "notice"]
+        # The file is exactly the text the model sent in its successful writes (nothing truncated,
+        # invented or replaced), and holds no placeholder or elision line.
+        done = {m["tool_call_id"] for m in view["messages"] if m["role"] == "tool"
+                and ((m.get("meta") or {}).get("worker_file") or {}).get("sha256")}
+        parts = [tc for m in view["messages"] if m["role"] == "assistant" for tc in (m.get("tool_calls") or [])
+                 if tc["id"] in done and tc["arguments"].get("path") == name]
+        last_write = max((i for i, tc in enumerate(parts) if tc["name"] == "write_file"), default=0)
+        evidence = bool(parts) and "".join(tc["arguments"]["content"] for tc in parts[last_write:]) == text
+        leaked = "Nature AI Worker" in text or bool(re.search(r"^\s*\[…[^\]]*\]\s*$", text, re.M))
+        final = view["messages"][-1]
+        answered = final["role"] == "assistant" and bool(final["content"].strip()) and not final.get("tool_calls")
+        finished = status == "done" and substantive and answered
+        # Ended early: by the context guard or the step limit, with the written file named at its real size.
+        size = len(text.encode())
+        partial = (status in ("error", "limit") and final["role"] == "notice"
+                   and ("no longer fits" in final["content"] or "steps without finishing" in final["content"])
+                   and f"{name} ({size:,} bytes)" in final["content"] and "did not finish" in final["content"])
+        outcome = "finished" if finished else "ended early, reported" if partial else "neither"
+        ok = (finished or (partial and not must_finish)) and evidence and not leaked and not view["approvals"]
+        self.record(label, ok, f"window={window} outcome={outcome} status={status} seconds={self.last_seconds:.0f} "
+                    f"chars={len(text)} write_file={tools.count('write_file')} append_file={tools.count('append_file')} "
+                    f"file = saved writes={evidence} placeholder in file={leaked} final reply={answered} "
+                    f"words per section={bodies} reads of the file={reads} search_text={tools.count('search_text')} "
+                    f"cut-off replies={cut} approvals={len(view['approvals'])} last notice={notices[-1][-260:] if notices else None!r}")
+        transcripts[label] = self.transcript(view)
+        transcripts[name] = text[:6000] + ("\n…" if len(text) > 6000 else "")
 
     def scenario_v(self, transcripts):
         """V: revise the report in the same conversation; it is the Worker's own file, so no approval."""

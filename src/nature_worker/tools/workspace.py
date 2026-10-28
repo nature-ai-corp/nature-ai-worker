@@ -68,17 +68,36 @@ def _write_all(fd: int, data: bytes) -> None:
         view = view[os.write(fd, view):]
 
 
+# Encodings tried in order. Decoding is always strict: a byte sequence that is not valid in the
+# detected encoding is reported, never silently replaced.
+_BOMS = ((b"\xef\xbb\xbf", "utf-8", "UTF-8 (with BOM)"), (b"\xff\xfe", "utf-16-le", "UTF-16"),
+         (b"\xfe\xff", "utf-16-be", "UTF-16"))
+
+
 def decode_text(data: bytes, rel: str = "file") -> tuple[str, str]:
-    if data.startswith(b"\xef\xbb\xbf"):
-        return data[3:].decode("utf-8", errors="replace"), "UTF-8 (with BOM)"
-    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
-        return data.decode("utf-16", errors="replace"), "UTF-16"
+    """(text, encoding name). UTF-8 or UTF-16 with a byte-order mark, else UTF-8, else
+    Windows-1252 (what Excel writes for "CSV" on Windows). Anything else is refused."""
+    for bom, codec, name in _BOMS:
+        if data.startswith(bom):
+            try:
+                return data[len(bom):].decode(codec), name
+            except UnicodeDecodeError as e:
+                plain = name.replace(" (with BOM)", "")
+                raise ToolError(f"'{rel}' starts with a {plain} byte-order mark but is not valid {plain} "
+                                f"(at byte {e.start + len(bom)}). Save it again as UTF-8.") from None
     if b"\x00" in data[:8192]:
-        raise ToolError(f"'{rel}' appears to be a binary file and cannot be read as text.")
+        raise ToolError(f"'{rel}' appears to be a binary file (or UTF-16/32 without a byte-order mark) "
+                        "and cannot be read as text.")
     try:
         return data.decode("utf-8"), "UTF-8"
     except UnicodeDecodeError:
-        return data.decode("cp1252", errors="replace"), "Windows-1252"
+        pass
+    try:
+        return data.decode("cp1252"), "Windows-1252"
+    except UnicodeDecodeError as e:
+        raise ToolError(f"'{rel}' is in an unsupported text encoding: it is neither UTF-8, UTF-16 nor "
+                        f"Windows-1252 (byte 0x{data[e.start]:02X} at position {e.start}). Save it again "
+                        "as UTF-8, for example with Excel's \"CSV UTF-8\" format.") from None
 
 
 class Workspace:

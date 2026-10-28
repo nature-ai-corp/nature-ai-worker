@@ -40,6 +40,28 @@ def test_windows_csv_encodings_are_read_correctly(tmp_path, encoding, bom, label
     assert "Rows: 3" in summary and "sum=250" in summary and "region" in summary.split("\n")[1]
 
 
+@pytest.mark.parametrize("data, message", [
+    (b"name\nM\x81ller\n", "unsupported text encoding"),            # 0x81 is undefined in Windows-1252
+    (b"\xef\xbb\xbfname\nM\xfcller\n", r"UTF-8 byte-order mark but is not valid UTF-8 \(at byte 9\)"),  # a UTF-8 BOM, then Latin-1 bytes
+    (b"\xff\xfe" + "name\n".encode("utf-16-le") + b"\x00\xd8", "not valid UTF-16"),  # lone surrogate
+])
+def test_undecodable_text_is_reported_never_silently_replaced(tmp_path, data, message):
+    (tmp_path / "bad.csv").write_bytes(data)
+    for tool, args in (("read_file", {}), ("table_summary", {})):
+        with pytest.raises(ToolError, match=message) as failure:
+            run(tmp_path, tool, path="bad.csv", **args)
+        assert "\ufffd" not in str(failure.value)
+    assert "Save it again as UTF-8" in str(failure.value)
+    assert run(tmp_path, "search_text", query="name") == "No matches found."  # skipped, not garbled
+
+
+def test_cyrillic_windows_1251_is_not_detectable_and_is_labelled(tmp_path):
+    """Known limit: single-byte Windows code pages other than 1252 decode as 1252 (every byte is
+    defined). The model is told the encoding, so wrong letters are not presented as UTF-8."""
+    (tmp_path / "ru.csv").write_bytes("город\n".encode("cp1251"))
+    assert "[Decoded as Windows-1252" in run(tmp_path, "read_file", path="ru.csv")
+
+
 def test_a_real_binary_file_is_still_refused(tmp_path):
     (tmp_path / "image.bin").write_bytes(b"PNG\x00\x01\x02" * 100)
     with pytest.raises(ToolError, match="binary"):

@@ -135,6 +135,38 @@ def _change(ctx: ToolContext, args: dict, approved: bool, *, append: bool) -> To
     return ToolOutput(done, released)
 
 
+_replace_approval = _change_approval("Edit")
+
+
+def _replace(ctx: ToolContext, args: dict, approved: bool) -> ToolOutput:
+    path = args.get("path")
+    if not isinstance(path, str) or not path.strip():
+        raise ToolError("Missing required argument 'path'.")
+    old, new = args.get("old_text"), args.get("new_text")
+    if not isinstance(old, str) or not isinstance(new, str):
+        raise ToolError("'old_text' and 'new_text' must be strings.")
+    from .documents import is_document
+    if is_document(path):
+        raise ToolError(f"'{path}' is a Word, Excel or PDF file; replace_text edits text files only.")
+    ws = ctx.workspace
+    if not ws.exists(path):
+        raise ToolError(f"File not found: {path}")
+    if approved:
+        # One approved edit of a file that is not the Worker's own: it stays the user's file.
+        key, fp, line = ws.replace_checked(path, old, new)
+        released = _record(ctx, key, None)
+    else:
+        expect = _owned(ctx, path)
+        if expect is None:
+            raise ApprovalRequired(f"Edit existing file '{path}'")
+        try:
+            key, fp, line = ws.replace_checked(path, old, new, expect=expect)
+        except FileChanged:
+            raise ApprovalRequired(f"Edit existing file '{path}'") from None
+        released = _record(ctx, key, fp)
+    return ToolOutput(f"Replaced 1 occurrence in {key} at line {line}; it now has {fp.size} bytes.", released)
+
+
 def owned_files(messages: list[dict]) -> dict[str, Fingerprint]:
     """The Worker-created files of one conversation, from its own tool results (oldest first)."""
     owned: dict[str, Fingerprint] = {}
@@ -211,6 +243,24 @@ TOOLS: dict[str, Tool] = {
             ),
             lambda ctx, args, approved: _change(ctx, args, approved, append=True),
             _append_approval,
+            contextual=True,
+        ),
+        Tool(
+            "replace_text",
+            "Correct part of an existing text file: replace one exact piece of text with new text, leaving "
+            "the rest of the file unchanged. old_text must occur exactly once in the file (copy it exactly, "
+            "including spaces and line breaks, and include enough of it to be unique). Editing a file you "
+            "created in this conversation needs no approval; editing any other file requires the user's approval.",
+            _obj(
+                {
+                    "path": {"type": "string", "description": "File path relative to the workspace."},
+                    "old_text": {"type": "string", "description": "The exact text to replace; must occur exactly once."},
+                    "new_text": {"type": "string", "description": "The text to put in its place."},
+                },
+                ["path", "old_text", "new_text"],
+            ),
+            _replace,
+            _replace_approval,
             contextual=True,
         ),
         Tool(

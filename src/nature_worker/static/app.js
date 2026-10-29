@@ -529,6 +529,9 @@ function toolCard(call, result, time) {
   if ((call.name === "write_file" || call.name === "append_file") && call.arguments && typeof call.arguments.content === "string") {
     body.push((call.name === "append_file" ? "Content appended:\n" : "Content written:\n") + call.arguments.content);
   }
+  if (call.name === "replace_text" && call.arguments && typeof call.arguments.old_text === "string") {
+    body.push("Replaced:\n" + call.arguments.old_text + "\n\nWith:\n" + String(call.arguments.new_text ?? ""));
+  }
   if (result) body.push("Result:\n" + result.content);
   if (body.length) details.append(el("pre", {}, body.join("\n\n")));
   details.open = state.openTools.has(call.id);
@@ -540,9 +543,12 @@ function toolCard(call, result, time) {
 
 function approvalCard(a) {
   const args = { ...a.arguments };
-  const content = typeof args.content === "string" ? args.content : null;
-  delete args.content;
-  const pre = el("pre", {}, JSON.stringify(args, null, 2) + (content !== null ? "\n\ncontent:\n" + content : ""));
+  // Text arguments are shown as written, not JSON-escaped, so the user can read what would change.
+  let text = "";
+  for (const key of ["content", "old_text", "new_text"]) {
+    if (typeof args[key] === "string") { text += `\n\n${key}:\n${args[key]}`; delete args[key]; }
+  }
+  const pre = el("pre", {}, JSON.stringify(args, null, 2) + text);
   const approve = el("button", { class: "primary" }, "Approve");
   const deny = el("button", { class: "danger" }, "Deny");
   const decide = async (ok) => {

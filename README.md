@@ -171,6 +171,7 @@ Statuses describe how the agent's last run ended, not whether your goal was met.
 | `calculate` | Exact arithmetic (safe expression evaluator, no code execution) | No |
 | `write_file` | Create or replace a file | No for new files and for files the agent created in this conversation; **yes for any other existing file** |
 | `append_file` | Add text to the end of a file, to write long documents in parts (1 MB per call, 5 MB per file) | Same as `write_file` |
+| `replace_text` | Correct one exact piece of text in a text file (must match exactly once; same encoding; atomic) | Same as `write_file` |
 | `delete_file` | Delete a file | **Always** |
 | `web_fetch` | Fetch a public web page as text (only when enabled in Settings) | **Always** |
 

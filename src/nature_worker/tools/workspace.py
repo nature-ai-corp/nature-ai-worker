@@ -223,6 +223,100 @@ class Workspace:
         finally:
             os.close(fd)
 
+    def replace_checked(self, rel: str, old: str, new: str, *,
+                        expect: Fingerprint | None = None) -> tuple[str, Fingerprint, int]:
+        """Replace the one exact occurrence of ``old`` with ``new`` and return (canonical path,
+        new fingerprint, line number of the change). The text is decoded and encoded again in the
+        file's own encoding (byte-order mark included); nothing else in the file changes.
+
+        The new content goes to a temporary file in the same folder, which then replaces the
+        original in one rename, so a reader sees the old file or the new one, never a mix. The
+        original is read through one descriptor (never through a final symlink); with ``expect``
+        it must still be exactly that file, and in every case it must be unchanged since it was
+        read, checked again just before the rename.
+        """
+        if not old:
+            raise ToolError("'old_text' must not be empty.")
+        path = self.resolve(rel)
+        if path == self.root or path.is_dir():
+            raise ToolError(f"'{rel}' is a directory.")
+        try:
+            fd = os.open(path, os.O_RDONLY | _NOFOLLOW | _BINARY)
+        except FileNotFoundError:
+            raise ToolError(f"File not found: {rel}") from None
+        except OSError as e:
+            raise ToolError(f"Cannot open '{self.display(path)}': {e.strerror}") from None
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise ToolError(f"'{rel}' is not a regular file.")
+            if st.st_nlink > 1:
+                # Replacing one name of a hard-linked file would leave the other names unchanged.
+                raise ToolError(f"'{rel}' has other hard links; it was not changed.")
+            before = _fingerprint(fd)
+            if expect is not None and before != expect:
+                raise FileChanged(f"'{rel}' changed after the Worker last wrote it.")
+            os.lseek(fd, 0, os.SEEK_SET)
+            data = b""
+            while chunk := os.read(fd, 1 << 20):
+                data += chunk
+                if len(data) > MAX_WRITE_BYTES:
+                    raise ToolError("The file is too large to edit (limit 5 MB).")
+        finally:
+            os.close(fd)
+        if hashlib.sha256(data).hexdigest() != before.sha256:
+            raise FileChanged(f"'{rel}' changed while it was being read; it was not changed.")
+
+        text, encoding = decode_text(data, rel)
+        count = text.count(old)
+        if count != 1:
+            hint = ""
+            if count == 0 and "\r\n" in text and "\n" in old and "\r\n" not in old:
+                hint = " The file uses Windows line endings (\\r\\n)."
+            raise ToolError(
+                f"'old_text' was found {count} times in '{rel}'; it must match exactly once. Nothing was changed."
+                + (" Use search_text or read_file to copy the exact text, including spaces and line breaks."
+                   if count == 0 else " Include more of the surrounding text so it matches only one place.")
+                + hint)
+        at = text.index(old)
+        result = text[:at] + new + text[at + len(old):]
+        codec, bom = {"UTF-8": ("utf-8", b""), "UTF-8 (with BOM)": ("utf-8", b"\xef\xbb\xbf"),
+                      "Windows-1252": ("cp1252", b"")}.get(encoding, (None, b""))
+        if codec is None:   # UTF-16: the byte-order mark tells which byte order
+            codec = "utf-16-le" if data.startswith(b"\xff\xfe") else "utf-16-be"
+            bom = data[:2]
+        try:
+            out = bom + result.encode(codec)
+        except UnicodeEncodeError as e:
+            raise ToolError(f"'new_text' contains {e.object[e.start:e.end]!r}, which cannot be saved in this "
+                            f"file's encoding ({encoding}). Nothing was changed.") from None
+        if len(out) > MAX_WRITE_BYTES:
+            raise ToolError("The file would exceed the 5 MB limit; it was not changed.")
+
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.{os.urandom(4).hex()}.tmp")
+        try:
+            tfd = os.open(tmp, os.O_RDWR | os.O_CREAT | os.O_EXCL | _NOFOLLOW | _BINARY, stat.S_IMODE(st.st_mode))
+        except OSError as e:
+            raise ToolError(f"Cannot edit '{rel}': {e.strerror}. Nothing was changed.") from None
+        try:
+            try:
+                _write_all(tfd, out)
+                os.fsync(tfd)
+                after = _fingerprint(tfd)
+            finally:
+                os.close(tfd)
+            # Same folder (nothing re-linked on the way) and still the file that was read.
+            if self.resolve(rel) != path or self.fingerprint(rel) != before:
+                raise FileChanged(f"'{rel}' changed while it was being edited; it was not changed.")
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        return self.display(path), after, text.count("\n", 0, at) + 1
+
     def delete(self, rel: str) -> None:
         path = self.resolve(rel)
         if path == self.root:

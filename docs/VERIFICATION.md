@@ -556,3 +556,50 @@ In every run, the file equals the text of its successful writes, no placeholder 
 **M finished in 1 of 4 runs.** The failures were the model writing far more than asked (sections up to 616 words, parts up to 10 KB), checks that used the remaining room, and the lack of a way to correct one sentence without rewriting the file.
 
 Same session, default window: **E** (workspace escape blocked), **F** (delete approval denied, file unchanged), **U** (append to the user's `plan.md` needs approval; denied, unchanged) and **S** (Stop: `part1.md` complete, nothing after it ran) all PASS.
+
+## Final standalone refinement: `replace_text` (2026-10-28)
+
+The long-document context limits recorded above are accepted as they are: no Context Management and no further compaction of tool history. One focused change was made: a safe local `replace_text` tool. Run 4 of M above showed why it was needed. The model found a real error but had no way to correct one sentence, so it tried to rewrite the whole file and then to delete it.
+
+**Tool.** `replace_text(path, old_text, new_text)` replaces one exact piece of text in a text file.
+
+- **Matching.** `old_text` must occur exactly once. Zero or several matches are refused and nothing changes; the error says how many matches were found and how to fix the call. A file with Windows line endings is named as such when nothing matches.
+- **Encoding.** The text is written back in the file's own encoding: UTF-8, UTF-8 with BOM, UTF-16 LE/BE with BOM, or Windows-1252. The byte-order mark and line endings are kept. Text that the encoding cannot hold is refused.
+- **Atomic replacement.** The new content goes to a temporary file in the same folder, created with O_EXCL, given the original file's mode and fsynced. One `os.replace` then puts it in place, so a reader sees the old file or the new one, never a mix.
+- **Identity.** The original is read through one descriptor, opened with O_NOFOLLOW, and must be a regular file with no other hard links. Its fingerprint (device, inode, size, SHA-256) is taken on that descriptor. Just before the rename, the path is resolved again and the file fingerprinted again. If anything changed, the edit is abandoned and the temporary file removed.
+- **Approval.** The existing rules apply unchanged. A file the Worker created in this conversation may be edited without approval while it is still exactly what the Worker last wrote. Every other existing file needs approval ("Edit existing file '…'"). An approved edit leaves the file the user's own, so the next edit asks again. Paths outside the workspace, absolute paths and links that resolve outside are refused. Word, Excel and PDF files are refused, because only text files can be edited.
+- **Records.** The result carries the usual `worker_file` record, so later edits, the Work summary ("Edited") and partial-completion notices all include it. The original call and its arguments stay in the history unchanged.
+- **Interface.** The instructions now say: correct an error with `replace_text`, not by rewriting or deleting the document. The Worker UI shows the old and new text in tool details and in the approval card.
+
+**Tests.** `tests/test_replace_text.py` has 26 tests:
+
+- correcting the Worker's own report without approval;
+- a user's file: approval required, denial respected, an approved edit stays the user's file;
+- zero or several matches, and invalid, absolute, outside-workspace and document paths;
+- all five encodings preserved byte for byte;
+- text the encoding cannot hold;
+- the CRLF hint;
+- atomic rename and file mode;
+- a Worker file edited by the user;
+- symlinks outside the workspace and inside it;
+- a Worker file swapped for a link to a user file;
+- hard links;
+- a change between read and rename, which aborts with no temporary file left;
+- the 5 MB limit.
+
+Full suite: 588 passed, 39 skipped. Repo checks: 0 findings.
+
+**Real model** (qwen3.8:27b on Ollama, two runs):
+
+- **C** (write a report containing a wrong total, then correct it): PASS twice. Each time one `replace_text` call and no approval. The file afterwards equals the original with only "Total revenue: 250" changed to "260". No other workspace file changed.
+- **P** (replace text in the user's `plan.md`): PASS twice. `replace_text` was paused for approval ("Edit existing file 'plan.md'"); after denial the workspace was byte-for-byte unchanged.
+- **E, F, U, S**: PASS twice. In one U run, the model used `replace_text` to add the line, and that call too was paused for approval.
+- **user-files-unchanged**: PASS in both runs.
+- **M** (16,384-token handbook, one run after the change): PASS, finished. 10 sections (374–747 words), 33,177 characters, three writes, one `search_text` heading check, normal final reply in 679 s. The check found nothing to correct, so `replace_text` was not used in this run. The L/M integrity check now replays successful `replace_text` corrections when it compares the file with its writes.
+
+**Limitations.**
+
+- For a user's file, approval is requested before the match is checked. An approved call whose `old_text` is not found still changes nothing and reports the error.
+- An in-workspace symlink is resolved to its target, as for `write_file`. It is treated as the user's file and needs approval.
+- On Windows, O_NOFOLLOW is not available; the fingerprint check before the rename still detects a swapped file.
+- Section length still overshoots the instructions (up to 747 words where about 300 were asked), as recorded above.

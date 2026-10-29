@@ -104,6 +104,8 @@ def summarize(conv: dict, messages: list[dict], approvals: list[dict], running: 
             deliverables[path] = {"written_at": r["created_at"], "action": r["content"].split(" ", 1)[0]}
         elif r["tool_name"] == "append_file":
             deliverables.setdefault(path, {"action": "Appended"})["written_at"] = r["created_at"]
+        elif r["tool_name"] == "replace_text":
+            deliverables.setdefault(path, {"action": "Edited"})["written_at"] = r["created_at"]
         elif r["tool_name"] == "delete_file":
             deliverables.pop(path, None)
         elif r["tool_name"] in INPUT_TOOLS:

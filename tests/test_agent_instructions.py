@@ -30,6 +30,7 @@ def test_a_long_document_is_checked_selectively_not_read_back_whole(client, fake
     for rule in ("written in several parts is not read back whole, during or after writing",
                  "results confirm what was saved", "use search_text on the file to confirm each required section heading",
                  "read that part with read_file using offset and limit", "Do not read a document back to count words or to spot-check it",
+                 "Correct an error with replace_text", "not by rewriting or deleting the document",
                  "A part of one to three sections, about 400 to 1,000 words", "close to the requested length", "Do not rewrite or extend a part that was written successfully",
                  "Headings and sizes show structure only, not that the content is right"):
         assert rule in system, rule

@@ -8,6 +8,7 @@ A release bundle is a directory (or the same files under an https:// URL)::
     release.json.sig    Ed25519 signature of the exact bytes of release.json
     RELEASE_NOTES.md    hashed in the manifest
     wheels/*.whl        the Worker wheel and every dependency wheel, hashed
+    runtime/*.tar.gz    optional (Windows Standalone): the pinned Python runtime, hashed
 
 Nothing in a bundle is used until the manifest signature verifies against a
 trusted key and each file matches its recorded size and SHA-256. Bundles are
@@ -46,7 +47,8 @@ _VERSION = re.compile(r"^(0|[1-9]\d{0,4})\.(0|[1-9]\d{0,4})\.(0|[1-9]\d{0,4})"
                       r"(?:\+([a-z0-9]{1,32}(?:\.[a-z0-9]{1,32}){0,3}))?$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _KEY_ID = re.compile(r"^[0-9a-f]{16}$")
-_FILE = re.compile(r"^(?:wheels/)?[A-Za-z0-9][A-Za-z0-9._+-]{0,199}$")
+_FILE = re.compile(r"^(?:wheels/|runtime/)?[A-Za-z0-9][A-Za-z0-9._+-]{0,199}$")
+_PYTHON_VERSION = re.compile(r"^3\.\d{1,2}\.\d{1,3}$")
 _WHEEL = re.compile(r"^([A-Za-z0-9_.]+)-([A-Za-z0-9_.!+]+)(?:-\d[^-]*)?-[^-]+-[^-]+-[^-]+\.whl$")
 
 
@@ -160,6 +162,15 @@ class Artifact:
 
 
 @dataclass(frozen=True)
+class Runtime:
+    """A Python runtime shipped in the bundle (python-build-standalone ``install_only``
+    archive, top folder ``python/``), so the installation needs no Python of its own."""
+    artifact: Artifact
+    python: str         # exact version, e.g. "3.12.15"; its major.minor must equal target.python
+    origin: dict        # upstream URL and SHA-256, recorded for provenance (informational)
+
+
+@dataclass(frozen=True)
 class Manifest:
     raw: bytes = field(repr=False)
     version: Version
@@ -174,6 +185,7 @@ class Manifest:
     product_wheel: str
     artifacts: tuple[Artifact, ...]
     source: dict
+    runtime: Runtime | None = None
 
     @property
     def digest(self) -> str:
@@ -192,6 +204,10 @@ class Manifest:
         try:
             artifacts = tuple(_artifact(a) for a in m["artifacts"])
             notes = _artifact(m["notes"])
+            runtime = None
+            if m.get("runtime") is not None:
+                r = m["runtime"]
+                runtime = Runtime(_artifact(r), str(r["python"]), dict(r.get("origin") or {}))
             target = m["target"]
             editions = tuple(m["editions"])
             data_schema = {str(k): int(v) for k, v in m["data_schema"].items()}
@@ -201,7 +217,7 @@ class Manifest:
                 min_upgrade_from=Version.parse(m["upgrade_from"]["min"]), data_schema=data_schema,
                 client_interface=m.get("client_interface"), notes=notes,
                 product_wheel=str(m["product_wheel"]), artifacts=artifacts,
-                source=dict(m.get("source") or {}),
+                source=dict(m.get("source") or {}), runtime=runtime,
             )
         except (KeyError, TypeError, AttributeError, ValueError) as exc:
             if isinstance(exc, ReleaseError):
@@ -215,6 +231,15 @@ class Manifest:
         if len(set(paths)) != len(paths) or notes.path in paths:
             raise ReleaseError("The manifest lists a file twice.")
         if any(not p.startswith("wheels/") or not p.endswith(".whl") for p in paths):
+            raise ReleaseError("Every artifact must be a wheel under wheels/.")
+        if runtime is not None:
+            if not runtime.artifact.path.startswith("runtime/") or not runtime.artifact.path.endswith(".tar.gz") \
+                    or runtime.artifact.path in paths or runtime.artifact.path == notes.path:
+                raise ReleaseError("The runtime must be one .tar.gz archive under runtime/.")
+            if not _PYTHON_VERSION.match(runtime.python) \
+                    or runtime.python.rsplit(".", 1)[0] != target.get("python"):
+                raise ReleaseError("The runtime's Python version does not match the release target.")
+        elif any(p.startswith("runtime/") for p in paths):
             raise ReleaseError("Every artifact must be a wheel under wheels/.")
         if manifest.product_wheel not in paths:
             raise ReleaseError("The Worker wheel is not among the hashed artifacts.")
@@ -281,10 +306,15 @@ def verify_bundle(bundle: Path, keys: list[TrustedKey]) -> VerifiedRelease:
     raw = _read_limited(bundle / MANIFEST, MAX_MANIFEST_BYTES)
     signer = verify_signature(raw, _read_limited(bundle / SIGNATURE, 4096), keys)
     manifest = Manifest.parse(raw)
-    for artifact in (manifest.notes, *manifest.artifacts):
+    for artifact in _files(manifest):
         _check_file(bundle / artifact.path, artifact, bundle)
     notes = (bundle / manifest.notes.path).read_text(encoding="utf-8", errors="replace")
     return VerifiedRelease(manifest, signer, bundle, notes)
+
+
+def _files(manifest: Manifest) -> tuple[Artifact, ...]:
+    runtime = (manifest.runtime.artifact,) if manifest.runtime else ()
+    return (manifest.notes, *manifest.artifacts, *runtime)
 
 
 def _read_limited(path: Path, limit: int) -> bytes:
@@ -324,7 +354,7 @@ def stage_bundle(source: str, dest: Path, keys: list[TrustedKey]) -> VerifiedRel
     raw = _read_limited(dest / MANIFEST, MAX_MANIFEST_BYTES)
     verify_signature(raw, _read_limited(dest / SIGNATURE, 4096), keys)
     manifest = Manifest.parse(raw)
-    for artifact in (manifest.notes, *manifest.artifacts):
+    for artifact in _files(manifest):
         fetch(artifact.path, artifact.size)
     return verify_bundle(dest, keys)
 

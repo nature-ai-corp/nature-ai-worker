@@ -1,0 +1,8 @@
+{
+  "python": "3.12.15",
+  "release": "20261009",
+  "file": "cpython-3.12.15+20261009-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+  "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261009/cpython-3.12.15%2B20261009-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+  "sha256": "11ed9f8a6ac64fb1b5a55e40e305a6744a3f77a70863c8f8197a6e4349abc64a",
+  "note": "python-build-standalone (Astral), published 2026-10-09; SHA-256 equals the digest GitHub publishes for the asset (checked 2026-10-28)."
+}

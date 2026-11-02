@@ -9,6 +9,7 @@
 
   python scripts/release_bundle.py build --private-key FILE --notes FILE --out DIR
       [--min-upgrade-from X.Y.Z] [--channel stable] [--src DIR]
+      [--target OS-ARCH-PYTHON --wheel-hashes FILE] [--runtime ARCHIVE --runtime-pin JSON]
 
       Builds the Worker wheel from the committed HEAD (``git archive``; never
       the working tree) unless --src names an explicit source tree, downloads
@@ -16,6 +17,13 @@
       OS, architecture and Python, hashes everything and signs the manifest.
       Build each platform's bundle on that platform: pip cannot evaluate
       platform markers for another OS.
+
+      Exception: a bundle for another target (``--target windows-x86_64-3.12``) is
+      built from an explicit, hashed wheel list (``--wheel-hashes``, e.g.
+      packaging/windows/wheels-win_amd64-cp312.sha256): exactly those wheels are
+      downloaded without dependency resolution and each must match its SHA-256.
+      ``--runtime`` adds the pinned Python runtime archive (checked against
+      ``--runtime-pin``) so the installation needs no Python of its own.
 
   python scripts/release_bundle.py verify --bundle DIR [--repo CLONE] [--trust-key FILE] [--rebuild]
 
@@ -91,10 +99,18 @@ def _commit_epoch(repo: Path, commit: str) -> str:
     return _run(["git", "-C", str(repo), "log", "-1", "--format=%ct", commit]).stdout.strip()
 
 
+BUILD_REQUIREMENTS = REPO / "packaging" / "build-requirements.txt"
+
+
 def _build_wheel(src: Path, out: Path, epoch: str | None) -> Path:
-    env = {**os.environ, **({"SOURCE_DATE_EPOCH": epoch} if epoch else {})}
-    _run([sys.executable, "-m", "pip", "--disable-pip-version-check", "wheel", "--no-deps", "-q",
-          "-w", str(out), str(src)], env=env)
+    """The Worker wheel, built with the hash-pinned build backend only (no build isolation, so pip
+    never fetches a build tool of its own choosing)."""
+    pip = [sys.executable, "-m", "pip", "--disable-pip-version-check"]
+    with tempfile.TemporaryDirectory() as tools:
+        _run([*pip, "install", "-q", "--no-deps", "--require-hashes", "--only-binary=:all:", "--target", tools,
+              "-r", str(BUILD_REQUIREMENTS)])
+        env = {**os.environ, "PYTHONPATH": tools, **({"SOURCE_DATE_EPOCH": epoch} if epoch else {})}
+        _run([*pip, "wheel", "--no-deps", "--no-build-isolation", "-q", "-w", str(out), str(src)], env=env)
     return next(out.glob("nature_ai_worker-*.whl"))
 
 
@@ -119,8 +135,73 @@ def _code_facts(src: Path) -> dict:
     return json.loads(_run([sys.executable, "-I", "-c", probe, str(src / "src")]).stdout)
 
 
+PIP_PLATFORMS = {("windows", "x86_64"): "win_amd64"}
+
+
+def _target(text: str | None) -> dict:
+    if not text:
+        return host_target()
+    try:
+        system, arch, python = text.split("-")
+    except ValueError:
+        raise SystemExit("--target must be OS-ARCH-PYTHON, e.g. windows-x86_64-3.12") from None
+    if (system, arch) not in PIP_PLATFORMS:
+        raise SystemExit(f"No pip platform known for {system}-{arch}.")
+    return {"os": system, "arch": arch, "python": python}
+
+
+def read_wheel_hashes(path: Path) -> dict[str, str]:
+    """``sha256  file name`` per line (the output of sha256sum); # comments allowed."""
+    pins = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            digest, name = line.split(maxsplit=1)
+            pins[name.lstrip("*")] = digest.lower()
+    return pins
+
+
+def _download_pinned(pins: dict[str, str], target: dict, wheels: Path, product: Path) -> None:
+    """Exactly the pinned wheels for ``target``, each checked against its SHA-256."""
+    py = target["python"].replace(".", "")
+    for name in sorted(pins):
+        dist, version = name.split("-")[:2]
+        _run([sys.executable, "-m", "pip", "--disable-pip-version-check", "download", "-q", "--no-deps",
+              "--only-binary=:all:", "--platform", PIP_PLATFORMS[(target["os"], target["arch"])],
+              "--python-version", target["python"], "--implementation", "cp", "--abi", f"cp{py}",
+              "--abi", "abi3", "--abi", "none", "-d", str(wheels), f"{dist}=={version}"])
+    got = {w.name for w in wheels.glob("*.whl")} - {product.name}
+    if got != set(pins):
+        raise SystemExit(f"Downloaded wheels differ from the pinned list: missing {sorted(set(pins) - got)}, "
+                         f"unexpected {sorted(got - set(pins))}")
+    for name, digest in pins.items():
+        if sha256_file(wheels / name) != digest:
+            raise SystemExit(f"{name} does not match its pinned SHA-256.")
+
+
+def _runtime(args, out: Path, target: dict) -> dict | None:
+    if not args.runtime:
+        return None
+    pin = json.loads(args.runtime_pin.read_text(encoding="utf-8"))
+    if sha256_file(args.runtime) != pin["sha256"]:
+        raise SystemExit(f"{args.runtime} does not match the pinned SHA-256 in {args.runtime_pin}.")
+    if pin["python"].rsplit(".", 1)[0] != target["python"]:
+        raise SystemExit(f"The runtime is Python {pin['python']}, the target {target['python']}.")
+    dest = out / "runtime" / pin["file"].replace("+", "-")
+    dest.parent.mkdir()
+    dest.write_bytes(args.runtime.read_bytes())
+    return {"path": dest.relative_to(out).as_posix(), "sha256": pin["sha256"], "size": dest.stat().st_size,
+            "python": pin["python"], "origin": {"url": pin["url"], "sha256": pin["sha256"],
+                                                "release": pin["release"]}}
+
+
 def build(args) -> int:
     key = _load_key(args.private_key)
+    target = _target(args.target)
+    if args.target and not args.wheel_hashes:
+        raise SystemExit("--target needs --wheel-hashes: another platform's wheels are only taken from a pinned list.")
+    if bool(args.runtime) != bool(args.runtime_pin):
+        raise SystemExit("--runtime and --runtime-pin go together.")
     out: Path = args.out
     if out.exists():
         raise SystemExit(f"{out} already exists.")
@@ -137,8 +218,12 @@ def build(args) -> int:
         pip = [sys.executable, "-m", "pip", "--disable-pip-version-check"]
         epoch = _commit_epoch(REPO, source["commit"]) if source["commit"] else None
         product = _build_wheel(src, wheels, epoch)
-        _run([*pip, "download", "-q", "--only-binary=:all:", "-d", str(wheels),
-              "-r", str(src / "requirements.lock"), str(product)])
+        if args.wheel_hashes:
+            _download_pinned(read_wheel_hashes(args.wheel_hashes), target, wheels, product)
+        else:
+            _run([*pip, "download", "-q", "--only-binary=:all:", "-d", str(wheels),
+                  "-r", str(src / "requirements.lock"), str(product)])
+    runtime = _runtime(args, out, target)
     notes = out / "RELEASE_NOTES.md"
     notes.write_bytes(args.notes.read_bytes())
 
@@ -148,7 +233,7 @@ def build(args) -> int:
     manifest = {
         "schema": 1, "product": PRODUCT, "version": facts["version"],
         "released_at": time.strftime("%Y-%m-%d"), "channel": args.channel,
-        "target": host_target(), "editions": ["standalone", "platform_client"],
+        "target": target, "editions": ["standalone"] if runtime else ["standalone", "platform_client"],
         "upgrade_from": {"min": args.min_upgrade_from or facts["version"]},
         "data_schema": {"standalone": facts["standalone"], "platform_client": facts["platform_client"]},
         "client_interface": facts["client_interface"],
@@ -156,6 +241,7 @@ def build(args) -> int:
         "product_wheel": product.relative_to(out).as_posix(),
         "artifacts": [entry(w) for w in sorted(wheels.glob("*.whl"))],
         "source": source,
+        **({"runtime": runtime} if runtime else {}),
     }
     raw = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
     Manifest.parse(raw)  # the same validation an installation applies
@@ -187,7 +273,7 @@ def verify(args) -> int:
     report.update(version=str(m.version), manifest_sha256=m.digest, source=m.source,
                   signer={"key_id": release.signer.key_id, "scope": release.signer.scope})
     check("signature_and_integrity", True, f"signed by {release.signer.key_id}; "
-          f"{len(m.artifacts) + 1} files match their SHA-256")
+          f"{len(m.artifacts) + 1 + bool(m.runtime)} files match their SHA-256")
     check("official_signer", release.official, "an official NATURE AI release key" if release.official else
           "NOT an official release key (no official key is published yet, see docs/RELEASES.md)")
     source = m.source or {}
@@ -236,6 +322,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--min-upgrade-from")
     p.add_argument("--channel", default="stable")
     p.add_argument("--src", type=Path, help="explicit source tree (tests); default: committed HEAD")
+    p.add_argument("--target", help="another platform, e.g. windows-x86_64-3.12 (needs --wheel-hashes)")
+    p.add_argument("--wheel-hashes", type=Path, help="pinned dependency wheels: 'sha256  file name' per line")
+    p.add_argument("--runtime", type=Path, help="Python runtime archive to ship (Windows Standalone installer)")
+    p.add_argument("--runtime-pin", type=Path, help="JSON pin for --runtime (packaging/windows/runtime.json)")
     p = sub.add_parser("verify")
     p.add_argument("--bundle", type=Path, required=True)
     p.add_argument("--repo", type=Path, help="a git clone that has the release tags")

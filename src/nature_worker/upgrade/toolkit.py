@@ -69,6 +69,36 @@ def clean_env(extra: dict | None = None) -> dict:
     return env
 
 
+def unpack_runtime(archive: Path, dest: Path) -> Path:
+    """Unpack a python-build-standalone ``install_only`` archive (one top folder, ``python/``)
+    into ``dest`` and return its interpreter. Only regular files and folders inside ``dest`` are
+    accepted: links, devices and paths that leave the folder refuse the whole archive."""
+    import tarfile
+    if dest.exists():
+        shutil.rmtree(dest)
+    staging = dest.with_name(dest.name + ".unpacking")
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
+    with tarfile.open(archive, "r:gz") as tar:
+        members = tar.getmembers()
+        for m in members:
+            parts = Path(m.name).parts
+            if not parts or parts[0] != "python" or ".." in parts or Path(m.name).is_absolute() \
+                    or not (m.isfile() or m.isdir()):
+                raise ToolkitError(f"The runtime archive contains an unexpected entry: {m.name[:120]!r}.")
+        # The checks above already refuse what the "data" filter guards against; the filter is
+        # used too where it exists (Python 3.11.4 and later).
+        kwargs = {"filter": "data"} if hasattr(tarfile, "data_filter") else {}
+        tar.extractall(staging, members=members, **kwargs)
+    (staging / "python").rename(dest)
+    staging.rmdir()
+    python = dest / "python.exe" if sys.platform == "win32" else dest / "bin" / "python3"
+    if not python.is_file():
+        raise ToolkitError("The runtime archive has no Python interpreter.")
+    return python
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -127,7 +157,8 @@ class BaseToolkit:
         target.mkdir(parents=True)
         (target / INCOMPLETE).write_text("installation in progress\n")
         self.progress(f"Installing {version} into {target}")
-        self.runner.run([str(self.base_python), "-I", "-m", "venv", str(target / "venv")])
+        base = self.version_runtime(release, target)
+        self.runner.run([str(base), "-I", "-m", "venv", str(target / "venv")])
         python = str(self.layout.python(version))
         requirements = target / "requirements.txt"
         requirements.write_text("".join(f"{wheel_requirement(a.path)} --hash=sha256:{a.sha256}\n"
@@ -149,6 +180,10 @@ class BaseToolkit:
             "client_interface": release.manifest.client_interface, "installed_at": time.time(),
         }, indent=2) + "\n", encoding="utf-8")
         (target / INCOMPLETE).unlink()
+
+    def version_runtime(self, release: VerifiedRelease, target: Path) -> Path:
+        """The Python that the version's venv is built from: the upgrader's own interpreter."""
+        return self.base_python
 
     def remove_incomplete(self, version: str) -> None:
         target = self.layout.version_dir(version)
@@ -240,6 +275,20 @@ class BaseToolkit:
 
 class StandaloneToolkit(BaseToolkit):
     edition = "standalone"
+
+    def version_runtime(self, release: VerifiedRelease, target: Path) -> Path:
+        """A release that ships its own Python (the Windows installer's bundles) gets it unpacked
+        into the version's folder, so each version keeps the exact runtime it was verified with
+        and a rollback returns to it. Otherwise the upgrader's own interpreter is used."""
+        runtime = release.manifest.runtime
+        if runtime is None:
+            return self.base_python
+        self.progress(f"Unpacking Python {runtime.python}")
+        python = unpack_runtime(release.bundle / runtime.artifact.path, target / "runtime")
+        have = self.runner.run([str(python), "-I", "-c", "import sys; print('%d.%d.%d' % sys.version_info[:3])"])
+        if have.stdout.strip() != runtime.python:
+            raise ToolkitError(f"The bundled runtime reports Python {have.stdout.strip()!r}, not {runtime.python}.")
+        return python
 
     def check_permissions(self) -> list[tuple[str, bool, str]]:
         checks = []

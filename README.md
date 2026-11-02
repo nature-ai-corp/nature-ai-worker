@@ -42,6 +42,10 @@ Want something to try? The [sales report demo](examples/sales-report/) has a syn
 
 ## Installation
 
+### Windows installer (development builds)
+
+A per-user installer, `NatureAIWorker-Setup-<version>.exe`, brings its own pinned Python runtime and every dependency. It needs no Python, Git, WSL, Docker or administrator rights. It adds a Start-menu entry that starts the app and opens it in your browser, plus an Apps & Features entry. Uninstalling keeps your data and workspace; removing them is a separate, explicit Start-menu step. Upgrades go through the same verified, rolled-back-on-failure engine as `nature-worker-upgrade`. Only unsigned development builds exist so far: check the published SHA-256 before running one. See [docs/WINDOWS_STANDALONE_INSTALLER.md](docs/WINDOWS_STANDALONE_INSTALLER.md).
+
 ### Option A: Python 3.11–3.14
 
 #### Ubuntu and WSL prerequisites
@@ -290,7 +294,7 @@ The automated tests never contact a real AI provider. To check a provider yourse
 - **One run at a time per conversation.** Runs happen inside the HTTP request. If the server stops in the middle of a task, the task is not resumed. Unanswered tool calls are closed out the next time you send a message.
 - **Tool-calling quality depends on the model.** Small local models may call tools poorly. Use **Test connection** to check.
 - The web fetch tool returns text only (HTML, plain text, JSON, XML). It does not run JavaScript.
-- **Linux first.** Tested on Linux (Ubuntu 24.04 in CI, and WSL2 during development). macOS and native Windows have not been tested; on Windows, use WSL2 or Docker.
+- **Linux first.** Tested on Linux (Ubuntu 24.04 in CI, and WSL2 during development). macOS has not been tested. On Windows, the installer above is the supported route; its native acceptance status is in [docs/VERIFICATION.md](docs/VERIFICATION.md). Running from source on native Windows is not tested.
 
 ## License
 

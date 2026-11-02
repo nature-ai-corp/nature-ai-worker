@@ -10,6 +10,8 @@
     rollback    return to the version before the last upgrade
     history     upgrade outcomes recorded for this installation
     install     create a managed Standalone installation from a verified bundle
+    uninstall-check   whether the code of this Standalone installation may be removed now
+    remove-data       delete this installation's data (and, if asked, its workspace) for good
 
 Exit codes: 0 done, 1 failed (see message), 2 not eligible / not authorized /
 nothing changed, 3 usage or installation error.
@@ -242,6 +244,21 @@ def _default_prefix() -> Path:
     return Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / "nature-ai-worker"
 
 
+def platform_client_namespace(path: Path) -> Path | None:
+    """The Windows Platform Client (S-C) folder that ``path`` lies in, if any. Compared as text
+    only: Standalone never opens, reads or lists Platform Client folders. A separate Standalone
+    installation may exist next to the Platform Client (its own user, folders and port); what is
+    refused is putting Standalone code, data or workspace inside the Platform Client's folders."""
+    if sys.platform != "win32":
+        return None
+    candidate = os.path.normcase(os.path.abspath(path))
+    for var, default in (("ProgramFiles", r"C:\Program Files"), ("ProgramData", r"C:\ProgramData")):
+        root = os.path.normcase(os.path.abspath(os.path.join(os.environ.get(var, default), "NatureAIWorker")))
+        if candidate == root or candidate.startswith(root.rstrip(os.sep) + os.sep):
+            return Path(root)
+    return None
+
+
 def cmd_install(args) -> int:
     """Create a managed Standalone installation; adopts existing data in place."""
     if hasattr(os, "geteuid") and os.geteuid() == 0:
@@ -249,6 +266,10 @@ def cmd_install(args) -> int:
     prefix = (args.prefix or _default_prefix()).absolute()
     data_dir = (args.data_dir or prefix / "data").absolute()
     workspace = (args.workspace or prefix / "workspace").absolute()
+    for path in (prefix, data_dir, workspace):
+        if platform_client_namespace(path) is not None:
+            raise LayoutError(f"{path} is inside the Platform Client's folders ({platform_client_namespace(path)}); "
+                              "Standalone never uses them. Choose another folder. Nothing was installed.")
     layout = Layout(prefix)
     if (prefix / "installation.json").exists():
         raise LayoutError(f"{prefix} is already an installation; use `nature-worker-upgrade upgrade`.")
@@ -306,6 +327,76 @@ def cmd_install(args) -> int:
                    "signer_scope": release.signer.scope})
     shutil.rmtree(staging, ignore_errors=True)
     _say(f"Installed {version}. Start it with: {launchers[0]}")
+    return 0
+
+
+def _standalone(args) -> tuple[Layout, Installation]:
+    prefix = find_prefix(args.prefix)
+    if prefix is None:
+        raise LayoutError("This is not a managed installation.")
+    layout = Layout(prefix)
+    inst = layout.installation()
+    if inst.edition != "standalone":
+        raise LayoutError("This command is for Standalone installations only; the Platform Client has "
+                          "its own uninstall.")
+    return layout, inst
+
+
+def cmd_uninstall_check(args) -> int:
+    """Exit 0 if the installer may remove the code now. Data and workspace are never touched."""
+    layout, inst = _standalone(args)
+    problems = []
+    if worker_running(inst.data_dir):
+        problems.append("Nature AI Worker is running. Close its window (or stop it), then try again.")
+    if layout.state():
+        problems.append("An upgrade did not finish. Run `nature-worker-upgrade recover` first.")
+    for p in problems:
+        _say(f"Refused: {p}")
+    if problems:
+        return 2
+    _say(f"Ready to remove the program from {layout.prefix}. Kept: data {inst.data_dir}, "
+         f"workspace {inst.workspace_dir}.")
+    return 0
+
+
+def cmd_remove_data(args) -> int:
+    """Delete the data root (settings, API keys, history, backups) and, only with
+    --include-workspace, the workspace. Asks for the exact folder to be typed back."""
+    _layout, inst = _standalone(args)
+    data = inst.data_dir
+    if read_mode(data) == PLATFORM_CLIENT:
+        raise LayoutError(f"{data} belongs to a Platform Client installation; refusing.")
+    targets = [p for p in [data, inst.workspace_dir if args.include_workspace else None] if p and p.exists()]
+    if not targets:
+        _say("Nothing to remove: the data folder does not exist.")
+        return 0
+    _say("This permanently deletes:")
+    for p in targets:
+        _say(f"  {p}")
+    if not args.include_workspace and inst.workspace_dir:
+        _say(f"Kept: your workspace {inst.workspace_dir} (add --include-workspace to delete it too).")
+    _say("Settings, saved API keys, conversations, approvals and backups cannot be recovered afterwards.")
+    if args.confirm_path is not None:
+        ok = Path(args.confirm_path) == data
+    else:
+        ok = _ask(f"Type the data folder exactly ({data}) to delete, or press Enter to cancel: ") == str(data)
+    if not ok:
+        _say("Not confirmed; nothing was deleted.")
+        return 2
+    if worker_running(data):
+        _say("Refused: Nature AI Worker is running. Close it, then try again. Nothing was deleted.")
+        return 2
+    for path in targets:
+        # Renamed first: on Windows this fails while any process has a file in it open, so a
+        # Worker that started meanwhile is never left with half its data deleted.
+        aside = path.with_name(f"{path.name}.removing-{os.getpid()}")
+        try:
+            path.rename(aside)
+        except OSError as exc:
+            _say(f"Refused: {path} is in use ({exc.strerror}). Nothing more was deleted.")
+            return 1
+        shutil.rmtree(aside)
+        _say(f"Deleted {path}")
     return 0
 
 
@@ -384,6 +475,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--workspace", type=Path)
     p.add_argument("--trust-key", type=Path, help="key list (JSON) to trust locally; such releases are never official")
     p.add_argument("--confirm-version")
+    sub.add_parser("uninstall-check")
+    p = sub.add_parser("remove-data")
+    p.add_argument("--include-workspace", action="store_true", help="also delete the workspace (your files)")
+    p.add_argument("--confirm-path", help="authorize non-interactively: must equal the data folder")
     p = sub.add_parser("register-local-build", help=argparse.SUPPRESS)
     p.add_argument("--version", required=True)
     p.add_argument("--edition", choices=("standalone", "platform_client"), required=True)
@@ -398,6 +493,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--prefix is required")
     handler = {"status": cmd_status, "check": cmd_check, "upgrade": cmd_upgrade, "recover": cmd_recover,
                "rollback": cmd_rollback, "history": cmd_history, "install": cmd_install,
+               "uninstall-check": cmd_uninstall_check, "remove-data": cmd_remove_data,
                "register-local-build": cmd_register_local_build}[args.command]
     try:
         return handler(args)

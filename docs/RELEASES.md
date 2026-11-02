@@ -27,9 +27,10 @@ nature-ai-worker-<version>-<os>-<arch>-py<python>/
   release.json.sig    {"schema": 1, "algorithm": "ed25519", "key_id": "...", "signature": "<base64>"}
   RELEASE_NOTES.md
   wheels/*.whl        the Worker wheel and every dependency wheel
+  runtime/*.tar.gz    Windows Standalone bundles only: the pinned Python runtime
 ```
 
-Manifest fields: `product` (`nature-ai-worker`), `version`, `released_at`, `channel`, `target` (`os`, `arch`, `python`: one bundle per platform), `editions` (`standalone`, `platform_client`), `upgrade_from.min` (oldest version that may upgrade directly), `data_schema` per edition, `client_interface` (the Platform Client Interface version the release speaks), `notes`, `product_wheel`, `artifacts` (path, sha256, size), and `source` (repository, commit, tag).
+Manifest fields: `product` (`nature-ai-worker`), `version`, `released_at`, `channel`, `target` (`os`, `arch`, `python`: one bundle per platform), `editions` (`standalone`, `platform_client`), `upgrade_from.min` (oldest version that may upgrade directly), `data_schema` per edition, `client_interface` (the Platform Client Interface version the release speaks), `notes`, `product_wheel`, `artifacts` (path, sha256, size), `source` (repository, commit, tag), and, optionally, `runtime` (path, sha256, size, exact `python` version, upstream `origin`). A bundle with a runtime is for Standalone only. Its `python` must match `target.python`, and it is built with `--target windows-x86_64-3.12 --wheel-hashes packaging/windows/wheels-win_amd64-cp312.sha256 --runtime ... --runtime-pin packaging/windows/runtime.json` (see [WINDOWS_STANDALONE_INSTALLER.md](WINDOWS_STANDALONE_INSTALLER.md)).
 
 `key_id` is the first 16 hex digits of the SHA-256 of the raw 32-byte public key.
 

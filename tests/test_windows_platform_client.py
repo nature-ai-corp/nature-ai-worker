@@ -811,13 +811,15 @@ def test_windows_platform_client_launchers_and_service_bootstrap(tmp_path, monke
     assert result.returncode != 0 and "Invalid active version" in result.stderr
 
 
-def test_standalone_launchers_are_unchanged_on_windows(tmp_path, monkeypatch):
+def test_standalone_launchers_on_windows_have_no_platform_client_parts(tmp_path, monkeypatch):
     from nature_worker.upgrade.layout import Installation, Layout
     layout = Layout(tmp_path / "SA")
     layout.prefix.mkdir()
     monkeypatch.setattr(sys, "platform", "win32")
     inst = Installation("standalone", tmp_path / "data", tmp_path / "ws")
-    assert {p.name for p in layout.write_launchers(inst)} == {"nature-worker.cmd", "nature-worker-upgrade.cmd"}
+    # The desktop launcher is the Windows installer's Start-menu entry; no service, no setup command.
+    assert {p.name for p in layout.write_launchers(inst)} == {"nature-worker.cmd", "nature-worker-upgrade.cmd",
+                                                             "nature-worker-desktop.cmd"}
 
 
 class Recorder:

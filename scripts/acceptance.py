@@ -27,6 +27,11 @@ check runs first; if the service, model or key is unavailable the run is
 reported as NOT EXECUTED (exit code 2) instead of failing every check.
 Results are written to --out (default: acceptance-<provider>.md), which never
 contains the key. Exit codes: 0 all passed, 1 a check failed, 2 not executed.
+
+Progress: each scenario prints a flushed "[START] <letter> <time>" line, then its
+[PASS], [FAIL] or [ERROR] lines; the report is rewritten after each scenario. The
+Worker's own output is written as it happens to <report name>-worker.log next to
+the report (kept; a key that reached it is removed and reported).
 """
 
 from __future__ import annotations
@@ -61,6 +66,12 @@ C_REPORT = ("# Regional sales\n\n| Region | Revenue |\n|---|---|\n| North | 170 
 L_SECTIONS = ("Welcome", "Products", "Pricing", "Regions", "Customers", "Sales process", "Objections", "Tools",
               "Reporting", "Glossary")
 SCENARIOS = ("D", "E", "F", "G", "H", "R", "V", "W", "U", "Q", "L", "M", "S", "X", "C", "P")
+# Requests the Worker answers at once (health, settings, reads, polls) are bounded tightly; only a
+# request that runs the model (a message, an approval answer, the connection test) gets a whole run.
+HEALTH_TIMEOUT = 5
+REQUEST_TIMEOUT = 60
+RUN_TIMEOUT = 3600  # a whole agent run of a slow local model
+STARTUP_SECONDS = 60
 
 
 class Run:
@@ -87,7 +98,11 @@ class Run:
         self.proc = None
         self.conv_d = None
         self.results: list[tuple[str, str, str]] = []  # (id, status, detail)
+        self.transcripts: dict[str, str] = {}
         self.log = ""
+        report = self.report_path()
+        self.worker_log = report.with_name(report.stem + "-worker.log")
+        self.worker_out = None
 
     # -- server lifecycle ----------------------------------------------------------
     def start(self):
@@ -95,26 +110,55 @@ class Run:
         env = {k: v for k, v in os.environ.items() if not k.endswith("_API_KEY")}
         env.update(NATURE_WORKER_DATA_DIR=str(self.tmp / "data"), NATURE_WORKER_WORKSPACE=str(self.ws),
                    NATURE_WORKER_PORT=str(self.port), PYTHONUNBUFFERED="1")
-        self.proc = subprocess.Popen([sys.executable, "-m", "nature_worker"], env=env,
-                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        for _ in range(150):
+        # The Worker's output goes to a file as it is written, never to an unread pipe: once a pipe is
+        # full (4 KiB on Windows) the Worker's next log line blocks, and since uvicorn writes its access
+        # log from the event loop, every request with it. The file stays as evidence (appended per start).
+        self.worker_out = open(self.worker_log, "ab")
+        self.worker_out.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} start on port {self.port} ---\n".encode())
+        self.worker_out.flush()
+        self.proc = subprocess.Popen([sys.executable, "-m", "nature_worker"], env=env, stdin=subprocess.DEVNULL,
+                                     stdout=self.worker_out, stderr=subprocess.STDOUT)
+        deadline = time.monotonic() + STARTUP_SECONDS
+        while time.monotonic() < deadline:
+            if self.proc.poll() is not None:
+                raise RuntimeError(f"the Worker exited during startup (exit {self.proc.returncode}); see {self.worker_log}")
             try:
-                if httpx.get(self.base + "/api/health", timeout=1).status_code == 200:
+                if httpx.get(self.base + "/api/health", timeout=HEALTH_TIMEOUT).status_code == 200:
                     return
             except httpx.HTTPError:
                 time.sleep(0.1)
-        raise SystemExit("Server did not start")
+        raise RuntimeError(f"the Worker did not answer /api/health within {STARTUP_SECONDS} s; see {self.worker_log}")
 
     def stop(self):
         if self.proc:
-            self.proc.send_signal(signal.SIGTERM)
-            out, _ = self.proc.communicate(timeout=20)
-            self.log += out
+            if self.proc.poll() is None:
+                if sys.platform == "win32":
+                    # This run's own Worker and its children only, by the PID of the process it started
+                    # and still holds (a venv python.exe is a launcher that starts the real one).
+                    subprocess.run(["taskkill", "/T", "/F", "/PID", str(self.proc.pid)], capture_output=True)
+                else:
+                    self.proc.send_signal(signal.SIGTERM)
+            try:
+                self.proc.wait(20)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait(10)
             self.proc = None
+        if self.worker_out:
+            self.worker_out.close()
+            self.worker_out = None
+            self.log = self.worker_log.read_text(encoding="utf-8", errors="replace")
+
+    def healthy(self) -> bool:
+        try:
+            return (self.proc is not None and self.proc.poll() is None
+                    and httpx.get(self.base + "/api/health", timeout=HEALTH_TIMEOUT).status_code == 200)
+        except httpx.HTTPError:
+            return False
 
     # -- helpers ------------------------------------------------------------------
-    def api(self, method, path, **kw):
-        r = httpx.request(method, self.base + path, timeout=3600, **kw)  # a whole run of a slow local model
+    def api(self, method, path, timeout=REQUEST_TIMEOUT, **kw):
+        r = httpx.request(method, self.base + path, timeout=timeout, **kw)
         r.raise_for_status()
         return r.json()
 
@@ -126,7 +170,7 @@ class Run:
     def task(self, text, conv=None):
         conv = conv or self.api("POST", "/api/conversations")["id"]
         started = time.monotonic()
-        status = self.api("POST", f"/api/conversations/{conv}/messages", json={"text": text})["status"]
+        status = self.api("POST", f"/api/conversations/{conv}/messages", json={"text": text}, timeout=RUN_TIMEOUT)["status"]
         self.last_seconds = time.monotonic() - started
         return conv, status, self.api("GET", f"/api/conversations/{conv}")
 
@@ -135,10 +179,30 @@ class Run:
         return [tc["name"] for m in conv["messages"][since:] if m["role"] == "assistant"
                 for tc in (m.get("tool_calls") or [])]
 
-    def record(self, test_id, ok, detail):
-        status = "PASS" if ok else "FAIL"
+    def record(self, test_id, ok, detail, status=None):
+        status = status or ("PASS" if ok else "FAIL")
         self.results.append((test_id, status, detail))
         print(f"[{status}] {test_id}: {detail}", flush=True)
+
+    def scenario(self, name, fn) -> bool:
+        """Run one scenario between a flushed [START] line and its result lines. An exception is
+        recorded as [ERROR] for this scenario; the run goes on only while the Worker still answers.
+        The report is rewritten after each scenario, so a run that hangs later keeps the evidence."""
+        print(f"[START] {name} {time.strftime('%H:%M:%S')}", flush=True)
+        started = time.monotonic()
+        try:
+            fn()
+            return True
+        except Exception as exc:  # noqa: BLE001 - recorded with the scenario it happened in
+            self.record(name, False, f"{type(exc).__name__}: {exc} after {time.monotonic() - started:.0f} s "
+                        f"(Worker log: {self.worker_log})", status="ERROR")
+            if self.healthy():
+                return True
+            self.record("worker", False, f"the Worker did not answer /api/health within {HEALTH_TIMEOUT} s after "
+                        f"scenario {name}; the remaining scenarios were not run", status="ERROR")
+            return False
+        finally:
+            self.write_report()
 
     @staticmethod
     def transcript(conv) -> str:
@@ -205,58 +269,40 @@ class Run:
     def run(self):
         key = self.load_key()
         self.preflight(key)
-        self.start()
-        transcripts = {}
+        transcripts = self.transcripts
         only = self.args.only
         try:
+            self.start()
             view = self.configure(key=key)
             self.record("setup", view["configured"], f"configured={view['configured']} provider={view['provider']} model={view['model']}")
 
             if only is None:
                 t = self.api("POST", "/api/settings/test", json={"provider": self.args.provider, "model": self.args.model,
-                                                                 "endpoint": self.args.endpoint})
+                                                                 "endpoint": self.args.endpoint}, timeout=RUN_TIMEOUT)
                 self.record("connection-test", t["ok"] and t["tools"], t["message"])
 
-            if only is None or "D" in only:
-                self.scenario_d(transcripts)
-            if only is None or "E" in only:
-                self.scenario_e(transcripts)
-            if only is None or "F" in only:
-                self.scenario_f(transcripts)
-            if only is None or "G" in only:
-                self.scenario_g(transcripts, key)
-            if only is None or "H" in only:
-                self.scenario_h()
-            if only is None or "R" in only or "V" in only:
-                self.scenario_r(transcripts)
-            if only is None or "V" in only:
-                self.scenario_v(transcripts)
-            if only is None or "W" in only:
-                self.scenario_w(transcripts)
-            if only is None or "U" in only:
-                self.scenario_u(transcripts)
-            if only is None or "Q" in only:
-                self.scenario_q(transcripts)
-            if only is None or "X" in only:
-                self.scenario_x(transcripts)
-            if only is None or "S" in only:
-                self.scenario_s(transcripts)
-            if only is None or "C" in only:
-                self.scenario_c(transcripts)
-            if only is None or "P" in only:
-                self.scenario_p(transcripts)
-            if only is None or "L" in only:
-                self.scenario_l(transcripts, key)
-            if only is None or "M" in only:
-                self.scenario_l(transcripts, key, window=16384, name="handbook-16k.md", label="M-long-document-16k",
-                                must_finish=True)
+            # (letters that select it, name, scenario), in this order whatever the order of --only.
+            plan = [("D", "D", lambda: self.scenario_d(transcripts)), ("E", "E", lambda: self.scenario_e(transcripts)),
+                    ("F", "F", lambda: self.scenario_f(transcripts)), ("G", "G", lambda: self.scenario_g(transcripts, key)),
+                    ("H", "H", self.scenario_h), ("RV", "R", lambda: self.scenario_r(transcripts)),
+                    ("V", "V", lambda: self.scenario_v(transcripts)), ("W", "W", lambda: self.scenario_w(transcripts)),
+                    ("U", "U", lambda: self.scenario_u(transcripts)), ("Q", "Q", lambda: self.scenario_q(transcripts)),
+                    ("X", "X", lambda: self.scenario_x(transcripts)), ("S", "S", lambda: self.scenario_s(transcripts)),
+                    ("C", "C", lambda: self.scenario_c(transcripts)), ("P", "P", lambda: self.scenario_p(transcripts)),
+                    ("L", "L", lambda: self.scenario_l(transcripts, key)),
+                    ("M", "M", lambda: self.scenario_l(transcripts, key, window=16384, name="handbook-16k.md",
+                                                       label="M-long-document-16k", must_finish=True))]
+            for select, name, fn in plan:
+                if (only is None or set(select) & set(only)) and not self.scenario(name, fn):
+                    return transcripts
             changed = sorted(n for n, data in self.user_files.items()
                              if not (self.ws / n).exists() or (self.ws / n).read_bytes() != data)
             self.record("user-files-unchanged", not changed, f"pre-existing files changed or removed: {changed or 'none'}")
         finally:
             self.stop()
             if key and key in self.log:
-                self.record("secret-in-log", False, "API key appeared in server log!")
+                self.worker_log.write_text(self.log.replace(key, "[REDACTED BY acceptance.py]"), encoding="utf-8")
+                self.record("secret-in-log", False, "API key appeared in server log! (removed from the log file)")
         return transcripts
 
     def scenario_d(self, transcripts):
@@ -349,7 +395,7 @@ class Run:
         task = ("Write five separate files part1.md ... part5.md in the workspace, one per step, each with "
                 "a 300-word essay about a different region's sales strategy. Write them one at a time.")
         thread = threading.Thread(target=lambda: out.setdefault("status", self.api(
-            "POST", f"/api/conversations/{conv}/messages", json={"text": task})["status"]))
+            "POST", f"/api/conversations/{conv}/messages", json={"text": task}, timeout=RUN_TIMEOUT)["status"]), daemon=True)
         thread.start()
         stop_sent = None
         deadline = time.monotonic() + 1800
@@ -475,7 +521,7 @@ class Run:
         conv_id, status, conv = self.task("Add the line 'Reviewed by the agent' at the end of plan.md.")
         pending = [a for a in conv["approvals"] if a["status"] == "pending"]
         for a in pending:
-            self.api("POST", f"/api/approvals/{a['id']}", json={"approve": False})
+            self.api("POST", f"/api/approvals/{a['id']}", json={"approve": False}, timeout=RUN_TIMEOUT)
         after = self.api("GET", f"/api/conversations/{conv_id}")
         unchanged = (self.ws / "plan.md").read_bytes() == self.user_files["plan.md"]
         tried = [n for n in self.calls(conv) if n in ("write_file", "append_file", "replace_text")]
@@ -520,7 +566,7 @@ class Run:
                                           "Change nothing else.")
         pending = [a for a in conv["approvals"] if a["status"] == "pending"]
         for a in pending:
-            self.api("POST", f"/api/approvals/{a['id']}", json={"approve": False})
+            self.api("POST", f"/api/approvals/{a['id']}", json={"approve": False}, timeout=RUN_TIMEOUT)
         after = self.api("GET", f"/api/conversations/{conv_id}")
         unchanged = self.snapshot() == before
         tried = [n for n in self.calls(conv) if n in ("replace_text", "write_file", "append_file")]
@@ -559,7 +605,7 @@ class Run:
         ok = status == "needs_approval" and len(approvals) == 1 and approvals[0]["tool_name"] == "delete_file" and untouched
         after = None
         if approvals:
-            after = self.api("POST", f"/api/approvals/{approvals[0]['id']}", json={"approve": False})["status"]
+            after = self.api("POST", f"/api/approvals/{approvals[0]['id']}", json={"approve": False}, timeout=RUN_TIMEOUT)["status"]
             conv = self.api("GET", f"/api/conversations/{conv['id']}")
             untouched = notes.exists() and notes.read_text() == NOTES
             denied = any(m["role"] == "tool" and (m.get("meta") or {}).get("denied") for m in conv["messages"])
@@ -601,16 +647,22 @@ class Run:
         ok = any(c["id"] == conv_id for c in convs) and len(self.api("GET", f"/api/conversations/{conv_id}")["messages"]) >= 2
         self.record("H-persistence", ok, f"{len(convs)} conversations present after restart")
 
-    def write_report(self, transcripts):
+    def report_path(self) -> Path:
         suffix = "-" + "".join(self.args.only) if self.args.only else ""  # a focused run keeps the full report
-        out = Path(self.args.out or f"acceptance-{self.args.provider}{suffix}.md")
+        return Path(self.args.out or f"acceptance-{self.args.provider}{suffix}.md")
+
+    def write_report(self, transcripts=None, announce=False):
+        transcripts = self.transcripts if transcripts is None else transcripts
+        out = self.report_path()
         lines = [f"# Acceptance run: {self.args.provider} / {self.args.model}", "",
                  f"Date: {time.strftime('%Y-%m-%d %H:%M:%S %Z')}", "", "| Check | Result | Detail |", "|---|---|---|"]
         lines += [f"| {i} | {s} | {d.replace('|', '/')} |" for i, s, d in self.results]
+        lines += ["", f"Worker log: {self.worker_log}"]
         for name, text in transcripts.items():
             lines += ["", f"## {name}", "", "```", text, "```"]
-        out.write_text("\n".join(lines) + "\n")
-        print(f"\nReport written to {out}")
+        out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        if announce:
+            print(f"\nReport written to {out}")
 
 
 def not_executed(reason: str):
@@ -636,8 +688,11 @@ def main():
         p.error(f"--only takes scenario letters from {','.join(SCENARIOS)}")
     run = Run(args)
     try:
-        transcripts = run.run()
-        run.write_report(transcripts)
+        try:
+            run.run()
+        except Exception as exc:  # noqa: BLE001 - outside any scenario (setup); still reported
+            run.record("harness", False, f"{type(exc).__name__}: {exc}", status="ERROR")
+        run.write_report(announce=True)
     finally:
         if not args.keep:
             shutil.rmtree(run.tmp, ignore_errors=True)

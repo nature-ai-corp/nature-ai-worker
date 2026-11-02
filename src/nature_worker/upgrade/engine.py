@@ -114,7 +114,7 @@ class UpgradeEngine:
         edition = self.inst.edition
         checks = [Check("authentic", True, f"signature verified with key {release.signer.key_id} "
                         f"({'official NATURE AI release key' if release.official else 'locally trusted key, NOT an official release'})"),
-                  Check("integrity", True, f"{len(m.artifacts) + 1} files match their SHA-256")]
+                  Check("integrity", True, f"{len(m.artifacts) + 1 + bool(m.runtime)} files match their SHA-256")]
         checks.append(Check("newer", m.version > installed,
                             f"{m.version} is newer than {current}" if m.version > installed
                             else f"{m.version} is not newer than the installed {current}"))

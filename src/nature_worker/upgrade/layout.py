@@ -33,6 +33,9 @@ LOCAL_KEYS = "trusted-keys.json"
 INCOMPLETE = ".incomplete"
 INSTALLED = "INSTALLED.json"
 PREFIX_ENV = "NATURE_WORKER_INSTALL_PREFIX"
+# AppId of the Windows Standalone installer (packaging/windows/NatureAIWorker.iss).
+WINDOWS_APP_ID = "{6F3C2B1E-8D4A-4E7B-9C52-1A0E7D3F5B94}"
+WINDOWS_UNINSTALL_KEY = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{WINDOWS_APP_ID}_is1"
 
 
 class LayoutError(RuntimeError):
@@ -63,6 +66,28 @@ class Installation:
                    Path(record["workspace_dir"]) if record.get("workspace_dir") else None,
                    record.get("account"), record.get("service"), record.get("port"),
                    record.get("release_source"))
+
+
+def sync_windows_entry(prefix: Path, version: str) -> None:
+    """Keep Apps & Features showing the active version. Every switch (install, upgrade, automatic or
+    user rollback, recover) passes through ``set_current``; when the Windows installer registered
+    this very installation (its per-user entry's InstallLocation is ``prefix``), the entry's version
+    is set to ``version``. Display metadata only: a failure here never fails the switch."""
+    if sys.platform != "win32":
+        return
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, WINDOWS_UNINSTALL_KEY, 0,
+                            winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as key:
+            location = str(winreg.QueryValueEx(key, "InstallLocation")[0])
+            if os.path.normcase(os.path.abspath(location)) != os.path.normcase(os.path.abspath(prefix)):
+                return
+            winreg.SetValueEx(key, "DisplayVersion", 0, winreg.REG_SZ, version)
+            major, minor = Version.parse(version).release[:2]
+            winreg.SetValueEx(key, "VersionMajor", 0, winreg.REG_DWORD, major)
+            winreg.SetValueEx(key, "VersionMinor", 0, winreg.REG_DWORD, minor)
+    except OSError:
+        return
 
 
 def write_json_atomic(path: Path, record: dict, mode: int = 0o644) -> None:
@@ -171,6 +196,7 @@ class Layout:
             os.fsync(stream.fileno())
         replace_file(tmp, self.prefix / CURRENT)
         _fsync_dir(self.prefix)
+        sync_windows_entry(self.prefix, version)
 
     # -- journal and history ------------------------------------------------------
 
@@ -243,6 +269,8 @@ class Layout:
         windows_service = sys.platform == "win32" and inst.edition == "platform_client"
         if windows_service:
             commands.append(("nature-worker-platform-client-setup", "nature_worker.platform_client.windows_setup"))
+        if sys.platform == "win32" and inst.edition == "standalone":
+            commands.append(("nature-worker-desktop", "nature_worker.desktop"))   # the Start-menu entry
         written = []
         for name, mod in commands:
             if sys.platform == "win32":

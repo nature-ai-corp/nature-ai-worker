@@ -16,6 +16,10 @@ nature-worker-upgrade recover [--confirm]                   finish or undo an in
 nature-worker-upgrade rollback [--confirm]                  go back to the version before the last upgrade
 nature-worker-upgrade history [--json]                      every upgrade outcome recorded for this installation
 nature-worker-upgrade install --bundle DIR ...              create a managed Standalone installation
+nature-worker-upgrade uninstall-check                       Standalone: may the program be removed now? (used by
+                                                             the Windows uninstaller; data is never touched)
+nature-worker-upgrade remove-data [--include-workspace]     Standalone: delete the data root (and the workspace)
+           [--confirm-path DIR]                             after the exact folder is typed back
 ```
 
 Exit codes: `0` done, `1` failed (rolled back, or repair needed), `2` not eligible / not authorized / nothing changed, `3` usage or installation error.
@@ -43,6 +47,8 @@ Each installation has this layout:
 <prefix>/upgrade/               lock, journal (state.json), history.jsonl, logs/
 <prefix>/trusted-keys.json      optional locally trusted keys (never official)
 ```
+
+**Windows installer.** The per-user Windows installer ([WINDOWS_STANDALONE_INSTALLER.md](WINDOWS_STANDALONE_INSTALLER.md)) creates and upgrades exactly this layout through `install` and `upgrade`. Its release bundles also carry a pinned Python runtime (manifest field `runtime`, hashed and signed like every wheel). Each version unpacks that runtime into `versions/<version>/runtime/` and builds its venv from it, so the installation needs no Python of its own and a rollback returns to the version's own runtime. Upgraders that predate the field ignore it and use their own interpreter.
 
 **Existing installations.** A source checkout started with `pip install .` and `nature-worker` (the README's quick start) is *not* managed: upgrade it with `git pull` and `pip install .` as before. Its data migrations now run automatically when the Worker starts, after a backup to `<data>/backups/`. To switch to managed upgrades, run `nature-worker-upgrade install --bundle … --data-dir <your data> --workspace <your workspace>`. Your data stays where it is.
 

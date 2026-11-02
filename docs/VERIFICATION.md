@@ -603,3 +603,116 @@ Full suite: 588 passed, 39 skipped. Repo checks: 0 findings.
 - An in-workspace symlink is resolved to its target, as for `write_file`. It is treated as the user's file and needs approval.
 - On Windows, O_NOFOLLOW is not available; the fingerprint check before the rename still detects a swapped file.
 - Section length still overshoots the instructions (up to 747 words where about 300 were asked), as recorded above.
+
+## Windows Standalone installer: native acceptance (2026-11-02)
+
+Run on Windows 11 build 26200, as a normal user without administrator rights.
+Setup was built with Inno Setup 6.7.3, and the driver ran on Python 3.12.15, the pinned runtime the
+kit carries. The real model was Ollama `qwen3.8:27b` on the LAN test host.
+
+**Source.** Kit `nwsa-win3`, built from worktree tree `658d289908003a349d8c621510b02e85c49cdbbb`
+(on `d86eb10`, without `docs/decisions/0002-*`). The commit that adds the installer has exactly
+this tree. The bundles are signed by the development key `b81b30f14fefa2dd`, which is locally
+trusted and NOT official. Installers (SHA-256):
+
+- `NatureAIWorker-Setup-0.1.0.exe` `efa4d15e7b9e760215aa79a13eb61c1893439be5c4cbeffffea29f9a5a808b96`
+- `NatureAIWorker-Setup-0.1.1-acceptance.exe` `1b5faf2832679997d34cc2a7f5b0f99922b609de15078d764ff651092b676105`
+- `NatureAIWorker-Setup-0.1.2-broken.exe` `7cf94028e10ea52abc700414976ddbb72d28fdbcd8eb224a39faa939a4a16eca`
+
+### Automated run (`2-acceptance.cmd`, 15:05–15:11): 14 PASS, 0 FAIL, 0 ERROR
+
+A first attempt at 15:03 stopped in preflight because an empty test folder was left from the
+previous kit. It was removed, and the run was started again.
+
+- **Preflight.** No existing installation; the installers match their SHA256SUMS.
+- **Platform Client separation.** A data folder marked as Platform Client data is refused (exit 7),
+  and so is a folder inside the Platform Client's folders. Nothing is installed or registered.
+- **Fresh install of 0.1.0.** Silent, per user. The venv is built on the version's own runtime.
+  The Start menu gets three entries, and Apps & Features shows 0.1.0.
+- **Launch and first-run configuration.** `configured=False`. The Ollama connection test called
+  a tool.
+- **Real model on the installed Worker.** Chat; `report.md` written; `replace_text` changed only
+  the total; an edit of the user's `plan.md` asked for approval, was denied, and the file stayed
+  unchanged.
+- **`acceptance.py` C, P, F, U, S, E on the installed code (76 s).** All PASS, as well as
+  `user-files-unchanged`. In E the model declined without calling a tool, so the secret did not
+  leak but the path guard was not exercised in this run; in the nwsa-win2 run it blocked
+  `../outside_secret.txt`.
+- **Silent upgrade without `/CONFIRMUPGRADE`.** Refused (exit 7).
+- **Upgrade to 0.1.1+acceptance while the Worker runs.** The Worker drained and stopped. The data
+  went to schema 2, with conversations and settings kept and a backup made. Apps & Features shows
+  0.1.1+acceptance.
+- **Failed upgrade to 0.1.2+broken.** It failed during verifying: the new version exited at
+  startup (exit 1). 0.1.1+acceptance became active again, the data was restored, and history
+  records `rolled_back`.
+- **Same-version reinstall and downgrade.** Both refused (exit 7).
+- **User rollback to 0.1.0.** The data was restored to schema 1, with later work moved aside, not
+  deleted. Apps & Features shows 0.1.0, and 0.1.0 starts and answers.
+- **Uninstall while the Worker runs.** Refused (exit 1); nothing removed.
+- **Uninstall.** The program, the Start menu entries and the Apps & Features entry are removed.
+  `worker.db` (unchanged) and the workspace are kept.
+- **Reinstall.** It adopts the kept data after an `install-` backup: settings and 3 conversations.
+
+### Finish (`4-finish.cmd`, 16:20): 2 PASS, 0 FAIL; DeepSeek NOT EXECUTED
+
+- **DeepSeek.** NOT EXECUTED: no DeepSeek key was stored in the app (see Open items).
+- **`remove-data`.** A wrong confirmation is refused; then the data and workspace are deleted.
+- **Final uninstall and residue check.** Apps & Features, the Start menu, `%LOCALAPPDATA%` and the
+  Platform Client folders are as before the run. One item was left, an **empty** folder
+  `%LOCALAPPDATA%\NatureAIWorkerAcceptance\app` (see Open items).
+
+### Manual UI checklist (user's record, `results\ui-checklist-results.txt`)
+
+- **PASS:**
+  - 4 chat;
+  - 6 `replace_text` without approval;
+  - 7 approval: approve allowed the edit and deny prevented the next one;
+  - 8 Stop, with `section01.md` kept;
+  - 9 restart and persistence;
+  - 10 Licenses folder with the four files;
+  - 11 Installed Apps shows 0.1.0.
+- **Partial:**
+  - 1: the UI opened, but launch from the Start menu and the browser opening by itself were not
+    confirmed;
+  - 3: Ollama verified, DeepSeek failed;
+  - 5: files listed and the CSV summarized, but the exact totals were not confirmed;
+  - 7: the file content after the denial was not checked directly (the automated F, U and P checks
+    do this byte for byte).
+- **Not tested:** 2, a second Start-menu launch reusing the same Worker.
+- **OpenAI `gpt-4.1-mini`, manual, in the Windows UI:** connected, called `calculate`,
+  `write_file` and `read_file`, and created `openai-test.md` containing 260. This is the user's
+  manual record; `acceptance.py` was not run against OpenAI.
+
+### Defects found by the earlier native runs (fixed in the tree above)
+
+- **Kit nwsa-win (tree `bc31c06`): the run hung in the C, P, F, U, S, E stage.** `acceptance.py`
+  read the Worker's output pipe only at the end. Once the Windows pipe (4 KiB) was full, the
+  Worker's next access-log line blocked its event loop, and `/api/health` timed out.
+  - Fix: the output now goes to a log file as it is written; each scenario is reported with
+    `[START]`/`[ERROR]`; timeouts are bounded (5 s health, 60 s requests, 3600 s model runs); the
+    outer runner shows progress and names the scenario that failed; cleanup ends only the run's
+    own process tree.
+  - Regression test: `tests/test_acceptance_harness.py`. The old harness stalled at request 682
+    with Linux's 64 KiB pipe.
+- **Kit nwsa-win2 (tree `30b2dfb`): 13 PASS, 1 FAIL.** The broken test release lacked B's
+  migration, so B → C was correctly refused as ineligible ("release supports data schema 1, but
+  the data is at 2") instead of failing at startup.
+  - Fix: the C fixture now carries the migration (`KIT_VARIANTS`). The eligibility rules are
+    unchanged.
+  - Regression test: `test_the_kit_upgrade_chain_is_eligible_so_the_broken_release_tests_the_rollback`.
+
+Linux suite on this tree: 634 passed, 39 skipped. Repo checks: 0 findings.
+
+### Open items
+
+- **DeepSeek:** the connection test in the Windows UI failed with HTTP 401 (authentication),
+  using the user's key. Unresolved; the Worker's DeepSeek path has not passed natively, so neither
+  a key or account problem nor a Worker defect is ruled out.
+- **Empty folder after uninstall.** Inno Setup removed every file ("Removed all? Yes"), but
+  deleting the `app` folder itself failed twice with error 32 (sharing violation: a process had
+  the folder open). That process is not recorded; the cause is unconfirmed. Whether a normal
+  installation leaves an empty `%LOCALAPPDATA%\Programs\NatureAIWorker` the same way is not
+  verified.
+- **UI checklist:** items 1, 2, 3 (DeepSeek) and the figures in 5, as listed above.
+- **Release blockers, unchanged:** no official release key; no Authenticode signature; the legal
+  review items in [WINDOWS_STANDALONE_INSTALLER.md](WINDOWS_STANDALONE_INSTALLER.md).

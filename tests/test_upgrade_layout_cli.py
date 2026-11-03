@@ -62,6 +62,7 @@ def test_windows_launcher_text(tmp_path, monkeypatch):
     assert "findstr" in text
     desktop = layout._write_cmd("nature-worker-desktop", "nature_worker.desktop", {}).read_text()
     assert "title Nature AI Worker (Standalone)" in desktop
+    assert 'NatureAIWorker.exe" -I -m nature_worker.desktop' in desktop
     assert "title Nature AI Worker (Standalone)" not in text
     with pytest.raises(LayoutError, match="Unsupported character"):
         layout._write_cmd("x", "m", {"A": "C:\\a&b"})

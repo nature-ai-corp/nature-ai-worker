@@ -865,7 +865,7 @@ async function finishQuickAttach(file) {
       const input = $(target === "new" ? "#new-input" : "#input");
       const reference = "Use the attached workspace file: " + JSON.stringify(file.name);
       if (!input.value.includes(reference)) {
-        input.value += (input.value.trim() ? "\\n" : "") + reference;
+        input.value += (input.value.trim() ? "\n" : "") + reference;
         if (target === "new") saveNewDraft();
       }
       status.textContent = file.name + " attached. Its name was added to your instructions.";

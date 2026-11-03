@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-if (-not $StageDir) { $StageDir = Join-Path $repo 'dist\windows-rc-stage' }
+if (-not $StageDir) { $StageDir = Join-Path $repo 'dist\windows-rc-stage-0.1.1' }
 $expectedKeyId = '64ecfc2da2ed12e9'
 $python = Join-Path $repo '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
@@ -66,7 +66,7 @@ if ($info.commit -ne $commit -or $info.trust_key) {
     throw 'Unexpected build provenance or local trust-key override; stop and inspect this private RC.'
 }
 Write-Host "Staged version: $($info.version), commit: $($info.commit)"
-Write-Host 'Status: PRIVATE RC ONLY. Existing v0.1.0 tag does not match this commit.'
+Write-Host 'Status: PRIVATE RC ONLY. This build is not an official tagged GitHub Release.'
 
 if (-not $ISCC) {
     $candidates = @(
@@ -97,4 +97,4 @@ Get-ChildItem -LiteralPath (Join-Path $StageDir 'output') -Filter '*.exe' -File 
         Write-Host "Installer: $($_.FullName)"
         Write-Host "SHA256: $digest"
     }
-Write-Host 'Do not publish this installer as an official v0.1.0 release.'
+Write-Host 'Do not publish this installer as an official release without version/tag, acceptance and legal checks.'

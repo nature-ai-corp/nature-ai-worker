@@ -1113,216 +1113,23 @@ def test_an_unrelated_listener_on_the_port_is_not_a_running_platform_client(win,
     assert report["checks"]["running_processes"] is True
 
 
-def test_process_probe_filters_diagnostic_powershell_and_keeps_real_client(monkeypatch):
-    """The CIM query must not match its own PowerShell -Command text."""
+def test_process_probe_excludes_powershell_diagnostics(monkeypatch):
+    """Only Python hosts of the Platform Client count as running processes."""
     seen = {}
 
     def run(command, **kwargs):
         seen["script"] = command[-1]
-        return subprocess.CompletedProcess(command, 0,
-                                           "4242 python.exe -I platform-client-service.py\\n", "")
+        return subprocess.CompletedProcess(
+            command, 0, "4242 python.exe -I platform-client-service.py\n", ""
+        )
 
     system = windows_setup.WindowsSystem()
     monkeypatch.setattr(system, "run", run)
     assert system.platform_client_processes() == [
         "4242 python.exe -I platform-client-service.py"
     ]
-    assert "$_.Name -match '^(python|pythonw)(\\\\.exe)?
-    setup, fake, standalone = win
-    install(setup, standalone, tmp_path)
-    fake.platform_client_processes = lambda: ["4242 python.exe -I platform-client-service.py"]
-    report = setup.uninstall(delete_local_data=True)
-    assert report["checks"]["running_processes"] is False and report["processes"]
-
-
-# -- service identity before ACLs (native e2e: icacls exit 1332) -------------------------
-
-def test_the_service_is_registered_and_its_sid_verified_before_any_acl_names_it(win, tmp_path):
-    setup, fake, standalone = win
-    install(setup, standalone, tmp_path)
-    create = next(i for i, c in enumerate(fake.calls) if c[:2] == ["sc.exe", "create"])
-    sidtype = next(i for i, c in enumerate(fake.calls) if c[:2] == ["sc.exe", "sidtype"])
-    grant = next(i for i, c in enumerate(fake.calls) if c[0] == "set_protected_dacl" and f"{setup.sid}:0x1301bf" in c)
-    assert create < sidtype < grant
-
-
-def test_granting_a_service_sid_before_the_service_exists_fails_like_windows(win):
-    setup, fake, _ = win
-    with pytest.raises(SetupError):
-        setup.verify_service_identity()  # nothing may name the SID before the service is registered
-
-
-def test_a_sid_windows_maps_differently_is_never_granted(win, tmp_path):
-    setup, fake, standalone = win
-    fake.resolve_override = "S-1-5-80-1-2-3-4-5"
-    with pytest.raises(SetupError, match="not the expected"):
-        install(setup, standalone, tmp_path)
-    assert not any(c[0] == "set_protected_dacl" and c[1] == str(setup.data) for c in fake.calls)
-    assert fake.service is None  # the first installation removed the service it created
-
-
-def test_a_service_registered_under_another_account_is_refused(win, tmp_path, monkeypatch):
-    setup, fake, standalone = win
-    original = fake.run
-
-    def run(cmd, **kwargs):
-        result = original(cmd, **kwargs)
-        if fake.calls[-1][:2] == ["sc.exe", "create"]:
-            fake.registry[setup.service_key]["ObjectName"] = "LocalSystem"
-        return result
-    monkeypatch.setattr(fake, "run", run)
-    with pytest.raises(SetupError, match="LocalSystem"):
-        install(setup, standalone, tmp_path)
-
-
-def test_repair_restores_a_damaged_service_account_before_checking_it(win, tmp_path):
-    setup, fake, standalone = win
-    label = install(setup, standalone, tmp_path)
-    fake.registry[setup.service_key]["ObjectName"] = "LocalSystem"
-    fake.registry[setup.service_key]["ServiceSidType"] = 0
-    assert setup.repair() == label
-    assert fake.registry[setup.service_key]["ObjectName"] == setup.account
-    assert fake.registry[setup.service_key]["ServiceSidType"] == 1
-
-
-@windows_only
-def test_native_service_account_resolution():
-    from nature_worker.windows_security import WindowsSecurityError, lookup_account_sid
-    assert lookup_account_sid("NT SERVICE\\TrustedInstaller") == TRUSTED_INSTALLER == service_sid("TrustedInstaller")
-    with pytest.raises(WindowsSecurityError):  # an unregistered service has no account yet
-        lookup_account_sid("NT SERVICE\\NatureWorkerNoSuchService")
-
-
-@windows_only
-def test_native_least_privilege_acl_with_a_service_sid(tmp_path):
-    """The installer's icacls grants, applied for real to a registered service account."""
-    from nature_worker.config import current_user_sid
-    from nature_worker.windows_security import read_acl, system_tool
-    folder = tmp_path / "data"
-    folder.mkdir()
-    user = current_user_sid()
-    subprocess.run([system_tool("icacls.exe"), str(folder), "/inheritance:r", "/grant:r", f"*{user}:(OI)(CI)F",
-                    f"*{TRUSTED_INSTALLER}:(OI)(CI)M"], check=True, capture_output=True)
-    acl = read_acl(folder)
-    assert acl.protected and acl.grantees() == {user, TRUSTED_INSTALLER}
-    assert not acl.grantees() & {USERS, AUTH_USERS, EVERYONE}
-    unregistered = service_sid("NatureWorkerNoSuchService")
-    result = subprocess.run([system_tool("icacls.exe"), str(folder), "/grant", f"*{unregistered}:(OI)(CI)M"],
-                            capture_output=True, text=True)
-    assert result.returncode == 1332  # the native failure this ordering prevents
-
-
-# -- exact installed build (native e2e: "did not answer as 0.1.0+g81f1b9d82f62") ----------
-
-def test_install_requires_the_exact_build_not_the_base_version(win, tmp_path):
-    setup, fake, standalone = win
-    # What the 81f1b9d service answered: its base version, no build field.
-    fake.status_override = lambda st: {k: v for k, v in st.items() if k != "build"}
-    with pytest.raises(SetupError) as info:
-        install(setup, standalone, tmp_path)
-    message = str(info.value)
-    assert "reports version '0.2.0' and no build, not 0.2.0+gaaaaaaaaaaaa" in message
-    assert "last answer: HTTP 200" in message and '"version": "0.2.0"' in message and "service state: running" in message
-
-
-def test_a_different_build_is_never_accepted(win, tmp_path):
-    setup, fake, standalone = win
-    fake.status_override = lambda st: {**st, "build": "0.2.0+gbbbbbbbbbbbb"}
-    with pytest.raises(SetupError, match="runs build '0.2.0\\+gbbbbbbbbbbbb', not 0.2.0\\+gaaaaaaaaaaaa"):
-        install(setup, standalone, tmp_path)
-
-
-def test_no_answer_is_reported_with_the_connection_error(win, tmp_path):
-    setup, fake, standalone = win
-    fake.start_fails_for.add("0.2.0+gaaaaaaaaaaaa")
-    with pytest.raises(SetupError, match="last answer: ConnectionRefusedError"):
-        install(setup, standalone, tmp_path)
-
-
-def test_build_identity_rules():
-    from nature_worker.build_identity import build_mismatch
-    assert build_mismatch({"version": "0.1.0", "build": "0.1.0+gabc"}, "0.1.0+gabc") is None
-    assert build_mismatch({"version": "0.1.0", "build": "0.1.0+gabc"}, "0.1.0") is not None
-    assert build_mismatch({"version": "9.1.0", "build": None}, "9.1.0") is not None  # unmanaged: never a match
-    assert build_mismatch({"version": "9.1.0"}, "9.1.0") is None  # a signed release from before the field
-    assert build_mismatch({"version": "0.1.0"}, "0.1.0+gabc") is not None
-
-
-def test_the_running_build_is_the_versions_directory_the_code_was_loaded_from(tmp_path):
-    """Real interpreter, real versioned layout (native on Windows: Lib\\site-packages)."""
-    import shutil
-    import nature_worker
-    prefix = tmp_path / "PC"
-    site = prefix / "versions" / "0.1.0+g81f1b9d82f62" / "venv" / ("Lib" if os.name == "nt" else "lib") / "site-packages"
-    shutil.copytree(Path(nature_worker.__file__).parent, site / "nature_worker",
-                    ignore=shutil.ignore_patterns("__pycache__"))
-    (prefix / "installation.json").write_text("{}")
-    code = ("import site, sys; site.addsitedir(sys.argv[1]); import nature_worker.build_identity as b; "
-            "print(b.__file__.startswith(sys.argv[1]), b.running_build())")
-    # -S: like the service runtime, whose own site-packages is empty, only the layout's copy is importable.
-    out = subprocess.run([sys.executable, "-I", "-S", "-c", code, str(site)], capture_output=True, text=True, check=True).stdout
-    assert out.split() == ["True", "0.1.0+g81f1b9d82f62"]
-    (prefix / "installation.json").unlink()  # not a managed installation: no build claimed
-    out = subprocess.run([sys.executable, "-I", "-S", "-c", code, str(site)], capture_output=True, text=True, check=True).stdout
-    assert out.split() == ["True", "None"]
-
-
-def test_status_reports_the_installed_build(tmp_path, monkeypatch):
-    from fastapi.testclient import TestClient
-    from nature_worker.platform_client import server
-    monkeypatch.setattr(server, "running_build", lambda: "0.1.0+g81f1b9d82f62")
-    settings = server.ClientSettings(tmp_path / "pc", "https://platform.example", tmp_path / "sa")
-    with TestClient(server.create_app(settings, verify_startup=False)) as client:
-        status = client.get("/api/status").json()
-    assert status["build"] == "0.1.0+g81f1b9d82f62" and status["version"] == nature_worker_version()
-
-
-def nature_worker_version():
-    import nature_worker
-    return nature_worker.__version__
-
-
-def test_repair_removes_an_added_users_entry_and_revalidates(win, tmp_path):
-    """Native e2e (f119259): repair refused because icacls /grant:r kept the added Users entry."""
-    setup, fake, standalone = win
-    install(setup, standalone, tmp_path)
-    fake.acls[setup.data] = private_acl(setup.sid, Ace(USERS, READ, flags=3))
-    setup.repair()
-    acl = fake.read_acl(setup.data)
-    assert private_problems(acl, setup.sid) == [] and USERS not in acl.grantees()
-
-
-def test_reinstall_over_retained_data_with_a_damaged_acl_restores_it(win, tmp_path):
-    setup, fake, standalone = win
-    install(setup, standalone, tmp_path)
-    setup.uninstall(delete_local_data=False)
-    fake.acls[setup.data] = private_acl(setup.sid, Ace(USERS, READ, flags=3))
-    install(setup, standalone, tmp_path, archive=source_archive(tmp_path, "d" * 40))
-    assert USERS not in fake.read_acl(setup.data).grantees()
-
-
-def test_protected_dacl_sddl_is_exact():
-    from nature_worker.windows_security import WindowsSecurityError, protected_dacl_sddl
-    assert protected_dacl_sddl(ADMINISTRATORS, [(SYSTEM, 0x1F01FF), (SVC, 0x1301BF)]) == \
-        f"O:{ADMINISTRATORS}D:PAI(A;OICI;0x1f01ff;;;{SYSTEM})(A;OICI;0x1301bf;;;{SVC})"
-    with pytest.raises(WindowsSecurityError):
-        protected_dacl_sddl("S-1-5-32-544)(A;;FA;;;WD", [])
-
-
-@windows_only
-def test_native_dacl_replacement_removes_foreign_entries(tmp_path):
-    from nature_worker.config import current_user_sid
-    from nature_worker.windows_security import read_acl, set_protected_dacl, system_tool
-    folder = tmp_path / "data"
-    folder.mkdir()
-    subprocess.run([system_tool("icacls.exe"), str(folder), "/grant", f"*{USERS}:(OI)(CI)R"], check=True,
-                   capture_output=True)
-    user = current_user_sid()
-    set_protected_dacl(folder, user, [(user, 0x1F01FF), (TRUSTED_INSTALLER, 0x1301BF)])
-    acl = read_acl(folder)
-    assert acl.protected and acl.grantees() == {user, TRUSTED_INSTALLER}
-" in seen["script"]
-    assert "nature_worker\\\\.platform_client|platform-client-service\\\\.py" in seen["script"]
+    assert "$_.Name -match '^(python|pythonw)(\\.exe)?$'" in seen["script"]
+    assert "nature_worker\\.platform_client|platform-client-service\\.py" in seen["script"]
 
 
 def test_a_running_platform_client_process_is_residue(win, tmp_path):

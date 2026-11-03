@@ -173,7 +173,7 @@ source using the already-registered **official private signing key**. This is an
 `0.1.0`, but the pre-existing `v0.1.0` tag points to another commit. Signing
 the manifest does **not** fix that version/tag mismatch.
 
-Prerequisites: Windows, Git, Python with the repository's pinned dependencies,
+Prerequisites: Windows, Git, Python 3.13 with the repository's pinned dependencies,
 and a clean checkout of `release/v0.1.0-rc-windows-first`. Build or install
 Inno Setup 6 to produce an EXE; without ISCC, the helper only stages the
 installer files. Run from PowerShell on the **signing computer**, not in CI:
@@ -181,7 +181,9 @@ installer files. Run from PowerShell on the **signing computer**, not in CI:
 ```powershell
 git switch release/v0.1.0-rc-windows-first
 git pull --ff-only
-python -m pip install -r requirements.lock -r requirements-dev.lock
+py -3.13 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.lock -r requirements-dev.lock
+.\.venv\Scripts\python.exe -m pip install --no-deps .
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows_rc_stage.ps1
 ```
 

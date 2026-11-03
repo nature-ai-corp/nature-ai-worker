@@ -334,7 +334,8 @@ case "$VERSION" in ''|*[!A-Za-z0-9.+]*) echo "Invalid active version in $PREFIX/
             'echo(%VERSION%| findstr /r /x "[0-9][0-9.]*[+a-z0-9.]*" >nul || '
             '(echo Invalid active version in %PREFIX%\\current 1>&2 & exit /b 1)\r\n'
             f"{sets}"
-            f'"%PREFIX%\\versions\\%VERSION%\\venv\\Scripts\\python.exe" -I -m {module} %*\r\n'
+            f'"%PREFIX%\\versions\\%VERSION%\\venv\\Scripts\\' 
+            f'{"NatureAIWorker.exe" if name == "nature-worker-desktop" else "python.exe"}" -I -m {module} %*\r\n'
         )
         path = self.bin / f"{name}.cmd"
         path.write_text(body, encoding="utf-8", newline="")

@@ -172,6 +172,14 @@ class BaseToolkit:
                                      "import nature_worker; print(nature_worker.__version__)"]).stdout.strip()
         if installed != version:
             raise ToolkitError(f"The installed code reports version {installed!r}, not {version}.")
+        if sys.platform == "win32" and self.inst.edition == "standalone":
+            # Use the exact same verified venv Python as the desktop entry point,
+            # but with a recognizable executable name in Windows Task Manager's
+            # Details view. Create it before the version is marked complete.
+            named = self.layout.python(version).with_name("NatureAIWorker.exe")
+            shutil.copy2(python, named)
+            self.runner.run([str(named), "-I", "-c",
+                             "import nature_worker; print(nature_worker.__version__)"])
         shutil.copyfile(release.bundle / release.manifest.notes.path, target / "RELEASE_NOTES.md")
         (target / INSTALLED).write_text(json.dumps({
             "version": version, "manifest_sha256": release.manifest.digest,

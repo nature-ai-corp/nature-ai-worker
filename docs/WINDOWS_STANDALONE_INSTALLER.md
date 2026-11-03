@@ -37,6 +37,21 @@ on port 8080 or on a free port when 8080 is taken, and opens the browser. Closin
 stops the Worker. Provider selection and configuration happen on first use, in the app's
 Settings, exactly as before.
 
+In future versions built from this change, the desktop launcher uses
+`NatureAIWorker.exe`, a version-local copy of the verified Windows venv
+Python launcher. This is **not a separately signed application binary**.
+Use Windows Task Manager > **Details** to find `NatureAIWorker.exe`; the
+Processes view may still show Python because the copied executable retains
+Python's file-description metadata. The console title is also
+`Nature AI Worker (Standalone)`. Native Windows startup, shutdown,
+upgrade/rollback and uninstall require fresh testing on a new build.
+The existing installed 0.1.0 RC is not modified by repository commits.
+
+New Work and work conversations now have a `+` file picker. Successful
+uploads go to the existing Standalone workspace and their filename is
+added to the task instructions or follow-up message. No Platform Client
+storage or API is used.
+
 ## How it works
 
 The installer has no install logic of its own. Before anything is written, it:

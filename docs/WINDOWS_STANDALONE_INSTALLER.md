@@ -185,8 +185,9 @@ driver `scripts/windows_standalone_acceptance.py` and numbered steps.
 Use `scripts/windows_rc_stage.ps1` to stage the current Windows-first RC from committed
 source using the already-registered **official private signing key**. This is an
 **internal test build**, not a GitHub Release: the current source reports version
-`0.1.0`, but the pre-existing `v0.1.0` tag points to another commit. Signing
-the manifest does **not** fix that version/tag mismatch.
+`0.1.1`, and the existing `v0.1.0` tag belongs to an earlier commit. No
+official `v0.1.1` tag or GitHub Release has been created. Signing the manifest
+does **not** substitute for release provenance and publication checks.
 
 Prerequisites: Windows, Git, Python 3.13 with the repository's pinned dependencies,
 and a clean checkout of `release/v0.1.0-rc-windows-first`. Build or install
@@ -201,6 +202,8 @@ py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --no-deps .
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows_rc_stage.ps1
 ```
+
+The default private staging folder for this 0.1.1 candidate is `dist/windows-rc-stage-0.1.1`, intentionally separate from the already-built 0.1.0 Windows installer. On the Testing Computer, use the 0.1.1 installer to **upgrade** the previously installed 0.1.0 Standalone installation and verify that task history, model configuration, workspace and downloads remain intact. Do not uninstall 0.1.0 before upgrade testing.
 
 The helper verifies the private key's public ID is `64ecfc2da2ed12e9`,
 prompts without echoing the passphrase or putting it in shell history, stages

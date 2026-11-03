@@ -68,7 +68,9 @@
           <label for="new-input" class="field-label">What should the agent do?</label>
           <textarea id="new-input" rows="5" placeholder="For example: Read sales.csv and write report.md with revenue totals per region."></textarea>
           <p id="new-files-hint" class="muted small"></p>
+          <p id="new-attachment-status" class="muted small" role="status" aria-live="polite"></p>
           <div class="form-actions">
+            <button type="button" id="new-attach" class="attach-button" aria-label="Attach file to new work" title="Attach a file to your workspace">+</button>
             <button type="button" id="new-manage-files">Workspace files</button>
             <span class="spacer"></span>
             <button id="new-start" class="primary" type="submit">Start work</button>
@@ -116,15 +118,18 @@
           <div id="messages"></div>
           <form id="composer">
             <label for="input" class="visually-hidden">Message about this work</label>
+            <button type="button" id="work-attach" class="attach-button" aria-label="Attach file to this work" title="Attach a file to your workspace">+</button>
             <textarea id="input" rows="2" placeholder="Message about this work…" aria-describedby="composer-hint"></textarea>
             <button id="send" class="primary" type="submit">Send</button>
           </form>
           <p id="composer-hint" class="muted small">Enter to send, Shift+Enter for a new line.</p>
+          <p id="work-attachment-status" class="muted small" role="status" aria-live="polite"></p>
         </section>
         </div>
       </section>
     </main>
 
+    <input id="quick-upload" class="visually-hidden" type="file" tabindex="-1" aria-label="Choose a file to attach">
     <aside id="files-panel" aria-labelledby="files-heading" hidden>
       <header><h2 id="files-heading">Workspace files</h2><button id="close-files" class="icon" aria-label="Close">✕</button></header>
       <p id="workspace-path" class="muted small"></p>

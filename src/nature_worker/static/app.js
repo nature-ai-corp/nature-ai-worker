@@ -859,9 +859,19 @@ async function finishQuickAttach(file) {
   status.textContent = "Uploading " + file.name + "…";
   try {
     const ok = await uploadFile(file);
-    status.textContent = ok
-      ? file.name + " uploaded to your workspace. Mention the file in your instructions to use it."
-      : "Attachment not added.";
+    if (ok) {
+      // Files live in the existing Standalone workspace. Put their names in the
+      // assignment/message too, so the agent knows which file the user attached.
+      const input = $(target === "new" ? "#new-input" : "#input");
+      const reference = "Use the attached workspace file: " + JSON.stringify(file.name);
+      if (!input.value.includes(reference)) {
+        input.value += (input.value.trim() ? "\\n" : "") + reference;
+        if (target === "new") saveNewDraft();
+      }
+      status.textContent = file.name + " attached. Its name was added to your instructions.";
+    } else {
+      status.textContent = "Attachment not added.";
+    }
   } finally {
     button.disabled = false;
   }

@@ -37,7 +37,7 @@ wait_healthy() {
   fail "/api/health did not respond within 60 s"
 }
 
-cp -r "$ROOT"/{Dockerfile,compose.yaml,.dockerignore,requirements.lock,pyproject.toml,README.md,LICENSE,src} "$WORK"/
+cp -r "$ROOT"/{Dockerfile,compose.yaml,.dockerignore,requirements.lock,pyproject.toml,README.md,LICENSE,NOTICE,src} "$WORK"/
 mkdir "$WORK/data" "$WORK/workspace"
 echo "hello from the host" > "$WORK/workspace/hello.txt"
 docker compose version

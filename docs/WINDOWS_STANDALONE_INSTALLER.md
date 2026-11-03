@@ -165,6 +165,45 @@ Nothing is fetched at install time.
 version, a newer test version with one data migration, a test version that fails to start), the
 driver `scripts/windows_standalone_acceptance.py` and numbered steps.
 
+## Private release-candidate staging on the controlled Windows signing computer
+
+Use `scripts/windows_rc_stage.ps1` to stage the current Windows-first RC from committed
+source using the already-registered **official private signing key**. This is an
+**internal test build**, not a GitHub Release: the current source reports version
+`0.1.0`, but the pre-existing `v0.1.0` tag points to another commit. Signing
+the manifest does **not** fix that version/tag mismatch.
+
+Prerequisites: Windows, Git, Python with the repository's pinned dependencies,
+and a clean checkout of `release/v0.1.0-rc-windows-first`. Build or install
+Inno Setup 6 to produce an EXE; without ISCC, the helper only stages the
+installer files. Run from PowerShell on the **signing computer**, not in CI:
+
+```powershell
+git switch release/v0.1.0-rc-windows-first
+git pull --ff-only
+python -m pip install -r requirements.lock -r requirements-dev.lock
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows_rc_stage.ps1
+```
+
+The helper verifies the private key's public ID is `64ecfc2da2ed12e9`,
+prompts without echoing the passphrase or putting it in shell history, stages
+the signed Windows payload, checks the commit in `build-info.json` and,
+when ISCC.exe is available, compiles the installer and prints its SHA-256.
+You may provide `-ISCC 'C:\path\to\ISCC.exe'` if auto-discovery fails.
+
+For compatibility with the existing Python build script, the helper temporarily
+passes the passphrase to its subprocesses through
+`NATURE_RELEASE_KEY_PASSPHRASE`, then removes that environment variable in
+`finally`. On a shared or compromised signing host, environment variables
+are not a substitute for OS account isolation. The private PEM stays outside
+the source checkout and is never copied into the staged payload.
+
+Record the build commit, bundle signature verification, installer SHA-256
+and **actual install/uninstall results on the separate Testing Computer**.
+Never upload the private key, passphrase, or this development EXE as a
+claimed official release. Before real publication, resolve the version/tag
+provenance, native acceptance, Authenticode and licensing blockers.
+
 ## Licenses
 
 The installer shows the Apache-2.0 license. It installs `licenses\`, which holds `LICENSE.txt`,

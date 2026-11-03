@@ -9,7 +9,41 @@ let pollTimer = null;
 let currentConversation = null;
 
 let submissionBusy = false;
-let pendingSubmit = null; // Same request ID reused if the HTTP answer was lost.
+const PENDING_KEY = "nwpc-pending-submissions-v1";
+const PENDING_MS = 24 * 60 * 60 * 1000;
+// Only opaque hashes and request/submission IDs live in browser sessionStorage.
+// Never persist user instructions, Platform credentials, or message content.
+function loadPendingSubmissions() {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(PENDING_KEY) || "{}");
+    return Object.fromEntries(Object.entries(stored).filter(([digest, item]) =>
+      /^[a-f0-9]{64}$/.test(digest) && item && typeof item.id === "string" &&
+      Number.isFinite(item.created) && Date.now() - item.created < PENDING_MS));
+  } catch { return {}; }
+}
+const pendingSubmissions = loadPendingSubmissions();
+
+function savePendingSubmissions() {
+  sessionStorage.setItem(PENDING_KEY, JSON.stringify(pendingSubmissions));
+}
+
+function clearPendingSubmissions() {
+  for (const key of Object.keys(pendingSubmissions)) delete pendingSubmissions[key];
+  sessionStorage.removeItem(PENDING_KEY);
+}
+
+async function payloadDigest(payload) {
+  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function forgetFinishedSubmission(sid) {
+  for (const [digest, entry] of Object.entries(pendingSubmissions)) {
+    if (entry.sid === sid) delete pendingSubmissions[digest];
+  }
+  savePendingSubmissions();
+}
 
 function submitControls(busy) {
   submissionBusy = busy;
@@ -21,14 +55,33 @@ function submitControls(busy) {
 
 async function submitOnce(payload) {
   if (submissionBusy) return;
-  const signature = JSON.stringify(payload);
-  if (!pendingSubmit || pendingSubmit.signature !== signature) {
-    pendingSubmit = { signature, id: crypto.randomUUID() };
-  }
-  submitControls(true); // Synchronous: catches double-click and repeated Enter.
+  submitControls(true); // Synchronous lock catches repeated Enter / double-click.
   try {
-    const sub = await api("/api/submit", { json: { ...payload, request_id: pendingSubmit.id } });
-    pendingSubmit = null;
+    const digest = await payloadDigest(payload);
+    let entry = pendingSubmissions[digest];
+    if (entry?.sid) {
+      // Navigation and reload must not mistake a completed action for pending work.
+      // Unknown/unreachable status stays protected: do not silently create another Task.
+      try {
+        const state = await api(`/api/submissions/${entry.sid}`);
+        if (state.state === "done" || state.state === "error") {
+          delete pendingSubmissions[digest];
+          savePendingSubmissions();
+          entry = null;
+        }
+      } catch (err) {
+        if (err.message === "signed-out") throw err;
+        // A lost status response is not proof the original submission failed.
+      }
+    }
+    if (!entry) {
+      entry = { id: crypto.randomUUID(), created: Date.now() };
+      pendingSubmissions[digest] = entry;
+      savePendingSubmissions(); // Save BEFORE the network request, for refresh/retry.
+    }
+    const sub = await api("/api/submit", { json: { ...payload, request_id: entry.id } });
+    entry.sid = sub.submission_id;
+    savePendingSubmissions();
     return sub;
   } finally {
     submitControls(false);
@@ -126,6 +179,7 @@ $("login-form").addEventListener("submit", async (e) => {
     await api("/api/login", { json: { email: $("login-email").value, password: pw.value } });
     pw.value = "";
     banner("");
+    clearPendingSubmissions(); // The new signed-in account owns a new submission scope.
     await refreshStatus();
     location.hash = "#/tasks";
     route();
@@ -139,6 +193,7 @@ $("logout").addEventListener("click", async () => {
     banner("Signed out. The Platform confirmed the session ended.", "info");
   } catch (err) { fail(err); }
   me = null;
+  clearPendingSubmissions();
   await refreshStatus();
   showView("login");
 });
@@ -227,6 +282,9 @@ function trackSubmission(sub) {
         if (n) { location.hash = `#/task/${n}`; return; }
         pollTimer = setTimeout(tick, pollDelay(s.elapsed_seconds));
         return;
+      }
+      if (s.state === "done" || s.state === "error") {
+        forgetFinishedSubmission(sub.submission_id);
       }
       if (s.state === "error" || s.state === "unknown") banner(s.error);
       else banner(n ? "" : `The Platform answered (${s.execution_status}).`, "info");

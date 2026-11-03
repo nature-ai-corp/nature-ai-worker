@@ -79,8 +79,22 @@ def restrict_to_owner(path: Path) -> None:
     """Windows: an explicit, non-inherited ACL on ``path`` for this user, SYSTEM and
     Administrators only - the same principals as the user's own profile folder,
     and the Windows equivalent of POSIX mode 0700. Files inside inherit it."""
-    subprocess.run(["icacls", str(path), "/inheritance:r",
-                    "/grant:r", f"*{current_user_sid()}:(OI)(CI)F", f"*{_SYSTEM}:(OI)(CI)F",
-                    f"*{_ADMINISTRATORS}:(OI)(CI)F",
-                    "/remove:g", *(f"*{sid}" for sid in _BROAD)],
-                   capture_output=True, check=True, timeout=60, stdin=subprocess.DEVNULL)
+    # icacls /inheritance:r + /grant:r replaces grants only for named SIDs;
+    # it can leave other explicit grants (including OWNER RIGHTS) on the root.
+    # Replace the entire DACL, then verify the effective explicit grantees.
+    from .windows_security import (
+        ADMINISTRATORS, FILE_ALL_ACCESS, SYSTEM, read_acl, set_protected_dacl,
+    )
+    user = current_user_sid()
+    set_protected_dacl(
+        path, user,
+        [(user, FILE_ALL_ACCESS), (SYSTEM, FILE_ALL_ACCESS),
+         (ADMINISTRATORS, FILE_ALL_ACCESS)],
+    )
+    acl = read_acl(path)
+    expected = {user, SYSTEM, ADMINISTRATORS}
+    if not acl.protected or acl.grantees() != expected:
+        raise PermissionError(
+            f"Data directory access control is not private: "
+            f"grantees={sorted(acl.grantees())!r}"
+        )

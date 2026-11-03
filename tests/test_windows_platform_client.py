@@ -1209,7 +1209,13 @@ def test_native_least_privilege_acl_with_a_service_sid(tmp_path):
     subprocess.run([system_tool("icacls.exe"), str(folder), "/inheritance:r", "/grant:r", f"*{user}:(OI)(CI)F",
                     f"*{TRUSTED_INSTALLER}:(OI)(CI)M"], check=True, capture_output=True)
     acl = read_acl(folder)
-    assert acl.protected and acl.grantees() == {user, TRUSTED_INSTALLER}
+    # Windows can preserve SYSTEM/Administrators and OWNER RIGHTS when
+    # icacls changes a DACL. Those are not unprivileged users, provided
+    # the object's owner is itself one of these trusted identities.
+    owner_rights = "S-1-3-4"
+    assert acl.protected and acl.owner in {user, SYSTEM, ADMINISTRATORS}
+    assert {user, TRUSTED_INSTALLER} <= acl.grantees()
+    assert acl.grantees() <= {user, TRUSTED_INSTALLER, SYSTEM, ADMINISTRATORS, owner_rights}
     assert not acl.grantees() & {USERS, AUTH_USERS, EVERYONE}
     unregistered = service_sid("NatureWorkerNoSuchService")
     result = subprocess.run([system_tool("icacls.exe"), str(folder), "/grant", f"*{unregistered}:(OI)(CI)M"],

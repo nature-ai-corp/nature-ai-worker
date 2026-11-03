@@ -47,7 +47,8 @@ compose build
 compose up -d
 wait_healthy
 health=$(api "$BASE/api/health")
-[ "$(echo "$health" | json 'd["ok"], d["version"]')" = "True 0.1.0" ] || fail "unexpected health response: $health"
+expected_version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+[ "$(echo "$health" | json 'd["ok"], d["version"]')" = "True $expected_version" ] || fail "unexpected health response: $health"
 pass "/api/health: $health"
 
 # -- container user and permissions --------------------------------------------------

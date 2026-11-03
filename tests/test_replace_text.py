@@ -140,7 +140,10 @@ def test_the_replacement_is_atomic_and_keeps_the_file_mode(tmp_path):
     out = execute(ctx, "replace_text", {"path": "r.md", "old_text": "South: 90", "new_text": "South: 95"})
     st = (tmp_path / "r.md").stat()
     assert st.st_ino != before                                # a new file renamed into place
-    assert st.st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert st.st_mode & 0o777 == 0o600  # POSIX permission bits are not NTFS ACLs
+    else:
+        assert st.st_mode & 0o222 == 0o222  # Windows chmod cannot express POSIX owner-only mode
     assert out.meta["worker_file"] == {"path": "r.md", **ctx.workspace.fingerprint("r.md").to_dict()}
     assert owned_files([{"role": "tool", "meta": out.meta}]) == {"r.md": ctx.workspace.fingerprint("r.md")}
 

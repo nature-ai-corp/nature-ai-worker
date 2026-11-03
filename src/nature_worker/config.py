@@ -50,10 +50,12 @@ class Config:
             # encrypted API keys, backups) would inherit e.g. "Users: read" from C:\.
             try:
                 restrict_to_owner(self.data_dir)
-            except (OSError, subprocess.SubprocessError, ValueError) as exc:
-                logging.getLogger(__name__).warning(
-                    "Could not make %s private to this user (%s). Other accounts on this computer may "
-                    "be able to read it; choose a data folder inside your user profile.", self.data_dir, exc)
+            except (OSError, subprocess.SubprocessError, ValueError, RuntimeError) as exc:
+                raise PermissionError(
+                    f"Cannot secure Nature AI Worker's private data directory {self.data_dir}. "
+                    "Startup stopped rather than exposing credentials or history. "
+                    "Choose a data directory owned by the current Windows user and check its ACL."
+                ) from exc
             return
         try:
             os.chmod(self.data_dir, 0o700)

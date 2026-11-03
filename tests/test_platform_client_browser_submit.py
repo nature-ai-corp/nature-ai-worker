@@ -56,7 +56,7 @@ def isolated_browser(tmp_path):
     try:
         for _ in range(100):
             try:
-                if httpx.get(url + "/api/health", timeout=0.5).status_code == 200:
+                if httpx.get(url + "/api/status", timeout=0.5).status_code == 200:
                     break
             except httpx.HTTPError:
                 pass

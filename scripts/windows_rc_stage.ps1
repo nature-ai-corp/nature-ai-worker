@@ -14,6 +14,10 @@ Set-StrictMode -Version Latest
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if (-not $StageDir) { $StageDir = Join-Path $repo 'dist\windows-rc-stage' }
 $expectedKeyId = '64ecfc2da2ed12e9'
+$python = Join-Path $repo '.venv\Scripts\python.exe'
+if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
+    throw 'Dedicated .venv Python not found; create it with py -3.13 -m venv .venv first.'
+}
 
 if ($env:OS -ne 'Windows_NT') { throw 'This helper must run on Windows.' }
 if (-not (Test-Path -LiteralPath $KeyPath -PathType Leaf)) {
@@ -65,11 +69,11 @@ print("Signing key ID:", key_id)
 if key_id != sys.argv[2]:
     raise SystemExit("Refusing to sign: not the registered official release key")
 '@
-    & python -c $probe $KeyPath $expectedKeyId
+    & $python -c $probe $KeyPath $expectedKeyId
     if ($LASTEXITCODE -ne 0) { throw 'Signing-key verification failed; nothing was staged.' }
 
     Write-Host "Staging private RC from commit $commit"
-    & python (Join-Path $repo 'scripts\windows_installer.py') stage --private-key $KeyPath --out $StageDir
+    & $python (Join-Path $repo 'scripts\windows_installer.py') stage --private-key $KeyPath --out $StageDir
     if ($LASTEXITCODE -ne 0) { throw 'Windows installer staging failed.' }
 }
 finally {

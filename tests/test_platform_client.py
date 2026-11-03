@@ -86,6 +86,47 @@ def test_template_task_submission_progress_results_and_logout(pc):
     assert client.get("/api/tasks").status_code == 401
 
 
+def test_same_ui_request_id_creates_only_one_platform_submission(pc):
+    fake, client, app = pc
+    login(client)
+    body = {
+        "template_id": "tpl-1", "values": {"1": "ACME", "2": "Summary"},
+        "additional": "Internal only", "request_id": "acceptance-request-0001",
+    }
+    first = client.post("/api/submit", json=body)
+    assert first.status_code == 200, first.text
+    second = client.post("/api/submit", json=body)
+    assert second.status_code == 200, second.text
+    assert first.json() == second.json()
+    assert len(app.state.submissions) == 1
+    for _ in range(100):
+        state = client.get("/api/submissions/" + first.json()["submission_id"]).json()
+        if state["state"] != "running":
+            break
+        time.sleep(0.02)
+    assert state["state"] == "done"
+    assert len(fake.tasks) == 1
+
+    modified = {**body, "values": {"1": "OTHER", "2": "Summary"}}
+    conflict = client.post("/api/submit", json=modified)
+    assert conflict.status_code == 409
+    assert len(fake.tasks) == 1
+    assert client.post("/api/submit", json={**body, "request_id": "short"}).status_code == 422
+    assert client.post("/api/logout").status_code == 204
+    assert app.state.account.submit_requests == {}
+
+
+def test_distinct_ui_requests_are_not_silently_merged(pc):
+    fake, client, _app = pc
+    login(client)
+    body = {"template_id": "tpl-1", "values": {"1": "ACME", "2": "Summary"},
+            "request_id": "acceptance-request-0002"}
+    first = client.post("/api/submit", json=body)
+    second = client.post("/api/submit", json={**body, "request_id": "acceptance-request-0003"})
+    assert first.status_code == second.status_code == 200
+    assert first.json()["submission_id"] != second.json()["submission_id"]
+
+
 def test_platform_ending_the_session_signs_the_worker_out(pc):
     fake, client, app = pc
     login(client)

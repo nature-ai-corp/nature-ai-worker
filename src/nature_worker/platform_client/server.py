@@ -10,6 +10,7 @@ through the local port.
 from __future__ import annotations
 
 import contextlib
+import json
 import hashlib
 import hmac
 import os
@@ -108,6 +109,9 @@ class Account:
         self.session = PlatformSession(self.transport)
         self.ui_token: str | None = None
         self.submissions: dict[str, Submission] = {}
+        # Same user action => same local submission and Platform idempotency keys.
+        # Memory-only and discarded on sign-out, like the Platform session.
+        self.submit_requests: dict[str, tuple[str, str]] = {}
         self.lock = threading.RLock()
 
     def cookies(self) -> SessionCookies:
@@ -131,6 +135,7 @@ class Account:
         self.transport.user = None
         self.ui_token = None
         self.submissions.clear()
+        self.submit_requests.clear()
 
 
 def startup_findings(settings: ClientSettings, contract_ok: bool):
@@ -184,6 +189,7 @@ class SubmitIn(BaseModel):
     values: dict[str, str | list[str]] = Field(default_factory=dict)
     additional: str = Field(default="", max_length=20000)
     conversation_id: str | None = Field(default=None, max_length=256)
+    request_id: str | None = Field(default=None, max_length=128)
 
 
 class RespondIn(BaseModel):
@@ -532,17 +538,40 @@ def create_app(settings: ClientSettings | None = None, *,
             content = (body.content or "").strip()
             if not content:
                 return JSONResponse({"detail": "Enter a message."}, status_code=422)
-        cid = body.conversation_id
-        if not cid:
-            cid = api.create_conversation(s, idempotency_key=new_idempotency_key())["id"]
-        cutoff = time.time() - 24 * 3600
-        for old in [k for k, v in submissions.items() if v.started_at < cutoff]:
-            submissions.pop(old, None)
-        sid = secrets.token_urlsafe(12)
-        submissions[sid] = Submission(conversation_id=cid)
-        threading.Thread(target=run_submission, daemon=True,
-                         args=(sid, s, content, start_task, template_id, new_idempotency_key())).start()
-        return {"submission_id": sid, "conversation_id": cid}
+        request_id = body.request_id or secrets.token_urlsafe(24)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", request_id):
+            return JSONResponse({"detail": "Invalid submission request ID."}, status_code=422)
+        # A duplicate HTTP request must not create another Conversation or Task.
+        # Explicit user request IDs are reused across browser retries. The lock
+        # covers conversation creation and reservation, including concurrent calls.
+        fingerprint = hashlib.sha256(json.dumps({
+            "content": content, "template_id": template_id,
+            "start_task": start_task, "conversation_id": body.conversation_id,
+        }, sort_keys=True).encode("utf-8")).hexdigest()
+        with account.lock:
+            cutoff = time.time() - 24 * 3600
+            for old in [k for k, v in submissions.items() if v.started_at < cutoff]:
+                submissions.pop(old, None)
+            for key, (_digest, existing_sid) in list(account.submit_requests.items()):
+                if existing_sid not in submissions:
+                    account.submit_requests.pop(key, None)
+            previous = account.submit_requests.get(request_id)
+            if previous is not None:
+                digest, existing_sid = previous
+                if digest != fingerprint:
+                    return JSONResponse({"detail": "Submission request ID reused for different content."},
+                                        status_code=409)
+                existing = submissions[existing_sid]
+                return {"submission_id": existing_sid, "conversation_id": existing.conversation_id}
+            cid = body.conversation_id
+            if not cid:
+                cid = api.create_conversation(s, idempotency_key=new_idempotency_key())["id"]
+            sid = secrets.token_urlsafe(12)
+            submissions[sid] = Submission(conversation_id=cid)
+            account.submit_requests[request_id] = (fingerprint, sid)
+            threading.Thread(target=run_submission, daemon=True,
+                             args=(sid, s, content, start_task, template_id, new_idempotency_key())).start()
+            return {"submission_id": sid, "conversation_id": cid}
 
     @app.get("/api/submissions/{sid}")
     def submission(sid: str):

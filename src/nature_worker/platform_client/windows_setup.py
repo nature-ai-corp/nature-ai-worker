@@ -228,8 +228,11 @@ class WindowsSystem:
 
     def platform_client_processes(self) -> list[str] | None:
         """Command lines of running Platform Client processes, or None if unknown."""
-        script = ("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match "
-                  "'nature_worker\\.platform_client|platform-client-service\\.py' -and "
+        # The PowerShell -Command argument contains the search pattern; filter on
+        # process image before matching command line, so the probe is not residue.
+        script = ("Get-CimInstance Win32_Process | Where-Object { "
+                  "$_.Name -match '^(python|pythonw)(\\.exe)?$' -and "
+                  "$_.CommandLine -match 'nature_worker\\.platform_client|platform-client-service\\.py' -and "
                   "$_.ProcessId -ne $PID } | ForEach-Object { [string]$_.ProcessId + ' ' + $_.CommandLine }")
         try:
             result = self.run([system_tool("WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-Command", script],

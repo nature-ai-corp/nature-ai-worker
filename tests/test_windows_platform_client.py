@@ -1113,6 +1113,25 @@ def test_an_unrelated_listener_on_the_port_is_not_a_running_platform_client(win,
     assert report["checks"]["running_processes"] is True
 
 
+def test_process_probe_excludes_powershell_diagnostics(monkeypatch):
+    """Only Python hosts of the Platform Client count as running processes."""
+    seen = {}
+
+    def run(command, **kwargs):
+        seen["script"] = command[-1]
+        return subprocess.CompletedProcess(
+            command, 0, "4242 python.exe -I platform-client-service.py\n", ""
+        )
+
+    system = windows_setup.WindowsSystem()
+    monkeypatch.setattr(system, "run", run)
+    assert system.platform_client_processes() == [
+        "4242 python.exe -I platform-client-service.py"
+    ]
+    assert "$_.Name -match '^(python|pythonw)(\\.exe)?$'" in seen["script"]
+    assert "nature_worker\\.platform_client|platform-client-service\\.py" in seen["script"]
+
+
 def test_a_running_platform_client_process_is_residue(win, tmp_path):
     setup, fake, standalone = win
     install(setup, standalone, tmp_path)

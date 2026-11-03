@@ -70,6 +70,40 @@ git rev-parse "v<version>^{commit}"    # must equal source.commit
 
 `--min-upgrade-from` must be the oldest version whose data schema the release's migrations still upgrade and whose upgrader can install this bundle format.
 
+## Official signing key custody and migration
+
+The official Ed25519 **private** key belongs on a controlled release/signing computer,
+not on customer deployment installations or disposable test machines. The matching
+**public** key belongs in the Worker source and installed verifier. A development
+key in an installation's `trusted-keys.json` is only local trust; it is not an
+official signing key and cannot override the installed official key identity.
+
+If the owner's original signing key was generated on a test PC, migrate the
+**existing encrypted private-key file** to the controlled signing computer
+before that PC is refreshed. Do not generate a replacement key merely to move
+computers. Use an approved encrypted transfer medium, keep its passphrase in a
+separate secure location, restrict access to the release maintainer account, and
+retain an independently protected encrypted offline recovery copy. Never copy the
+private key or passphrase to GitHub, CI, a ticket, a support chat, or customer
+deployment machines. Do not place an unencrypted private-key copy in a shared
+folder or automatic cloud-sync directory.
+
+Before retiring the test PC, use the signing computer to derive the public-key
+identifier from the migrated private key **without printing private-key bytes or
+passphrases**. Confirm that it equals the official identifier in
+`src/nature_worker/upgrade/release_keys.json` (currently
+`64ecfc2da2ed12e9`), then verify a disposable signed test manifest/bundle
+with the public-key verifier. Verify that the offline encrypted recovery copy can
+be restored securely as well. Only after those checks should the owner consider
+removing the original test-PC key copy. Ordinary deletion on SSDs cannot guarantee
+physical erasure; where necessary use full-disk encryption, key destruction or a
+controlled device sanitization policy.
+
+Key migration is **not** rotation: a byte-identical private key retains the same
+official public key and key ID. If the original key is lost or suspected
+compromised, follow the separate rotation/compromise process below; do not claim
+old signatures were made by a newly generated key.
+
 ## Setting up the official key
 
 The first key setup has been completed by the owner as of 2026-11-03 (key ID `64ecfc2da2ed12e9`). The steps below remain the maintainers' procedure for adding or rotating official keys:

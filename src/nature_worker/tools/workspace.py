@@ -108,7 +108,7 @@ class Workspace:
         rel = (rel or ".").strip() or "."
         if "\x00" in rel:
             raise ToolError("Invalid path.")
-        if os.path.isabs(rel) or rel.startswith("~") or (len(rel) > 1 and rel[1] == ":"):
+        if os.path.isabs(rel) or rel.startswith(("/", "\\", "~")) or (len(rel) > 1 and rel[1] == ":"):
             raise ToolError(f"'{rel}' is an absolute path. Use a path relative to the workspace.")
         real = Path(os.path.realpath(self.root / rel))
         if real != self.root and self.root not in real.parents:

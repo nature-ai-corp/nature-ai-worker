@@ -47,8 +47,13 @@ def assert_private(path: Path) -> None:
         assert path.stat().st_mode & 0o077 == 0, f"{path} is accessible to other accounts"
         return
     from nature_worker.config import current_user_sid
-    protected, sids = _windows_acl(path)
+    from nature_worker.windows_security import read_acl
+    # Use the same native Windows ACL parser as installation validation.
+    # PowerShell Get-Acl's printed Access entries are inconsistent on CI and
+    # can return an empty list even for a directory with a valid DACL.
+    acl = read_acl(path)
+    sids = acl.grantees()
     allowed = {current_user_sid(), "S-1-5-18", "S-1-5-32-544"}
     assert sids and sids <= allowed, f"{path} grants access to {sorted(sids - allowed)}"
     if path.is_dir():
-        assert protected, f"{path} still inherits its permissions from its parent folder"
+        assert acl.protected, f"{path} still inherits its permissions from its parent folder"

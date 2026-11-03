@@ -50,26 +50,7 @@ finally {
 }
 
 try {
-    $probe = @'
-import hashlib, os, sys
-from pathlib import Path
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-key = serialization.load_pem_private_key(
-    Path(sys.argv[1]).read_bytes(),
-    password=os.environ["NATURE_RELEASE_KEY_PASSPHRASE"].encode(),
-)
-if not isinstance(key, Ed25519PrivateKey):
-    raise SystemExit("Signing key is not Ed25519")
-pub = key.public_key().public_bytes(
-    serialization.Encoding.Raw, serialization.PublicFormat.Raw
-)
-key_id = hashlib.sha256(pub).hexdigest()[:16]
-print("Signing key ID:", key_id)
-if key_id != sys.argv[2]:
-    raise SystemExit("Refusing to sign: not the registered official release key")
-'@
-    & $python -c $probe $KeyPath $expectedKeyId
+    & $python (Join-Path $repo 'scripts\check_release_signing_key.py') $KeyPath $expectedKeyId
     if ($LASTEXITCODE -ne 0) { throw 'Signing-key verification failed; nothing was staged.' }
 
     Write-Host "Staging private RC from commit $commit"

@@ -99,6 +99,21 @@ CONSOLE_EVENTS = {0: "CTRL_C_EVENT (Ctrl+C)", 1: "CTRL_BREAK_EVENT (Ctrl+Break)"
                   6: "CTRL_SHUTDOWN_EVENT (Windows shuts down or restarts)"}
 
 
+def scoped_client_processes(processes: list[str], prefix: Path, service: str) -> list[str]:
+    """From the global safety scan, select only processes belonging to this install.
+
+    Other Platform Clients still block the system-wide Standalone clean gate; they
+    must not be mistaken for residual processes of this E2E service.
+    """
+    root = str(prefix).replace("/", "\\").casefold().rstrip("\\") + "\\"
+    service_name = service.casefold()
+    return [
+        process for process in processes
+        if root in process.replace("/", "\\").casefold()
+        or service_name in process.casefold()
+    ]
+
+
 class Check(Exception):
     pass
 
@@ -651,16 +666,38 @@ class E2E:
         result = self.setup_cmd("uninstall", "--delete-local-data")
         expect(result.returncode == 0, f"uninstall failed: {result.stdout[-1500:]}{result.stderr[-800:]}")
         expect(not self.data.exists() and not self.prefix.exists(), "files left behind")
+        expect(self.system.service_status(E2E_SERVICE) is None, "E2E service still registered")
         expect(self.system.get_registry(self.setup.service_key, "Environment") is None, "service registry left behind")
-        for check in ("os_credentials", "running_processes", "installed_packages", "other_app_locations"):
+        for check in ("os_credentials", "installed_packages", "other_app_locations"):
             expect(f"{check}: verified clean" in result.stdout,
                    f"{check} not verified clean; uninstall output:\n{result.stdout[-2500:]}")
+        # Preserve the installer's strict GLOBAL clean decision. An unrelated
+        # Platform Client may legitimately keep running and block Standalone,
+        # but must not make the E2E namespace's own uninstall test fail.
+        processes = self.system.platform_client_processes()
+        expect(processes is not None, "global process scan unverified after uninstall")
+        owned = scoped_client_processes(processes, self.prefix, E2E_SERVICE)
+        expect(not owned, f"E2E Platform Client processes still running: {owned}")
+        active = self.active_processes()
+        expect(not active, f"E2E installer/upgrader processes still active: {active}")
+        others = [p for p in processes if p not in owned]
+        if others:
+            expect("running_processes: residue" in result.stdout,
+                   "global clean validation unexpectedly marked running processes clean")
+            self.note(f"global clean gate correctly blocked by {len(others)} other Platform Client "
+                      "process(es); not part of this E2E installation")
+            for process in others:
+                self.journal(f"other Platform Client still active: {process[:400]}")
+        else:
+            expect("running_processes: verified clean" in result.stdout,
+                   f"global process scan not clean; uninstall output:\n{result.stdout[-2500:]}")
         expect("device_policy: unverified" in result.stdout, "device policy should be reported unverified")
         expect((self.standalone / "worker.db").exists(), "the Standalone data was removed")
-        self.inspect_service_profile()
-        self.note("uninstall --delete-local-data: everything removed; credentials, processes, packages and "
-                  "locations verified clean; device policy unverified (by design it blocks an automatic "
-                  "Standalone reinstall); Standalone data untouched")
+        profile = self.inspect_service_profile()
+        self.note("uninstall --delete-local-data: E2E service, code, data and registration removed; "
+                  "E2E processes absent; credentials, packages and locations verified clean; "
+                  "global Standalone gate remains strict, device policy unverified; "
+                  "Standalone data untouched; service account profile status recorded separately")
 
     def s_production_untouched(self) -> None:
         after = self.production_state()

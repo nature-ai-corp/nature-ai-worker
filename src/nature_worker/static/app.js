@@ -837,12 +837,34 @@ async function uploadFile(file) {
   } catch (e) {
     if (!/already exists/.test(e.message) || !confirm(`${file.name} already exists. Replace it?`)) {
       if (!/already exists/.test(e.message)) alert(e.message);
-      return;
+      return false;
     }
-    try { await api("PUT", url(true), undefined, file); } catch (e2) { alert(e2.message); return; }
+    try { await api("PUT", url(true), undefined, file); } catch (e2) { alert(e2.message); return false; }
   }
   loadFiles();
   if (!$("#view-new").hidden) renderNew();
+  return true;
+}
+
+let quickUploadTarget = "new";
+function quickAttach(target) {
+  quickUploadTarget = target;
+  $("#quick-upload").click();
+}
+async function finishQuickAttach(file) {
+  const target = quickUploadTarget === "work" ? "work" : "new";
+  const status = $(target === "new" ? "#new-attachment-status" : "#work-attachment-status");
+  const button = $(target === "new" ? "#new-attach" : "#work-attach");
+  button.disabled = true;
+  status.textContent = "Uploading " + file.name + "…";
+  try {
+    const ok = await uploadFile(file);
+    status.textContent = ok
+      ? file.name + " uploaded to your workspace. Mention the file in your instructions to use it."
+      : "Attachment not added.";
+  } finally {
+    button.disabled = false;
+  }
 }
 
 // ---------------------------------------------------------------- Settings
@@ -994,6 +1016,13 @@ async function init() {
     if (!$("#template-list").hidden && !e.target.closest(".template-picker")) closeTemplateList(false);
   });
   $("#list-new-work").addEventListener("click", newWork);
+  $("#new-attach").addEventListener("click", () => quickAttach("new"));
+  $("#work-attach").addEventListener("click", () => quickAttach("work"));
+  $("#quick-upload").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (file) await finishQuickAttach(file);
+  });
   $("#new-manage-files").addEventListener("click", () => { $("#files-panel").hidden = false; loadFiles(); });
   $("#toggle-sidebar").addEventListener("click", () => $("#sidebar").classList.toggle("open"));
   $(".skip-link").addEventListener("click", (e) => { e.preventDefault(); $("#main").focus(); });

@@ -54,7 +54,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Signing-key verification failed; nothing was staged.' }
 
     Write-Host "Staging private RC from commit $commit"
-    & $python (Join-Path $repo 'scripts\windows_installer.py') stage --private-key $KeyPath --out $StageDir
+    & $python (Join-Path $repo 'scripts\windows_installer.py') stage --private-key $KeyPath --notes (Join-Path $repo 'docs\RELEASE_NOTES_v0.1.1-rc.md') --out $StageDir
     if ($LASTEXITCODE -ne 0) { throw 'Windows installer staging failed.' }
 }
 finally {

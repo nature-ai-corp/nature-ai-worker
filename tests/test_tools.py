@@ -66,7 +66,7 @@ def test_read_long_file_in_chunks(ws, tmp_path):
 
 
 def test_read_one_bounded_part(ws, tmp_path):
-    (tmp_path / "doc.md").write_text("# A\n" + "a" * 3000 + "\n# B\nbbb\n")
+    (tmp_path / "doc.md").write_bytes(("# A\n" + "a" * 3000 + "\n# B\nbbb\n").encode("utf-8"))
     part = execute(ToolContext(ws), "read_file", {"path": "doc.md", "offset": 3004, "limit": 6})
     assert part.startswith("\n# B\nb") and "[Truncated: showing characters 3004-3010 of 3013." in part
     # A limit never widens the chunk the context allows.

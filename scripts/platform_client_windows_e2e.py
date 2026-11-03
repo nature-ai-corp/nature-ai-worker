@@ -653,7 +653,8 @@ class E2E:
         expect(not self.data.exists() and not self.prefix.exists(), "files left behind")
         expect(self.system.get_registry(self.setup.service_key, "Environment") is None, "service registry left behind")
         for check in ("os_credentials", "running_processes", "installed_packages", "other_app_locations"):
-            expect(f"{check}: verified clean" in result.stdout, f"{check} not verified clean")
+            expect(f"{check}: verified clean" in result.stdout,
+                   f"{check} not verified clean; uninstall output:\n{result.stdout[-2500:]}")
         expect("device_policy: unverified" in result.stdout, "device policy should be reported unverified")
         expect((self.standalone / "worker.db").exists(), "the Standalone data was removed")
         self.inspect_service_profile()

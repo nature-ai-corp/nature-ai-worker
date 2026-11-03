@@ -8,6 +8,33 @@ let me = null;
 let pollTimer = null;
 let currentConversation = null;
 
+let submissionBusy = false;
+let pendingSubmit = null; // Same request ID reused if the HTTP answer was lost.
+
+function submitControls(busy) {
+  submissionBusy = busy;
+  for (const form of ["template-form", "chat-form"]) {
+    const button = $(form).querySelector('[type="submit"]');
+    if (button) button.disabled = busy;
+  }
+}
+
+async function submitOnce(payload) {
+  if (submissionBusy) return;
+  const signature = JSON.stringify(payload);
+  if (!pendingSubmit || pendingSubmit.signature !== signature) {
+    pendingSubmit = { signature, id: crypto.randomUUID() };
+  }
+  submitControls(true); // Synchronous: catches double-click and repeated Enter.
+  try {
+    const sub = await api("/api/submit", { json: { ...payload, request_id: pendingSubmit.id } });
+    pendingSubmit = null;
+    return sub;
+  } finally {
+    submitControls(false);
+  }
+}
+
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -175,10 +202,11 @@ $("template-form").addEventListener("submit", async (e) => {
     values[String(a.slot)] = a.type === "multiselect"
       ? [...input.selectedOptions].map((o) => o.value) : input.value;
   }
+  if (submissionBusy) return;
   try {
-    const sub = await api("/api/submit", { json: {
-      template_id: chosen.id, values, additional: $("template-additional").value } });
-    trackSubmission(sub);
+    const sub = await submitOnce({
+      template_id: chosen.id, values, additional: $("template-additional").value });
+    if (sub) trackSubmission(sub);
   } catch (err) { fail(err); }
 });
 
@@ -239,9 +267,10 @@ async function loadChat(cid) {
 $("chat-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const content = $("chat-input").value.trim();
-  if (!content) return;
+  if (!content || submissionBusy) return;
   try {
-    const sub = await api("/api/submit", { json: { content, conversation_id: currentConversation } });
+    const sub = await submitOnce({ content, conversation_id: currentConversation });
+    if (!sub) return;
     $("chat-input").value = "";
     trackSubmission(sub);
   } catch (err) { fail(err); }

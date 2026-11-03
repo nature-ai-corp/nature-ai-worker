@@ -38,11 +38,19 @@ def _browser_executable():
 
 
 @pytest.fixture
-def isolated_browser(tmp_path):
+def isolated_browser(tmp_path, request):
     chrome = _browser_executable()
     if not chrome:
         pytest.skip("Chrome/Edge not installed")
     fake = FakePlatform()
+    delay = getattr(request, "param", 0)
+    if delay:
+        original_handle = fake.handle
+        def slow_message(req):
+            if req.method == "POST" and req.url.path.endswith("/messages"):
+                time.sleep(delay)
+            return original_handle(req)
+        fake.handle = slow_message
     app = create_app(ClientSettings(data_dir=tmp_path / "pc",
                                     standalone_data_dir=tmp_path / "standalone",
                                     platform_origin="https://platform.example"),
@@ -99,3 +107,73 @@ def test_real_browser_double_template_submit_creates_only_one_task(isolated_brow
     assert len(fake.conversations) == 1
     assert len(app.state.submissions) == 1
     assert len(fake.tasks) == 1
+
+
+@pytest.mark.parametrize("isolated_browser", [3.0], indirect=True)
+def test_reload_and_same_task_while_pending_reuses_original_submission(isolated_browser):
+    fake, app, b = isolated_browser
+    b.wait("!document.querySelector('#login-form').hidden")
+    b.eval("document.querySelector('#login-email').value = " + json.dumps(USER["email"]))
+    b.eval("document.querySelector('#login-password').value = " + json.dumps(fake.password))
+    b.click('#login-form button[type="submit"]')
+    b.wait("!document.querySelector('#nav').hidden")
+    b.eval("location.hash = '#/new'")
+    b.wait("document.querySelector('#template-list .card') !== null")
+    b.click("#template-list .card")
+    b.wait("!document.querySelector('#template-form').hidden")
+    b.eval("document.querySelector('#area-1').value = 'ACME'")
+    b.eval("document.querySelector('#area-2').value = 'Summary'")
+    b.click('#template-form button[type="submit"]')
+    b.wait("Object.keys(JSON.parse(sessionStorage.getItem('nwpc-pending-submissions-v1') || '{}')).length === 1")
+    b.wait("location.hash.startsWith('#/chat/') || location.hash.startsWith('#/task/')")
+    b.eval("location.hash = '#/tasks'")
+    b.eval("location.reload()")
+    b.wait("!document.querySelector('#nav').hidden", timeout=15)
+    b.eval("location.hash = '#/new'")
+    b.wait("document.querySelector('#template-list .card') !== null")
+    b.click("#template-list .card")
+    b.wait("!document.querySelector('#template-form').hidden")
+    b.eval("document.querySelector('#area-1').value = 'ACME'")
+    b.eval("document.querySelector('#area-2').value = 'Summary'")
+    b.click('#template-form button[type="submit"]')
+    b.wait("document.querySelector('#template-form button[type=submit]').disabled === false", timeout=15)
+    for _ in range(120):
+        if len(fake.tasks) == 1 and app.state.submissions and all(
+                v.state == "done" for v in app.state.submissions.values()):
+            break
+        time.sleep(0.1)
+    assert len(fake.conversations) == 1
+    assert len(app.state.submissions) == 1
+    assert len(fake.tasks) == 1
+
+
+@pytest.mark.parametrize("isolated_browser", [2.0], indirect=True)
+def test_different_task_while_first_waits_is_intentional_new_work(isolated_browser):
+    fake, app, b = isolated_browser
+    b.wait("!document.querySelector('#login-form').hidden")
+    b.eval("document.querySelector('#login-email').value = " + json.dumps(USER["email"]))
+    b.eval("document.querySelector('#login-password').value = " + json.dumps(fake.password))
+    b.click('#login-form button[type="submit"]')
+    b.wait("!document.querySelector('#nav').hidden")
+    b.eval("location.hash = '#/new'")
+    b.wait("document.querySelector('#template-list .card') !== null")
+    b.click("#template-list .card")
+    b.wait("!document.querySelector('#template-form').hidden")
+    b.eval("document.querySelector('#area-1').value = 'FIRST'")
+    b.eval("document.querySelector('#area-2').value = 'Summary'")
+    b.click('#template-form button[type="submit"]')
+    b.wait("location.hash.startsWith('#/chat/') || location.hash.startsWith('#/task/')")
+    b.eval("location.hash = '#/new'")
+    b.wait("document.querySelector('#template-list .card') !== null")
+    b.click("#template-list .card")
+    b.wait("!document.querySelector('#template-form').hidden")
+    b.eval("document.querySelector('#area-1').value = 'SECOND'")
+    b.eval("document.querySelector('#area-2').value = 'Summary'")
+    b.click('#template-form button[type="submit"]')
+    for _ in range(100):
+        if len(fake.tasks) == 2:
+            break
+        time.sleep(0.1)
+    assert len(fake.conversations) == 2
+    assert len(fake.tasks) == 2
+    assert len(app.state.submissions) == 2

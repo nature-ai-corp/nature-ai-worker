@@ -78,7 +78,7 @@ finally {
 
 $info = Get-Content -LiteralPath (Join-Path $StageDir 'build-info.json') -Raw | ConvertFrom-Json
 if ($info.commit -ne $commit -or $info.trust_key) {
-    throw 'Unexpected build provenance or local trust-key override; do not distribute this build.'
+    throw 'Unexpected build provenance or local trust-key override; stop and inspect this private RC.'
 }
 Write-Host "Staged version: $($info.version), commit: $($info.commit)"
 Write-Host 'Status: PRIVATE RC ONLY. Existing v0.1.0 tag does not match this commit.'

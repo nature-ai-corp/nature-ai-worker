@@ -27,10 +27,13 @@ def test_versions_compare_release_numbers_and_reject_paths():
             Version.parse(bad)
 
 
-def test_no_official_key_is_published_yet():
-    # Changing this needs a real, owner-generated key: see docs/RELEASES.md.
-    assert json.loads(release.BUNDLED_KEYS.read_text())["keys"] == []
-    assert trusted_keys() == []
+def test_registered_official_key_is_loaded():
+    # The owner's official public key is registered; the private key must never be included.
+    entries = json.loads(release.BUNDLED_KEYS.read_text())["keys"]
+    assert [entry["key_id"] for entry in entries] == ["64ecfc2da2ed12e9"]
+    assert [(key.key_id, key.scope) for key in trusted_keys()] == [
+        ("64ecfc2da2ed12e9", "official")
+    ]
 
 
 def test_local_keys_are_never_official(tmp_path):
@@ -38,7 +41,18 @@ def test_local_keys_are_never_official(tmp_path):
     path = tmp_path / "trusted-keys.json"
     path.write_text(json.dumps({"schema": 1, "keys": [entry]}))
     keys = trusted_keys(path)
-    assert [(k.key_id, k.scope) for k in keys] == [(entry["key_id"], "local")]
+    assert [(k.key_id, k.scope) for k in keys if k.scope == "local"] == [
+        (entry["key_id"], "local")
+    ]
+    assert [(k.key_id, k.scope) for k in keys if k.scope == "official"] == [
+        ("64ecfc2da2ed12e9", "official")
+    ]
+    # A locally supplied copy of an official key cannot override its official scope.
+    official_entry = json.loads(release.BUNDLED_KEYS.read_text())["keys"][0]
+    path.write_text(json.dumps({"schema": 1, "keys": [entry, official_entry]}))
+    keys = trusted_keys(path)
+    assert sum(k.key_id == official_entry["key_id"] for k in keys) == 1
+    assert next(k for k in keys if k.key_id == official_entry["key_id"]).scope == "official"
     entry["key_id"] = "0" * 16
     path.write_text(json.dumps({"schema": 1, "keys": [entry]}))
     with pytest.raises(ReleaseError, match="does not match"):

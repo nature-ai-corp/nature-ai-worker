@@ -159,6 +159,7 @@ def test_returning_refresh_restart_and_interrupted_work(app, fake_model):
     # Browser refresh keeps the selected work.
     b.eval("location.reload()")
     b.wait("document.querySelector('#work-title') && document.querySelector('#work-title').textContent === 'Write a.md'")
+    b.wait("document.querySelector('#work-status').textContent === 'Finished' && document.querySelector('#work-results .deliverables').textContent.includes('a.md')")
     assert _status(b) == "Finished" and "a.md" in b.text("#work-results .deliverables")
 
     # Application restart, with a run that was cut off: the record ends with the user's message.
@@ -170,6 +171,7 @@ def test_returning_refresh_restart_and_interrupted_work(app, fake_model):
     app["proc"], _ = _start(app["tmp"], app["port"])
     b.eval("location.reload()")
     b.wait("document.querySelector('#work-title') && document.querySelector('#work-title').textContent === 'Write a.md'")
+    b.wait("document.querySelector('#work-results .deliverables').textContent.includes('a.md')")
     assert "a.md" in b.text("#work-results .deliverables")
     b.click("#work-nav a", "Cut off work")
     b.wait("document.querySelector('#work-status').textContent === 'Interrupted'")

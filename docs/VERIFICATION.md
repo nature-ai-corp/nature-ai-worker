@@ -1,5 +1,14 @@
 # v0.1 Verification Record
 
+> **RC release-readiness note (2026-11-03):** the official Ed25519 public key
+> `64ecfc2da2ed12e9` is now registered in the RC source. The historical test reports below
+> remain unchanged; they are not evidence of a signed official bundle or a published release.
+> The existing `v0.1.0` tag predates the current RC branch; source/tag provenance must be
+> resolved with a new matching version/tag before an official release. Windows Authenticode
+> signing, licensing review, the unresolved DeepSeek 401, partial UI checks and uninstall
+> residue investigation remain open. See [RELEASES.md](RELEASES.md) and
+> [WINDOWS_STANDALONE_INSTALLER.md](WINDOWS_STANDALONE_INSTALLER.md).
+
 > **Current status (v0.1.0, 2026-10-17):** tests pass on Python 3.11–3.14 and the Docker deployment passes its runtime checks, both in GitHub Actions. Real-provider acceptance passed for OpenAI (`gpt-4.1-mini`) and Ollama (`qwen3.8:27b`). Anthropic, Gemini and DeepSeek are not yet verified against their real services. See the [final section](#wkr-016--wkr-017-ci-docker-and-release-readiness-2026-10-17). The sections below are kept in date order as the record of how this was reached; earlier "NOT EXECUTED" entries were superseded by later ones.
 
 Date: 2026-10-17. Environment: Linux (WSL2), Python 3.14.4, SQLite 3.46.1, Chrome (headless).

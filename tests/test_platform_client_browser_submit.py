@@ -83,7 +83,8 @@ def isolated_browser(tmp_path, request):
 
 def test_real_browser_double_template_submit_creates_only_one_task(isolated_browser):
     fake, app, b = isolated_browser
-    b.wait("!document.querySelector('#login-form').hidden")
+    # Wait for app.js initialization, not just static HTML (the login form starts visible).
+    b.wait("document.querySelector('#platform').textContent.includes('Client Interface')")
     b.eval("document.querySelector('#login-email').value = " + json.dumps(USER["email"]))
     b.eval("document.querySelector('#login-password').value = " + json.dumps(fake.password))
     b.click('#login-form button[type="submit"]')
@@ -112,7 +113,8 @@ def test_real_browser_double_template_submit_creates_only_one_task(isolated_brow
 @pytest.mark.parametrize("isolated_browser", [3.0], indirect=True)
 def test_reload_and_same_task_while_pending_reuses_original_submission(isolated_browser):
     fake, app, b = isolated_browser
-    b.wait("!document.querySelector('#login-form').hidden")
+    # Wait for app.js initialization, not just static HTML (the login form starts visible).
+    b.wait("document.querySelector('#platform').textContent.includes('Client Interface')")
     b.eval("document.querySelector('#login-email').value = " + json.dumps(USER["email"]))
     b.eval("document.querySelector('#login-password').value = " + json.dumps(fake.password))
     b.click('#login-form button[type="submit"]')
@@ -150,7 +152,8 @@ def test_reload_and_same_task_while_pending_reuses_original_submission(isolated_
 @pytest.mark.parametrize("isolated_browser", [2.0], indirect=True)
 def test_different_task_while_first_waits_is_intentional_new_work(isolated_browser):
     fake, app, b = isolated_browser
-    b.wait("!document.querySelector('#login-form').hidden")
+    # Wait for app.js initialization, not just static HTML (the login form starts visible).
+    b.wait("document.querySelector('#platform').textContent.includes('Client Interface')")
     b.eval("document.querySelector('#login-email').value = " + json.dumps(USER["email"]))
     b.eval("document.querySelector('#login-password').value = " + json.dumps(fake.password))
     b.click('#login-form button[type="submit"]')

@@ -275,7 +275,7 @@ def verify(args) -> int:
     check("signature_and_integrity", True, f"signed by {release.signer.key_id}; "
           f"{len(m.artifacts) + 1 + bool(m.runtime)} files match their SHA-256")
     check("official_signer", release.official, "an official NATURE AI release key" if release.official else
-          "NOT an official release key (no official key is published yet, see docs/RELEASES.md)")
+          "NOT an official NATURE AI release key (locally trusted signing key; see docs/RELEASES.md)")
     source = m.source or {}
     check("official_repository", source.get("repository") == OFFICIAL_REPOSITORY,
           f"source repository {source.get('repository')!r}")

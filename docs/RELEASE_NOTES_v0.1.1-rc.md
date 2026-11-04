@@ -12,4 +12,4 @@
 
 Upgrade the existing Windows 0.1.0 Standalone installation to 0.1.1 without wiping user data or workspace files. Verify task history, provider configuration, the existing `windows_rc_test.txt`, new `+` attachment behavior, Task Manager Details process identity, shutdown/relaunch, and uninstall behavior.
 
-This installer has an Ed25519-signed release manifest but **no Windows Authenticode signature**. Official release still requires a version-matching tag, signed-bundle provenance verification, publication, and outstanding licensing decisions. Never move the existing `v0.1.0` tag.
+This internal test build includes a verified Ed25519 release manifest. Official publication requires a version-matching tag, provenance verification, publication checks, and outstanding licensing decisions. Never move the existing `v0.1.0` tag.

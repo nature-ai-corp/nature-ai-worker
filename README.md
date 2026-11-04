@@ -44,7 +44,7 @@ Want something to try? The [sales report demo](examples/sales-report/) has a syn
 
 ### Windows installer (development builds)
 
-A per-user installer, `NatureAIWorker-Setup-<version>.exe`, brings its own pinned Python runtime and every dependency. It needs no Python, Git, WSL, Docker or administrator rights. It adds a Start-menu entry that starts the app and opens it in your browser, plus an Apps & Features entry. Uninstalling keeps your data and workspace; removing them is a separate, explicit Start-menu step. Upgrades go through the same verified, rolled-back-on-failure engine as `nature-worker-upgrade`. Only unsigned development builds exist so far: check the published SHA-256 before running one. See [docs/WINDOWS_STANDALONE_INSTALLER.md](docs/WINDOWS_STANDALONE_INSTALLER.md).
+A per-user installer, `NatureAIWorker-Setup-<version>.exe`, brings its own pinned Python runtime and every dependency. It needs no Python, Git, WSL, Docker or administrator rights. It adds a Start-menu entry that starts the app and opens it in your browser, plus an Apps & Features entry. Uninstalling keeps your data and workspace; removing them is a separate, explicit Start-menu step. Upgrades go through the same verified, rolled-back-on-failure engine as `nature-worker-upgrade`. Verify the published SHA-256 before running a downloaded installer. See [docs/WINDOWS_STANDALONE_INSTALLER.md](docs/WINDOWS_STANDALONE_INSTALLER.md).
 
 ### Option A: Python 3.11–3.14
 

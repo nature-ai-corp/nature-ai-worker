@@ -216,7 +216,9 @@ def stage(args) -> int:
                "--runtime", runtime, "--runtime-pin", PACKAGING / "runtime.json"]
         if version or args.worktree:
             cmd += ["--src", src]
-        if version:
+        if args.min_upgrade_from:
+            cmd += ["--min-upgrade-from", args.min_upgrade_from]
+        elif version:
             cmd += ["--min-upgrade-from", "0.1.0"]
         print(run(cmd).stdout.strip())
         licenses = out / "licenses"
@@ -472,6 +474,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--trust-key", type=Path, help="public key list the installed Worker trusts locally (dev builds)")
     p.add_argument("--runtime", type=Path, help="local copy of the pinned runtime archive (else downloaded)")
     p.add_argument("--notes", type=Path, help="release notes (default: a development-build note)")
+    p.add_argument("--min-upgrade-from", help="oldest installed version eligible for this staged upgrade")
     p.add_argument("--test-version", help="acceptance-test variant with this version")
     p.add_argument("--test-migration", action="store_true", help="test variant: one extra data migration")
     p.add_argument("--test-broken", action="store_true", help="test variant: the Worker fails to start")

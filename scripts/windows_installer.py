@@ -259,6 +259,7 @@ def stage(args) -> int:
     shutil.copyfile(PACKAGING / "NatureAIWorker.iss", out / "NatureAIWorker.iss")
     info = {"version": v, "commit": commit, "test_build": bool(version), "payload_sha256": defines["PayloadSha256"],
             "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
+            "min_upgrade_from": manifest["upgrade_from"]["min"],
             "runtime": pin, "wheels": len(manifest["artifacts"]), "trust_key": bool(args.trust_key)}
     (out / "build-info.json").write_text(json.dumps(info, indent=2) + "\n")
     print(f"Staged {out}: Nature AI Worker {v} from {commit}, payload sha256 {defines['PayloadSha256']}")

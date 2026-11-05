@@ -175,6 +175,7 @@ class Run:
         self.logs.mkdir()
         self.rows: list[dict] = []
         self.worker: subprocess.Popen | None = None
+        self.expected_configured = False
         self.port = 0
         self.installers = installers
         self.write(f"# Windows Standalone installer acceptance ({phase})\n\nStarted {time.strftime('%Y-%m-%d %H:%M:%S %z')} "
@@ -390,7 +391,15 @@ class Run:
             test = self.api("POST", "/api/settings/test", {"provider": "ollama", "model": model, "endpoint": ollama},
                             timeout=RUN_TIMEOUT)
             expect(test["ok"], f"connection test: {test}")
+            self.expected_configured = True
             detail += f"; Ollama configured, connection test: {test['message']}"
+        else:
+            # No model is needed to create a persistent history record. Verify that the
+            # upgrade and reinstall preserve it rather than testing an empty database.
+            conversation = self.api("POST", "/api/conversations")
+            expect(bool(conversation.get("id")) and self.conversations() == 1,
+                   f"could not seed model-independent conversation: {conversation}")
+            detail += "; model not configured; one empty conversation seeded for persistence checks"
         return detail
 
     def real_model(self) -> str:
@@ -456,10 +465,12 @@ class Run:
         expect(h["outcome"] == "succeeded", f"history {h}")
         version = self.start_worker()
         settings = self.api("GET", "/api/settings")
-        expect(version == "0.1.1+acceptance" and settings["configured"], f"{version} {settings.get('provider')}")
+        expect(version == "0.1.1+acceptance" and settings["configured"] == self.expected_configured,
+               f"{version}; configured={settings['configured']}, expected {self.expected_configured}")
         self.stop_worker()
         return (f"running Worker drained and stopped; 0.1.1+acceptance active, data schema 2, {conversations} "
-                f"conversations kept, settings kept (provider {settings['provider']}), backups {backups}")
+                f"conversations kept, configured={settings['configured']} preserved, "
+                f"provider {settings.get('provider')}, backups {backups}")
 
     def failed_upgrade_rolls_back(self) -> str:
         conversations = self.conversations()
@@ -523,7 +534,10 @@ class Run:
         settings = self.api("GET", "/api/settings")
         listed = self.api("GET", "/api/conversations")
         self.stop_worker()
-        expect(settings["configured"] and len(listed) == conversations, f"{settings.get('configured')} {len(listed)}")
+        expect(settings["configured"] == self.expected_configured and len(listed) == conversations
+               and conversations > 0,
+               f"configured={settings['configured']} expected={self.expected_configured}; "
+               f"conversations={len(listed)} expected={conversations}")
         return f"reinstalled 0.1.0 ({version}); adopted the kept data after backup {backups[-1]}: settings and {conversations} conversations"
 
     def sc_data_refused(self) -> str:

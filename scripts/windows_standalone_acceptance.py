@@ -607,6 +607,12 @@ class Run:
         (self.results / "snapshot-after.json").write_text(json.dumps(after, indent=2))
         leftovers = sorted(str(p) for p in NS.rglob("*")) if NS.exists() else []
         local_new = sorted(set(after["localappdata"]) - set(before["localappdata"]) - {"NatureAIWorkerAcceptance"})
+        # Inno Setup may create the per-user Programs parent directory. An empty
+        # parent is not Worker residue, but any file or subdirectory still fails.
+        if "Programs" in local_new:
+            programs = LOCAL / "Programs"
+            if programs.is_dir() and not any(programs.iterdir()):
+                local_new.remove("Programs")
         diffs = {k: (before[k], after[k]) for k in ("uninstall_keys", "start_menu", "platform_client", "settings_key")
                  if before[k] != after[k]}
         expect(not diffs, f"changed: {diffs}")

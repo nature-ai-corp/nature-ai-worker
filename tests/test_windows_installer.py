@@ -617,3 +617,28 @@ def test_windows_acceptance_without_model_seeds_history_and_keeps_settings_uncon
     assert created == ["test-id"]
     assert "one empty conversation seeded" in detail
 
+
+
+def test_windows_acceptance_residue_accepts_only_empty_programs_parent(tmp_path, monkeypatch):
+    """An empty Windows-created parent is harmless; actual residual content must fail."""
+    import windows_standalone_acceptance as driver
+
+    monkeypatch.setattr(driver, "LOCAL", tmp_path)
+    run = object.__new__(driver.Run)
+    run.results = tmp_path / "results"
+    run.results.mkdir()
+    before = {"uninstall_keys": [], "start_menu": [], "platform_client": {},
+              "settings_key": None, "localappdata": []}
+    (run.results / "snapshot-before.json").write_text(json.dumps(before))
+    monkeypatch.setattr(run, "uninstall", lambda: 0)
+    monkeypatch.setattr(driver.time, "sleep", lambda _: None)
+
+    programs = tmp_path / "Programs"
+    programs.mkdir()
+    after = {**before, "localappdata": ["Programs"]}
+    monkeypatch.setattr(run, "snapshot", lambda: after)
+    assert "uninstalled" in run.final_uninstall_and_residue()
+
+    (programs / "unexpected-file.txt").write_text("must be rejected")
+    with pytest.raises(driver.Fail, match="new folders"):
+        run.final_uninstall_and_residue()

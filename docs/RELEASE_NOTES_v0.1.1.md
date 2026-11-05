@@ -45,7 +45,7 @@ Nature AI Worker is licensed under Apache License 2.0. The installer includes li
 
 ## Publication checklist (maintainer-only, remove before publishing)
 
-- [ ] **Owner licensing decision:** existing Apache-2.0 permits free commercial redistribution; compulsory OEM/product-embedding fees would require a different prospective licensing model (not OSI open source) or a separately valuable proprietary OEM offering. See `docs/COMMERCIAL_DISTRIBUTION_POLICY_DRAFT.md`. Do not publish under conflicting terms.
+- [x] **Open-source licensing decision:** keep Apache-2.0; commercial redistribution remains allowed without mandatory fees. Nature AI Corp can offer optional paid OEM integration, support, branding permissions or separate proprietary components. Prefer third-party dependencies with no mandatory distribution royalties. See `docs/COMMERCIAL_DISTRIBUTION_POLICY_DRAFT.md`.
 - [ ] Confirm Windows binary redistribution terms, including Microsoft distributable runtime terms and OpenSSL notice review (see `docs/WINDOWS_LICENSE_REVIEW_v0.1.1.md`).
 - [ ] Review source copyright/ownership notices.
 - [ ] Select exact final release commit; rerun applicable tests after the final release-note changes.

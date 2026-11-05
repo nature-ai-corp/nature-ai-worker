@@ -517,6 +517,7 @@ def test_the_kit_upgrade_chain_is_eligible_so_the_broken_release_tests_the_rollb
         schema = max(int(n) for n in re.findall(r'^    \((\d+), "', (src / files[2]).read_text(), re.M))
         built[label] = (schema, "broken on purpose" in (src / files[1]).read_text())
     assert [label for label, _ in w.KIT_VARIANTS] == ["A", "B", "C"]
+    assert w.KIT_VARIANTS[0][1] == ["--test-version", "0.1.0"], "A must stay 0.1.0 when source advances"
     assert built["A"] == (1, False) and built["B"] == (2, False)
     schema_c, broken_c = built["C"]
     assert schema_c >= built["B"][0] and broken_c   # eligible after B, then fails to start

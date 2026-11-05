@@ -405,7 +405,8 @@ Leave the app closed, then run 4-finish.cmd.
 # The acceptance upgrade chain A -> B -> C. B migrates the data to schema 2, so C carries the same
 # migration: a release that does not know the data's schema is (rightly) not eligible, and C must
 # install and then fail to start, to test the automatic rollback.
-KIT_VARIANTS = (("A", []), ("B", ["--test-version", "0.1.1+acceptance", "--test-migration"]),
+KIT_VARIANTS = (("A", ["--test-version", "0.1.0"]),
+                ("B", ["--test-version", "0.1.1+acceptance", "--test-migration"]),
                 ("C", ["--test-version", "0.1.2+broken", "--test-migration", "--test-broken"]))
 
 KIT_FILES = ("README.txt", "1-build-installers.cmd", "2-acceptance.cmd", "3-UI-CHECKLIST.txt", "4-finish.cmd",

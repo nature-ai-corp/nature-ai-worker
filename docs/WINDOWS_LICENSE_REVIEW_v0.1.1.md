@@ -29,6 +29,21 @@ Inspected the release branch's pinned inputs and installer source rather than in
 
 **Scope of review:** repository source and upstream policy documents; **not** a binary-level disassembly/extraction or a legal sign-off. This review does not establish any per-copy royalty or mandatory Microsoft fee.
 
+## Actual Windows RC staging evidence (owner PowerShell, 2026-11-05)
+
+The maintainer inspected the **existing** staging directory at `C:\\Users\\aiuser\\nature-ai-worker-release\\dist\\windows-rc-stage-0.1.1` on the AI Worker Computer (read-only; no rebuild, no key access).
+
+| Staged path | Measured bytes |
+| --- | ---: |
+| `licenses/LICENSE.txt` | 11,560 |
+| `licenses/NOTICE.txt` | 1,320 |
+| `licenses/THIRD_PARTY.md` | 5,856 |
+| `licenses/THIRD_PARTY_LICENSES.txt` | 378,108 |
+
+`THIRD_PARTY_LICENSES.txt` includes `Additional Conditions for this Windows binary build` at line 298; Microsoft Distributable Code language at lines 301–302; and the downstream-distributor / external-end-user requirement at lines 309–310. A search showed no separate Inno Setup informational or third-party license page: the staged `NatureAIWorker.iss` has `LicenseFile=licenses\\LICENSE.txt` at line 42 and no `InfoBeforeFile=` / `InfoAfterFile=` entries.
+
+**Evidence-backed verdict:** the Microsoft restrictions **are included in the actual staged license payload**. Whether current installer presentation constitutes the required downstream contractual agreement and whether this exact CPython distribution grants sufficient Microsoft runtime redistribution rights remain **open**. This confirms staging files, **not** byte-for-byte inspection of the compiled Setup EXE or the actual click-through UI. No recommendation to replace Python or buy a license without further legal/source verification.
+
 ## Microsoft Windows runtime redistribution
 
 The project-specific review in `docs/WINDOWS_STANDALONE_INSTALLER.md` notes that the pinned CPython Windows `LICENSE.txt` includes special terms concerning Microsoft Distributable Code. The installer currently displays Apache-2.0 as its setup license and separately installs the bundled third-party license texts. It has **not yet been established** that this satisfies the Microsoft-specific condition requiring protective terms for downstream distributors and external users.

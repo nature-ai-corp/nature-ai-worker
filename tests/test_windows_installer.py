@@ -584,3 +584,35 @@ def test_windows_011_rc_allows_upgrade_from_010_and_records_release_manifest_flo
     assert "--min-upgrade-from 0.1.0 --out $StageDir" in rc_script
     assert "$info.min_upgrade_from -ne '0.1.0'" in rc_script
 
+
+
+def test_windows_acceptance_without_model_seeds_history_and_keeps_settings_unconfigured(monkeypatch):
+    """No-model acceptance still exercises real conversation persistence across upgrades."""
+    import windows_standalone_acceptance as driver
+
+    run = object.__new__(driver.Run)
+    run.expected_configured = False
+    monkeypatch.setattr(run, "start_worker", lambda: "0.1.0")
+
+    class Html:
+        def read(self):
+            return b"<html>Worker</html>"
+
+    monkeypatch.setattr(driver.urllib.request, "urlopen", lambda *args, **kwargs: Html())
+    created = []
+
+    def api(method, path, body=None, timeout=None):
+        if (method, path) == ("GET", "/api/settings"):
+            return {"configured": False, "providers": ["ollama"]}
+        if (method, path) == ("POST", "/api/conversations"):
+            created.append("test-id")
+            return {"id": "test-id"}
+        raise AssertionError((method, path))
+
+    monkeypatch.setattr(run, "api", api)
+    monkeypatch.setattr(run, "conversations", lambda: len(created))
+    detail = run.launch_and_configure(None, "unused-model")
+    assert run.expected_configured is False
+    assert created == ["test-id"]
+    assert "one empty conversation seeded" in detail
+

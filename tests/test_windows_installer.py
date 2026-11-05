@@ -592,6 +592,7 @@ def test_windows_acceptance_without_model_seeds_history_and_keeps_settings_uncon
 
     run = object.__new__(driver.Run)
     run.expected_configured = False
+    run.port = 63147  # isolated unit-test stub; no network request is made
     monkeypatch.setattr(run, "start_worker", lambda: "0.1.0")
 
     class Html:

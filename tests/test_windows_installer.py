@@ -569,3 +569,17 @@ def test_kit_refresh_refuses_other_folders(tmp_path):
     with pytest.raises(SystemExit, match="not an acceptance kit"):
         w.main(base + ["--refresh"])
     assert (other / "keep.txt").read_text() == "mine"
+
+
+def test_windows_011_rc_allows_upgrade_from_010_and_records_release_manifest_floor():
+    """Regression: the original 0.1.1 RC incorrectly required 0.1.1 as the minimum."""
+    import windows_installer
+
+    stage_source = Path(windows_installer.__file__).read_text(encoding="utf-8")
+    rc_script = (REPO / "scripts" / "windows_rc_stage.ps1").read_text(encoding="utf-8")
+    assert 'p.add_argument("--min-upgrade-from"' in stage_source
+    assert 'cmd += ["--min-upgrade-from", args.min_upgrade_from]' in stage_source
+    assert '"min_upgrade_from": manifest["upgrade_from"]["min"]' in stage_source
+    assert "--min-upgrade-from 0.1.0 --out $StageDir" in rc_script
+    assert "$info.min_upgrade_from -ne '0.1.0'" in rc_script
+

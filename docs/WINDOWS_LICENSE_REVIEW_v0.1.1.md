@@ -44,6 +44,18 @@ The maintainer inspected the **existing** staging directory at `C:\\Users\\aiuse
 
 **Evidence-backed verdict:** the Microsoft restrictions **are included in the actual staged license payload**. Whether current installer presentation constitutes the required downstream contractual agreement and whether this exact CPython distribution grants sufficient Microsoft runtime redistribution rights remain **open**. This confirms staging files, **not** byte-for-byte inspection of the compiled Setup EXE or the actual click-through UI. No recommendation to replace Python or buy a license without further legal/source verification.
 
+## Exact Microsoft conditions extracted from staged license (owner PowerShell, 2026-11-05)
+
+The maintainer provided the full text of the `Additional Conditions for this Windows binary build` section from `dist/windows-rc-stage-0.1.1/licenses/THIRD_PARTY_LICENSES.txt` (displayed using PowerShell `$lines[294..335]`). The excerpt states:
+
+- The program is linked with Microsoft Distributable Code, embedded in compiled `.exe`, `.dll` and `.pyd` artifacts.
+- Further distributors **must comply with Microsoft distribution restrictions** and **require downstream distributors and external end users to agree to terms protecting Microsoft Distributable Code at least as much as Microsoft's requirements**.
+- Restrictions described include retaining copyright/trademark/patent notices; not suggesting Microsoft endorsement; distributing code only for allowed Microsoft platforms; and not incorporating the code in malicious, deceptive or unlawful programs.
+- The section expressly limits these conditions to Microsoft Distributable Code, **not to Python itself or software running on it**.
+- The section says redistribution of the Windows binary Python interpreter complies with this agreement **provided its listed restrictions are observed**. It does not state a per-install or per-download royalty.
+
+**Verified engineering conclusion:** required license **text is present** in the staged RC files; the installer currently displays only `licenses/LICENSE.txt` (Apache-2.0) for agreement. **Still open:** the actual applicable contractual protections for the downstream user, which installation/user flows must show acceptance, and entitlement provenance of bundled Microsoft runtime components. Avoid declaring legal compliance solely from this excerpt. Consider a separate, appropriately scoped third-party terms acceptance after rights/legal review, with targeted interactive/silent installer testing if implemented. Do not alter Apache-2.0 scope.
+
 ## Microsoft Windows runtime redistribution
 
 The project-specific review in `docs/WINDOWS_STANDALONE_INSTALLER.md` notes that the pinned CPython Windows `LICENSE.txt` includes special terms concerning Microsoft Distributable Code. The installer currently displays Apache-2.0 as its setup license and separately installs the bundled third-party license texts. It has **not yet been established** that this satisfies the Microsoft-specific condition requiring protective terms for downstream distributors and external users.

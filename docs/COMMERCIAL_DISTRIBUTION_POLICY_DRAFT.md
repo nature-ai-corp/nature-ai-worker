@@ -1,32 +1,32 @@
-# Nature AI Worker — Commercial Product Redistribution Policy (Decision Draft)
+# Nature AI Worker — Open-Source and Optional OEM Commercial Policy
 
-> **OWNER INTENT, NOT YET IMPLEMENTED (2026-11-05).** Nature AI Corp wants individuals and companies to be able to use Nature AI Worker directly without a compulsory fee, **but wants companies that embed, repackage, bundle or redistribute Nature AI Worker inside their own products to pay NATURE AI CORP for a commercial distribution/OEM license.** This is a revenue model, not a request to pay vendors for distribution.
+> **Owner direction (2026-11-05):** Keep Nature AI Worker under Apache-2.0 as genuine open source. Offer optional paid OEM arrangements for separate value (support, certification, branding, proprietary components or custom integration). Do not charge mandatory fees for using or redistributing Apache-licensed code. Prefer upstream open-source components that allow use and redistribution without mandatory licensing or per-copy fees.
 
-## Existing licensing conflict
+## Open-source permissions
 
-Current repository source, metadata and distributed artifacts declare **Apache License 2.0**. Apache-2.0 allows anyone to use, modify and **redistribute Nature AI Worker as part of a commercial product without a mandatory royalty**, subject to attribution and other license conditions. NATURE AI CORP cannot use additional policy text to impose a mandatory OEM fee on already licensed Apache-2.0 copies, and future relicensing (if permitted by rights ownership) would not revoke rights already granted. The [Open Source Definition](https://opensource.org/osd) also prohibits mandatory royalties for redistributed components (§1).
+- Individuals and companies may use, modify, bundle, embed and commercially redistribute Apache-2.0 Worker, subject to Apache notices and terms.
+- Third-party distributors have no obligation to purchase an OEM license merely to exercise Apache-2.0 rights.
+- No change to existing LICENSE, NOTICE, SPDX headers or package license metadata is authorized or needed for this policy.
 
-Therefore the exact desired restriction and **OSI-approved open source** cannot both apply to the same released software under a single license.
+## Optional paid commercial offerings
 
-## Options for an explicit owner decision
+Nature AI Corp may separately offer and price:
 
-| Policy model | Personal/direct business use | Third-party incorporation/redistribution in commercial products | Open-source status |
-| --- | --- | --- | --- |
-| **A — retain Apache-2.0** | Free | Free as a license right; optionally sell separate OEM services, warranties, official branding, proprietary components, or distribution support | OSI open source |
-| **B — prospective free-use + commercial redistribution license** | Free under explicit limited source-available terms | Requires commercial/OEM agreement and license fees | **Not OSI open source** for the restricted code |
-| **C — prospective dual offering** | Open edition under Apache-2.0 remains free | A distinct proprietary edition, functionality, official OEM package, or additional service offered under paid agreement; Apache edition still freely redistributable | Apache edition remains open source; OEM fee applies only to value not already licensed for free |
+1. OEM integration, custom deployment, testing and distribution assistance.
+2. Technical support, update commitments, training, warranty or service-level agreements.
+3. Optional proprietary functionality, enterprise Platform connectivity services, or custom components under separately agreed terms.
+4. Authorized co-branding, certification marks or other trademark permissions beyond ordinary attribution and nominative use.
 
-**Key distinction:** dual licensing the **same identical source** under Apache-2.0 and an optional paid commercial license cannot, by itself, force all commercial distributors to buy the paid license: they can choose Apache-2.0. A compulsory payment for embedding the same code requires prospective restrictions (option B), or valuable proprietary assets/contract benefits beyond Apache rights (option C).
+Paid agreements must not imply that existing Apache rights require payment. Trademark arrangements cannot restrict license-permitted software redistribution itself.
 
-## Before changing the license
+## Upstream dependency policy
 
-1. Identify all copyright holders and contributor grants/assignments; confirm Nature AI Corp has the rights to apply the new terms to any future release.
-2. Distinguish **ordinary use, hosting a private internal service, customization for own use, embedding into another downloadable product, physical OEM bundling, white-label distribution, SaaS offering, and trademark/official-brand usage**. Define which are free and which require payment.
-3. Decide whether being an **OSI-approved open-source project** is more important than compulsory OEM fees on the identical code. Be accurate in public claims.
-4. Have counsel review the prospective commercial/source-available agreement, existing Apache rights, third-party software licenses, enforceability, and customer notice/acceptance.
-5. Only after owner approval, adjust LICENSE, source SPDX headers, NOTICE, pyproject metadata, README, trademarks guidance, release notes and installer legal terms consistently; test a new packaging build.
-6. Do not change historical tags or claim that a new license retroactively restricts earlier Apache versions.
+- Prefer upstream libraries and build tools with licenses permitting **free-of-charge use and redistribution**, including commercial redistribution, while satisfying their license conditions.
+- A permissive or OSI-approved license does not eliminate notice, patent, attribution, source-availability, or other compliance obligations; verify actual binaries and all transitive dependencies.
+- Avoid mandatory paid redistribution licenses or per-copy royalties. If an indispensable dependency requires payment, pause the addition for separate owner approval and an alternative evaluation.
+- Optional vendor support/contributor-sponsorship/license purchases are voluntary, not preapproved. This includes Inno Setup's requested commercial-use purchase, which is not strictly required per its published licensing FAQ.
+- Preserve the ongoing Windows binary license review for Microsoft runtime redistribution terms and OpenSSL notices. Compliance obligations may require packaging or end-user terms even when there is no license fee.
 
-## Release gate
+## Release decision
 
-**Do not publish v0.1.1 or change repository visibility until the owner chooses the licensing approach.** The existing private release candidate can continue to be tested. Draft policy text is not a license and imposes no new conditions by itself.
+**Apache-2.0 remains the selected license**. The previously proposed mandatory-paid-redistribution/source-available alternative is not selected. Before publishing v0.1.1, complete the independent binary redistribution legal review, exact tag/source/build verification and owner approval of repository visibility/publication. No price, purchase, official release or visibility change is made by this document.

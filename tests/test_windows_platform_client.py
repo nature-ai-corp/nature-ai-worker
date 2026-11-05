@@ -972,7 +972,11 @@ def test_native_service_profile_inspection_is_read_only():
             raise AssertionError("an inspection must never delete")
 
     system = NoDelete()
-    assert system.user_hive_loaded("S-1-5-19") is True
+    try:
+        loaded = system.user_hive_loaded("S-1-5-19")
+    except PermissionError:
+        pytest.skip("Windows denies non-admin read access to the LocalService registry hive")
+    assert loaded is True
     assert system.user_hive_loaded("S-1-5-80-0-0-0-0-1") is False
     profile = windows_profile.inspect(system, "LocalService", "S-1-5-19", service_registered=False,
                                       data_kept=False)

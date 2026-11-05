@@ -4,10 +4,10 @@ A per-user Windows installer for Nature AI Worker (Standalone), built with Inno 
 no Python, Git, WSL, Docker or administrator rights on the target computer.
 
 > **Status (2026-11-03):** the official Ed25519 release public key (`64ecfc2da2ed12e9`) is
-> registered in the release-candidate source, but no signed official release has been built,
-> verified and published. The Windows installer still has no Authenticode certificate. The
-> existing `v0.1.0` tag points to an earlier commit than this RC branch; do not publish this
-> branch's build as `v0.1.0` without resolving the source/tag mismatch. See
+> registered in the release-candidate source, but no official release has completed
+> verification and publication. The existing `v0.1.0` tag points to an earlier commit
+> than this RC branch; do not publish this branch's build as `v0.1.0` without resolving
+> the source/tag mismatch. See
 > [Release blockers](#release-blockers), [RELEASES.md](RELEASES.md) and
 > [VERIFICATION.md](VERIFICATION.md).
 
@@ -126,9 +126,9 @@ Platform Client data.
 
 ## Trust
 
-- **First installation:** the trust root is the installer file itself. Development builds are
-  unsigned, so compare its SHA-256 with the published value. The manifest signature is still
-  checked, by the upgrader shipped in the same installer.
+- **First installation:** verify the published SHA-256 of the installer file before
+  installation. The embedded release manifest signature is also checked by the
+  upgrader shipped in the same installer.
 - **Upgrades:** the installed upgrader's rules apply. Upgrades through a newer installer are
   verified by the release's own engine, against the keys the installation trusts.
 - **Development builds:** these are signed with a development key. The installer passes its
@@ -222,7 +222,7 @@ Record the build commit, bundle signature verification, installer SHA-256
 and **actual install/uninstall results on the separate Testing Computer**.
 Never upload the private key, passphrase, or this development EXE as a
 claimed official release. Before real publication, resolve the version/tag
-provenance, native acceptance, Authenticode and licensing blockers.
+provenance, native acceptance and licensing checks.
 
 ## Licenses
 
@@ -244,8 +244,6 @@ The build fails if a wheel has neither a license file nor a declared license.
   bundle has passed all checks in [RELEASES.md](RELEASES.md). The existing `v0.1.0` tag is on an
   earlier commit than the RC branch. A release needs a distinct, matching version/tag and verified
   manifest/source provenance before publication; do not move or overwrite an existing tag.
-- **Authenticode code signing:** none, so SmartScreen warns and the installer's own integrity rests
-  on the published SHA-256.
 - **Legal review:** see [Licensing review](#licensing-review) (Microsoft runtime terms, Inno
   Setup commercial-use request).
 - **Native evidence on the current revision:** see VERIFICATION.md. Every result there names

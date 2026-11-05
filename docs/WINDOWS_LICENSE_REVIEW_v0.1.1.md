@@ -1,6 +1,6 @@
 # Windows v0.1.1 Binary Distribution License Review (Internal Draft)
 
-**Status:** Preliminary engineering review, not legal advice or permission to publish. The maintainer is willing to consider reasonable legitimate fees needed for lawful distribution; this does not authorize an automatic purchase or change any billing settings.
+**Status:** Preliminary engineering review, not legal advice or permission to publish. **Owner clarification (2026-11-05):** the business goal is to **charge third-party distributors/OEMs who embed or redistribute Nature AI Worker inside their own commercial products**. This is revenue to NATURE AI CORP, **not** a statement that NATURE AI CORP wishes to buy software distribution tools. Existing Apache-2.0 recipients may already redistribute commercially without paying; do not imply these rights can be retroactively revoked. No purchase, pricing model, or license change has been approved.
 
 ## Inventory of distributed materials
 
@@ -23,9 +23,9 @@ The project-specific review in `docs/WINDOWS_STANDALONE_INSTALLER.md` notes that
 
 ## Inno Setup commercial-use fees
 
-The [Inno Setup order and licensing FAQ](https://jrsoftware.org/isorder.php) asks commercial users to purchase licenses, but states that they are **not strictly required**. This is a request, not an identified per-download royalty or compulsory distribution fee. The company may choose to purchase a license in support of the tool once production deployment is planned. Track the decision, but do not represent the purchase as legally mandatory.
+The [Inno Setup order and licensing FAQ](https://jrsoftware.org/isorder.php) asks commercial users to purchase licenses, but states that they are **not strictly required**. This is a request, not an identified per-download royalty or compulsory distribution fee. Inno Setup fees concern payments **by the publisher to the installer vendor**, not OEM licensing revenue. This is separate from the owner's intended licensing business model. Do not represent Inno Setup purchase as legally mandatory.
 
-Any future purchase requires separate explicit owner approval. It does not require paying for Microsoft Artifact Signing, GitHub Actions or other unrelated services.
+No optional tool purchase is authorized. This license review does not determine the separate commercial redistribution policy.
 
 ## OpenSSL NOTICE verification
 
@@ -41,4 +41,4 @@ OpenSSL 3 is Apache-2.0 licensed. The bundled runtime license set includes the O
 - [ ] Record approved final release source commit/tag, package and manifest SHA-256, download destination, and release-owner sign-off.
 - [ ] Keep any test/model secrets, signing private keys and user backups off public GitHub releases.
 
-**Decision posture:** reasonable actual distribution costs are acceptable to evaluate; avoid recurring unnecessary costs, and do not add a mandatory paid signing prerequisite without a concrete distribution need and separate approval.
+**Commercial distribution policy gate:** before official public release, owners should decide between (a) keeping Apache-2.0 and offering optional paid OEM/commercial services or additional proprietary components, or (b) prospective dual-licensing/source-available terms that require a commercial agreement for third-party product embedding and redistribution. Under (b) ordinary use can remain free, but the restricted source would **not** be OSI open source. Copyright ownership, third-party dependencies, contributor rights and already-granted Apache-2.0 rights need legal review. Do not rewrite existing LICENSE/NOTICE without explicit owner decision; see `docs/COMMERCIAL_DISTRIBUTION_POLICY_DRAFT.md`.

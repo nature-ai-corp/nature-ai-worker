@@ -15,6 +15,20 @@ The Windows Standalone installer contains CPython 3.12.15 (python-build-standalo
 | Inno Setup engine | Inno Setup license, attribution in NOTICE | **Review complete on fee distinction; no mandatory purchase identified** |
 | OpenSSL 3 | Apache-2.0 license text included; any upstream NOTICE file still needs source verification | **OPEN: notice review** |
 
+## Actual packaging/code inspection (2026-11-05)
+
+Inspected the release branch's pinned inputs and installer source rather than inferring from generic licensing notes:
+
+- `packaging/windows/runtime.json` pins the **exact** `python-build-standalone` Windows x64 CPython **3.12.15**, release `20261009`, `install_only_stripped` archive, SHA-256 `11ed9f8a6ac64fb1b5a55e40e305a6744a3f77a70863c8f8197a6e4349abc64a`.
+- `scripts/windows_installer.py::license_texts()` reads `python/LICENSE.txt` **from that runtime archive** and appends files under `packaging/windows/runtime-licenses/`, plus license material found inside the pinned dependency wheels. It stages a generated `licenses/THIRD_PARTY_LICENSES.txt` alongside `LICENSE.txt`, `NOTICE.txt`, and `THIRD_PARTY.md`.
+- `packaging/windows/NatureAIWorker.iss` has **only** `LicenseFile=licenses\\LICENSE.txt` (the Worker's Apache-2.0 license). It copies `licenses/*` into the app directory and provides a Start-menu `Licenses` shortcut. No separate Microsoft terms acceptance page or third-party `InfoBeforeFile`/license gate is configured in the inspected source.
+- The applicable upstream **CPython 3.12.15** additional conditions at https://github.com/python/cpython/blob/v3.12.15/PC/crtlicense.txt explicitly state that distributors must require downstream distributors and external end users to agree to terms protective of Microsoft Distributable Code. Microsoft's current Visual C++ redistribution guide https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files says redistribution is subject to software license terms and limited to licensed Visual Studio users; **that guide alone does not establish whether the specific third-party prebuilt python-build-standalone artifact grants this publisher sufficient downstream rights**.
+- The installer already **includes the applicable text** in generated third-party licenses, but **agreement/acceptance and runtime distribution entitlement remain unverified**. Do not mark compliant or assume adding a check box alone cures entitlement.
+- **Next evidence required:** extract the **exact staged** `python/LICENSE.txt`, identify bundled Microsoft runtime file versions/provenance, inspect the installer license screen and its silent-install behavior, and determine appropriate protective downstream terms with rights/legal review. If necessary, change installer wording/acceptance and retest with an actual staged build; no code change has yet been made.
+- OpenSSL 3 is Apache-2.0 under its official project licensing page https://openssl-library.org/source/license/index.html. The pinned Windows OpenSSL license text is included, but the exact runtime/OpenSSL third-party notice inventory remains unverified.
+
+**Scope of review:** repository source and upstream policy documents; **not** a binary-level disassembly/extraction or a legal sign-off. This review does not establish any per-copy royalty or mandatory Microsoft fee.
+
 ## Microsoft Windows runtime redistribution
 
 The project-specific review in `docs/WINDOWS_STANDALONE_INSTALLER.md` notes that the pinned CPython Windows `LICENSE.txt` includes special terms concerning Microsoft Distributable Code. The installer currently displays Apache-2.0 as its setup license and separately installs the bundled third-party license texts. It has **not yet been established** that this satisfies the Microsoft-specific condition requiring protective terms for downstream distributors and external users.

@@ -57,6 +57,18 @@
 
 **Release gate:** Public visibility, public tag/release assets and published downloads remain blocked until the two explicit BLOCKER findings above are resolved and the remaining positive-allowlist reviews are completed. Record PASS/FAIL/NOT EXECUTED evidence with the exact reviewed commit, without publishing sensitive findings.
 
+## Evidence update — verified on owner's Windows computer (2026-11-05 21:20 EST)
+
+Owner-provided PowerShell output for commit `9f15f9cb3d3b10a258e062ebda54efe6dcd2b491` on `fix/repo-history-sensitive-content-audit`:
+
+- `WORKTREE : PASS`
+- `REGRESSION : PASS`
+- `HISTORY AUDIT : PASS for all refs in this local clone`
+- `CONTRACT COMPARE : NOT EXECUTED (authoritative committed Platform contract not supplied)`
+- Raw reports kept privately at `dist/private-release-preflight-20261105-212038` (not included in public source/release assets).
+
+**Interpretation:** the history-scan implementation is validated against the owner's local refs, with zero findings after narrowing the audited legacy RC warning and two historical test-example false positives. Recheck after final merges and fetch all refs intended for public publication. The authoritative committed Platform contract comparison remains a separate mandatory blocker, not a PASS.
+
 ## Accelerated controlled Windows preflight
 
 On AI Worker Computer, fetch the latest `fix/repo-history-sensitive-content-audit` branch, then run `powershell -ExecutionPolicy Bypass -File .\\scripts\\windows_release_preflight.ps1`. It executes the new regression tests and repository checks including `--history`, keeps potentially sensitive raw output in a local gitignored `dist/private-release-preflight-*` folder, and prints a safe high-level summary. For a contract comparison, provide an **authorized local path** to the Platform's committed v1.3 JSON with `-CommittedPlatformContract`; this script never copies it into the Worker repository. **Not executed** until run on the owner's Windows computer. A green scan covers refs in the actual local clone; review all remote/publication refs before public release. A comparison is **not** verified merely because the optional path was omitted.

@@ -1,6 +1,4 @@
-# Nature AI Worker v0.1.1 — Release Notes (Draft)
-
-> **DRAFT — NOT PUBLISHED.** This document is the candidate user-facing release note for Windows-first Standalone v0.1.1. No final `v0.1.1` tag, official release bundle or GitHub Release has been published. Final download links, release SHA-256 and provenance must be inserted **after** building and validating the release from its final tag/commit.
+# Nature AI Worker v0.1.1 — Release Notes
 
 ## Highlights
 
@@ -11,11 +9,11 @@
 
 ## Windows validation performed
 
-The maintainer tested a private Windows release candidate on separate Windows computers and a dedicated, disposable local Windows account:
+The maintainer tested the Windows source and private release candidate on separate Windows computers, including a dedicated, disposable local Windows account. The final source commit used for release qualification must match the tagged source:
 
 | Check | Result |
 | --- | --- |
-| Full local Python suite on the validated release-line revision | **622 passed, 64 skipped, 0 failed** |
+| Full local Python suite on the validated release-line revision | **624 passed, 64 skipped, 0 failed** |
 | Standalone fresh install, named process and local app startup | **PASS** |
 | OpenAI `gpt-4.1-mini` task with `+` upload and real file read | **PASS** |
 | Real installed 0.1.0 to 0.1.1 in-place upgrade; original workspace file and past work retained | **PASS** |
@@ -37,20 +35,8 @@ Evidence references: isolated Windows reports `acceptance-auto-20261105-161025.m
 
 ## Download verification
 
-**Pending official release.** The final download filename, SHA-256 digest, release tag and matching source commit will be recorded here only after the final package is built and its signature, integrity and provenance have been verified.
+Download the Windows installer from the official GitHub Release associated with the `v0.1.1` tag. Check its SHA-256 against the digest published alongside the release assets. Official release bundles must carry a valid Ed25519 manifest signed by a key included in `src/nature_worker/upgrade/release_keys.json`; verify the manifest's source commit matches the immutable release tag. **Do not use an internal RC installer as an official release download.**
 
 ## Open-source license
 
 Nature AI Worker is licensed under Apache License 2.0. The installer includes license and attribution files for the shipped Python runtime and third-party libraries. See `LICENSE`, `NOTICE`, `THIRD_PARTY.md` and the installed `licenses` directory.
-
-## Publication checklist (maintainer-only, remove before publishing)
-
-- [x] **Open-source licensing decision:** keep Apache-2.0; commercial redistribution remains allowed without mandatory fees. Nature AI Corp can offer optional paid OEM integration, support, branding permissions or separate proprietary components. Prefer third-party dependencies with no mandatory distribution royalties. See `docs/COMMERCIAL_DISTRIBUTION_POLICY_DRAFT.md`.
-- [ ] Confirm Windows binary redistribution terms, including Microsoft distributable runtime terms and OpenSSL notice review (see `docs/WINDOWS_LICENSE_REVIEW_v0.1.1.md`).
-- [ ] Review source copyright/ownership notices.
-- [ ] Select exact final release commit; rerun applicable tests after the final release-note changes.
-- [ ] Create immutable `v0.1.1` tag at the verified manifest source commit (never move `v0.1.0`).
-- [ ] Rebuild official Ed25519-signed release bundle and installer against the chosen source/tag; verify manifest signature, file hashes and version provenance.
-- [ ] Record final installer SHA-256 and working download links. Do not use the old private RC digest as a final public release artifact.
-- [ ] Explicitly approve repository visibility and GitHub Release publication.
-

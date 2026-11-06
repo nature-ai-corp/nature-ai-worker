@@ -57,6 +57,10 @@
 
 **Release gate:** Public visibility, public tag/release assets and published downloads remain blocked until the two explicit BLOCKER findings above are resolved and the remaining positive-allowlist reviews are completed. Record PASS/FAIL/NOT EXECUTED evidence with the exact reviewed commit, without publishing sensitive findings.
 
+## Accelerated controlled Windows preflight
+
+On AI Worker Computer, fetch the latest `fix/repo-history-sensitive-content-audit` branch, then run `powershell -ExecutionPolicy Bypass -File .\\scripts\\windows_release_preflight.ps1`. It executes the new regression tests and repository checks including `--history`, keeps potentially sensitive raw output in a local gitignored `dist/private-release-preflight-*` folder, and prints a safe high-level summary. For a contract comparison, provide an **authorized local path** to the Platform's committed v1.3 JSON with `-CommittedPlatformContract`; this script never copies it into the Worker repository. **Not executed** until run on the owner's Windows computer. A green scan covers refs in the actual local clone; review all remote/publication refs before public release. A comparison is **not** verified merely because the optional path was omitted.
+
 ## Release preparation
 
 1. Confirm `docs/RELEASE_NOTES_v0.1.1.md` is the finished public-facing note, with no claims for unexecuted model scenarios. Keep internal checklists separate from user release text.

@@ -177,7 +177,7 @@
           <span class="muted small">Only this repository is allowed; the agent cannot choose another one. Empty uses the default, <span id="s-github-default-repo">nature-ai-corp/nature-ai-worker</span>.</span>
         </label>
         <label class="check"><input id="s-github" type="checkbox"> Allow reading Issues and Discussions of <span id="s-github-repo">nature-ai-corp/nature-ai-worker</span> (read-only)</label>
-        <label id="s-github-token-row">GitHub token (optional; needed for Discussions)
+        <label id="s-github-token-row">Read-only GitHub token (optional; needed for Discussions). Never your posting token.
           <input id="s-github-token" type="password" autocomplete="off" spellcheck="false">
           <span id="s-github-token-status" class="muted small"></span>
           <span class="muted small">Use a fine-grained token with access to public repositories only (read-only), or a classic token with no scopes. A token that could write is refused. It is stored encrypted, sent only to api.github.com and never shown to the model.</span>

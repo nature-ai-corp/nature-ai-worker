@@ -115,7 +115,8 @@ def check_write_token(token: str, repo: str) -> str:
     if not valid_write_token(token):
         raise ToolError("Only a fine-grained personal access token (github_pat_...) can be used to post.")
     status, headers, content = gc._send("GET", f"{gc.API_HOST}/user", token=token)
-    if "x-oauth-scopes" in headers:
+    # Fine-grained tokens report no OAuth scopes; a classic token lists its scopes here.
+    if headers.get("x-oauth-scopes", "").strip():
         raise ToolError("Classic tokens cannot be limited to one repository; use a fine-grained token.")
     gc._check_status(status, headers, "user")
     if not headers.get("github-authentication-token-expiration"):

@@ -103,3 +103,38 @@ def test_exact_audited_legacy_rc_warning_is_benign_but_other_markers_are_not(mon
     # A modified warning at that line is NOT exempted.
     altered = text.replace(b"do not " + b"distribute", b"confidential " + b"and proprietary")
     assert len(scan(blob_id, "scripts/windows_rc_stage.ps1", altered)) == 2
+
+
+
+def test_historical_scanner_fixture_exceptions_are_exact(monkeypatch):
+    checker = _load_checker()
+    cases = [
+        ("ee47d4becfe7eac6c07052e8ad0535651f6797cb",
+         "scripts/repo_checks.py", 176, "do not " + "distribute this build."),
+        ("42df192b2f318d92886d69e616986665042e0d9b",
+         "tests/test_repo_history_scanning.py", 79, "confidential " + "and proprietary"),
+    ]
+
+    def scan(oid, path, body):
+        def fake_run(args, **kwargs):
+            command = " ".join(args)
+            if "rev-list" in command:
+                return SimpleNamespace(stdout=oid + " " + path + "\n")
+            if "cat-file -t" in command:
+                return SimpleNamespace(stdout="blob\n")
+            if "cat-file blob" in command:
+                return SimpleNamespace(stdout=body)
+            raise AssertionError(command)
+        monkeypatch.setattr(checker.subprocess, "run", fake_run)
+        result = checker.Findings()
+        checker.check_history(result)
+        return [kind for kind, _, _ in result]
+
+    for oid, path, line, phrase in cases:
+        content = (("\n" * (line - 1)) + phrase + "\n").encode()
+        assert scan(oid, path, content) == []
+        assert scan("c" * 40, path, content) == ["history-confidential"]
+        assert scan(oid, "docs/other.py", content) == ["history-confidential"]
+        changed = content.replace(phrase.encode(), b"confidential " + b"and proprietary")
+        if changed != content:
+            assert scan(oid, path, changed) == ["history-confidential"]

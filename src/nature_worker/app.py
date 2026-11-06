@@ -26,7 +26,8 @@ from .transition_cleanup import require_no_failed_sc_residue
 from .credentials import CredentialStore
 from .db import Database
 from .providers import PROVIDERS, ProviderError, effective_endpoint, make_provider
-from .tools import TOOLS, ToolContext, ToolError, github_community
+from .github_outbox import Outbox
+from .tools import TOOLS, ToolContext, ToolError, github_community, github_write
 from .tools.workspace import Workspace
 from .templates import load_templates
 from .work import summarize
@@ -49,6 +50,10 @@ class SettingsIn(BaseModel):
     github_enabled: bool = False
     github_token: str | None = Field(default=None, max_length=255)  # write-only; None/"" keeps the stored token
     clear_github_token: bool = False
+    # The separate GitHub write (one approved Issue comment at a time): its own switch and token.
+    github_write_enabled: bool = False
+    github_write_token: str | None = Field(default=None, max_length=255)  # write-only
+    clear_github_write_token: bool = False
     max_steps: int = Field(default=DEFAULT_MAX_STEPS, ge=1, le=100)
     # Ollama only: the context window to request (num_ctx). None: the Ollama server's default.
     context_window: int | None = Field(default=None, ge=2048, le=1_048_576)
@@ -106,6 +111,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         s.setdefault("endpoint", None)
         s.setdefault("web_fetch_enabled", False)
         s.setdefault("github_enabled", False)
+        s.setdefault("github_write_enabled", False)
         s.setdefault("max_steps", DEFAULT_MAX_STEPS)
         return s
 
@@ -126,16 +132,29 @@ def create_app(config: Config | None = None) -> FastAPI:
         # Bound to api.github.com like an endpoint-bound API key; never returned by the API.
         return creds.get("github", github_community.API_HOST)[0]
 
+    def github_write_token() -> str | None:
+        # Only the token that was verified when it was saved; never the read-only token.
+        token = creds.get("github_write", github_community.API_HOST)[0]
+        verified = settings().get("github_write_token_fp")
+        return token if token and verified and github_write.token_fingerprint(token) == verified else None
+
     def tool_context() -> ToolContext:
         s = settings()
         return ToolContext(workspace, bool(s["web_fetch_enabled"]), github_enabled=bool(s["github_enabled"]),
-                           github_token=github_token)
+                           github_token=github_token, github_write_enabled=bool(s["github_write_enabled"]),
+                           github_write_token=github_write_token, known_secrets=creds.all_values)
 
+    outbox = Outbox(db)
+    # A previous process may have stopped while a GitHub write was in flight: settle it,
+    # never retry it.
+    for op_id, state in outbox.recover():
+        log.warning("GitHub operation %s was in flight when the Worker stopped; now %s", op_id, state)
     agent = Agent(
         db,
         provider_factory=current_provider,
         context_factory=tool_context,
         max_steps=lambda: int(settings()["max_steps"]),
+        outbox=outbox,
     )
 
     @contextlib.asynccontextmanager
@@ -197,6 +216,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             "github_enabled": s["github_enabled"],
             "github_repository": github_community.REPOSITORY,
             "github_token_source": creds.get("github", github_community.API_HOST)[1],  # never the token
+            "github_write_enabled": s["github_write_enabled"],
+            "github_write_token_source": "stored" if github_write_token() else "none",
+            "github_write_actor": s.get("github_write_actor") if github_write_token() else None,
             "max_steps": s["max_steps"],
             "context_window": s.get("context_window"),
             "configured": configured,
@@ -225,6 +247,21 @@ def create_app(config: Config | None = None) -> FastAPI:
             creds.set("github", None)
         elif github_token:
             creds.set("github", github_token, github_community.API_HOST)
+        write_token = (body.github_write_token or "").strip()
+        if write_token and write_token in (github_token, creds.get("github", github_community.API_HOST)[0]):
+            raise HTTPException(400, "Use a separate token for posting, not the read-only token.")
+        if body.clear_github_write_token:
+            creds.set("github_write", None)
+            db.set_settings({"github_write_actor": None, "github_write_token_fp": None})
+        elif write_token:
+            try:
+                # Saved only after GitHub confirms who it belongs to and that it is suitable.
+                actor = github_write.check_write_token(write_token)
+            except ToolError as e:
+                raise HTTPException(400, f"The GitHub write token was not saved: {e}") from None
+            creds.set("github_write", write_token, github_community.API_HOST)
+            db.set_settings({"github_write_actor": actor,
+                             "github_write_token_fp": github_write.token_fingerprint(write_token)})
         if body.clear_api_key:
             creds.set(body.provider, None)
         elif body.api_key and body.api_key.strip():
@@ -237,6 +274,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "endpoint": endpoint,
                 "web_fetch_enabled": body.web_fetch_enabled,
                 "github_enabled": body.github_enabled,
+                "github_write_enabled": body.github_write_enabled,
                 "max_steps": body.max_steps,
                 "context_window": body.context_window,
             }
@@ -290,10 +328,14 @@ def create_app(config: Config | None = None) -> FastAPI:
     def get_conversation(conv_id: str):
         conv = conversation_or_404(conv_id)
         messages = db.get_messages(conv_id)
+        operations = outbox.for_conversation(conv_id)
+        snapshots = {op["approval_id"]: op["snapshot"] for op in operations}
         return {
             **conv,
             "messages": messages,
-            "approvals": db.pending_approvals(conv_id),
+            # A GitHub write approval carries the exact snapshot the user approves.
+            "approvals": [{**a, "github": snapshots.get(a["id"])} for a in db.pending_approvals(conv_id)],
+            "github_operations": [_operation_view(op, outbox.events(op["id"])) for op in operations],
             "running": agent.is_running(conv_id),
             "work": work_summary(conv, messages),
         }
@@ -351,6 +393,20 @@ def create_app(config: Config | None = None) -> FastAPI:
         if status == "stale":
             raise HTTPException(409, "This approval request was already answered.")
         return {"status": status}
+
+    @app.post("/api/github/operations/{op_id}/reconcile")
+    def reconcile_operation(op_id: str):
+        """Read-only check whether a GitHub write with an unknown outcome was published. Never resends."""
+        op = outbox.get(op_id)
+        if not op:
+            raise HTTPException(404, "GitHub operation not found.")
+        if agent.is_running(op["conversation_id"]):
+            raise HTTPException(409, "The agent is still working in this conversation.")
+        try:
+            result = github_write.reconcile(outbox, op, lambda: github_write_token() or github_token())
+        except ToolError as e:
+            raise HTTPException(502, str(e)) from None
+        return {**result, "operation": _operation_view(outbox.get(op_id), outbox.events(op_id))}
 
     # -- workspace files ------------------------------------------------------------
 
@@ -419,6 +475,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"ok": True, "version": __version__}
 
     return app
+
+
+def _operation_view(op: dict, events: list[dict]) -> dict:
+    """What the UI shows of a GitHub write: everything but the internal fingerprints."""
+    keep = ("id", "approval_id", "tool_call_id", "repository", "issue_number", "body", "body_sha256", "actor",
+            "state", "created_at", "updated_at", "attempt_started_at", "comment_id", "comment_url",
+            "comment_created_at", "detail")
+    return {**{k: op[k] for k in keep}, "issue_url": op["snapshot"]["issue_url"], "events": events}
 
 
 __all__ = ["create_app"]

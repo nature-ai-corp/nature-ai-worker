@@ -541,7 +541,63 @@ function toolCard(call, result, time) {
   return details;
 }
 
+function githubApprovalCard(a) {
+  const g = a.github;
+  const link = el("a", { href: g.issue_url, target: "_blank", rel: "noopener noreferrer" }, g.issue_url);
+  const approve = el("button", { class: "primary" }, "Approve and post");
+  const deny = el("button", { class: "danger" }, "Deny");
+  const decide = async (ok) => {
+    approve.disabled = deny.disabled = true;
+    await runWithPolling(() => api("POST", `/api/approvals/${a.id}`, { approve: ok }));
+  };
+  approve.addEventListener("click", () => decide(true));
+  deny.addEventListener("click", () => decide(false));
+  return el("div", { class: "approval github-approval", role: "group", "aria-label": "Approval needed" },
+    el("h3", {}, "Your action needed: post a public GitHub comment"),
+    el("dl", {},
+      el("dt", {}, "Repository"), el("dd", {}, g.repository),
+      el("dt", {}, "Issue"), el("dd", {}, `#${g.issue_number} ${g.issue_title} (${g.issue_state}) `, link),
+      el("dt", {}, "Posted as"), el("dd", {}, "@" + g.actor),
+      el("dt", {}, "SHA-256"), el("dd", { class: "small" }, g.comment_sha256)),
+    el("div", { class: "muted small" }, "Exactly this text is posted publicly, once. If the Issue changes before you approve, nothing is posted and a new proposal is needed."),
+    el("pre", { class: "github-comment" }, g.comment_body),
+    el("div", { class: "actions" }, approve, deny));
+}
+
+const OPERATION_LABELS = {
+  proposed: "Waiting for your approval", denied: "Denied: not posted", approved: "Approved, checking",
+  attempt_started: "Sending", confirmed: "Posted (confirmed by GitHub)", rejected: "Refused by GitHub: not posted",
+  failed_before_send: "Not posted: nothing was sent", outcome_unknown: "Outcome unknown: may or may not be published",
+  reconciled: "Posted (found on GitHub)",
+};
+
+function operationCard(op) {
+  const items = [el("strong", {}, OPERATION_LABELS[op.state] || op.state), " · ",
+    el("a", { href: op.issue_url, target: "_blank", rel: "noopener noreferrer" }, `Issue #${op.issue_number}`),
+    ` · as @${op.actor}`];
+  if (op.comment_url) items.push(" · ", el("a", { href: op.comment_url, target: "_blank", rel: "noopener noreferrer" }, "comment"));
+  const box = el("div", { class: "github-operation s-" + op.state }, el("div", {}, ...items));
+  if (op.detail) box.append(el("div", { class: "muted small" }, op.detail));
+  if (op.state === "outcome_unknown") {
+    const check = el("button", {}, "Reconcile (read-only check on GitHub)");
+    const out = el("div", { class: "muted small", role: "status" });
+    check.addEventListener("click", async () => {
+      check.disabled = true;
+      try { out.textContent = (await api("POST", `/api/github/operations/${op.id}/reconcile`)).result; await refreshCurrent(); }
+      catch (e) { out.textContent = e.message; }
+      finally { check.disabled = false; }
+    });
+    box.append(el("div", { class: "muted small" }, "It is never sent again automatically."), check, out);
+  }
+  const details = el("details", {}, el("summary", {}, "Comment text and audit trail"),
+    el("pre", {}, op.body + "\n\nSHA-256 " + op.body_sha256 + "\n\n" +
+      op.events.map((e) => `${formatTime(e.created_at)}  ${e.event}${e.detail ? ": " + e.detail : ""}`).join("\n")));
+  box.append(details);
+  return box;
+}
+
 function approvalCard(a) {
+  if (a.github) return githubApprovalCard(a);
   const args = { ...a.arguments };
   // Text arguments are shown as written, not JSON-escaped, so the user can read what would change.
   let text = "";
@@ -695,11 +751,15 @@ function renderActivity(conv) {
   const results = {};
   for (const m of conv.messages) if (m.role === "tool") results[m.tool_call_id] = m;
   const pending = new Set(conv.approvals.map((a) => a.tool_call_id));
+  const operations = {};
+  for (const op of conv.github_operations || []) operations[op.tool_call_id] = op;
   for (const m of conv.messages) {
     if (m.role === "assistant") {
       for (const call of m.tool_calls || []) {
         if (pending.has(call.id)) {
           list.append(el("li", { class: "event warn" }, `${call.name}: waiting for your approval (see Current work update).`));
+        } else if (operations[call.id]) {
+          list.append(el("li", {}, operationCard(operations[call.id])));
         } else {
           list.append(el("li", {}, toolCard(call, results[call.id], (results[call.id] || m).created_at)));
         }
@@ -926,6 +986,12 @@ function updateGithubTokenStatus() {
     source === "stored" ? "A token is stored (encrypted). Enter a new one to replace it." :
     "No token: public Issues can be read, Discussions cannot.";
   $("#s-github-clear-row").hidden = source !== "stored";
+  const write = state.settings.github_write_token_source === "stored";
+  $("#s-github-write-token").placeholder = write ? "Leave empty to keep the current token" : "Paste a fine-grained GitHub token";
+  $("#s-github-write-token-status").textContent = write
+    ? `A verified token for @${state.settings.github_write_actor} is stored (encrypted). Comments are posted as this account.`
+    : "No posting token: comments cannot be proposed.";
+  $("#s-github-write-clear-row").hidden = !write;
 }
 
 function openSettings(firstRun = false) {
@@ -940,6 +1006,9 @@ function openSettings(firstRun = false) {
   $("#s-github-repo").textContent = s.github_repository || "";
   $("#s-github-token").value = "";
   $("#s-github-clear").checked = false;
+  $("#s-github-write").checked = !!s.github_write_enabled;
+  $("#s-github-write-token").value = "";
+  $("#s-github-write-clear").checked = false;
   updateGithubTokenStatus();
   $("#s-steps").value = s.max_steps;
   $("#s-context").value = s.context_window || "";
@@ -961,6 +1030,9 @@ function settingsBody() {
     github_enabled: $("#s-github").checked,
     github_token: $("#s-github-token").value.trim() || null,
     clear_github_token: $("#s-github-clear").checked,
+    github_write_enabled: $("#s-github-write").checked,
+    github_write_token: $("#s-github-write-token").value.trim() || null,
+    clear_github_write_token: $("#s-github-write-clear").checked,
     max_steps: parseInt($("#s-steps").value, 10) || 20,
     context_window: $("#s-context-row").hidden ? null : (parseInt($("#s-context").value, 10) || null),
   };

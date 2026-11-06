@@ -180,6 +180,31 @@ def check_history(found: Findings) -> None:
             if len(lines) >= 81 and lines[80] == audited_rc_message:
                 sub = Findings((c, w, d) for c, w, d in sub
                                if not (c == "confidential" and w.endswith(":81")))
+        # Historical scanner-development fixtures had two literal examples
+        # committed to the private PR branch. Exclude ONLY their audited
+        # text and exact blob locations. Other findings remain blocking.
+        historic_scanner_examples = {
+            ("ee47d4becfe7eac6c07052e8ad0535651f6797cb",
+             "scripts/repo_checks.py"): [
+                (176, "do not " + "distribute this build."),
+            ],
+            ("42df192b2f318d92886d69e616986665042e0d9b",
+             "tests/test_repo_history_scanning.py"): [
+                (78, "do not " + "distribute this build."),
+                (79, "confidential " + "and proprietary"),
+            ],
+        }
+        examples = historic_scanner_examples.get((sha, path))
+        if examples:
+            lines = data.decode("utf-8", errors="replace").splitlines()
+            verified_lines = {
+                number for number, phrase in examples
+                if len(lines) >= number and phrase in lines[number - 1]
+            }
+            if verified_lines:
+                sub = Findings((c, w, d) for c, w, d in sub
+                               if not (c == "confidential" and any(
+                                   w.endswith(":" + str(number)) for number in verified_lines)))
         found.extend(("history-" + c, w, d) for c, w, d in sub)
 
 

@@ -9,7 +9,7 @@ GitHub Community Agent is a **prebuilt professional profile** in the open-source
 1. Configure a tool-capable AI model in **Settings**. Nature AI Worker supports its existing local and cloud model providers.
 2. In **Settings → Advanced**, enter the owner/repository you want the Worker to access, such as `your-account/your-public-project`. Only the one configured public repository is in scope in the initial version.
 3. Enable **GitHub reading** to review public Issues without a token. For Discussions, provide a separate fine-grained, public-read-only GitHub token. Secrets are stored using the Worker's encrypted credential store.
-4. Open **Work Center → GitHub Community Agent**. Choose **Review Issues**, **Review Discussions**, **Draft Replies**, or **Community Report**. The Worker fills a professional starter instruction in an editable New Work task. Review it and select **Start work**.
+4. Open **Work Center → GitHub Community Agent**. Choose **Review Issues**, **Review Discussions**, **Draft Replies**, or **Community Report**. The Worker fills an editable New Work task: the first line is the task (it also becomes the Work's title), followed by the profile's professional instructions. Review or edit it and select **Start work**. You can also choose **GitHub Community Agent** from the template list in New Work and write your own task on the `Task:` line.
 5. The Agent uses its existing read-only GitHub tools, makes evidence-based findings and drafts replies in English. Public GitHub text is untrusted data, not instructions to the Agent.
 
 ## Posting one Issue comment (optional)

@@ -309,6 +309,22 @@ const COMMUNITY_TASKS = {
   report: "Prepare a concise English GitHub Community status report for the configured public repository, based on the Issues and Discussions actually accessible through your tools. Cover themes, priority follow-ups, blockers, and uncertainty, with verifiable URLs. Do not invent metrics or publish anything.",
 };
 
+// The profile instruction starts with "Task: " (like the other templates, the part to fill comes
+// first), so each Work is titled by its task rather than by the shared role text.
+function communityText(profile, assignment) {
+  return profile.instruction.startsWith("Task: ")
+    ? "Task: " + assignment + profile.instruction.slice("Task: ".length)
+    : profile.instruction + assignment;
+}
+
+// Text the user did not write: empty, a template, or a starter exactly as generated.
+function generatedText(text) {
+  if (!text || !text.trim()) return true;
+  if (state.templates.some((t) => t.instruction === text)) return true;
+  const profile = state.templates.find((t) => t.id === "github-community");
+  return !!profile && Object.values(COMMUNITY_TASKS).some((a) => communityText(profile, a) === text);
+}
+
 function renderCommunity() {
   const cfg = state.settings || {};
   $("#community-repository").textContent = cfg.github_repository || "Not configured";
@@ -317,8 +333,9 @@ function renderCommunity() {
   if (!cfg.github_enabled) notes.push("GitHub reading is off. Enable it in Settings before starting review tasks.");
   else if (cfg.github_token_source === "none") notes.push("Public Issues are available; Discussions need a separate read-only token.");
   else notes.push("GitHub reading is enabled for this repository.");
-  if (cfg.github_write_enabled) notes.push("Issue comments can be proposed, but each exact comment still requires your approval.");
-  else notes.push("GitHub posting is off.");
+  if (cfg.github_write_enabled && cfg.github_write_token_source === "stored") {
+    notes.push(`Issue comments can be proposed as @${cfg.github_write_actor}; each exact comment still needs your approval.`);
+  } else notes.push("GitHub posting is off.");
   $("#community-connection").textContent = notes.join(" ");
 }
 
@@ -332,13 +349,13 @@ async function launchCommunityTask(task) {
     return;
   }
   if (!state.settings || !state.settings.configured) { openSettings(true); return; }
-  // Never overwrite the user's existing New Work draft without warning.
+  // Never overwrite text the user wrote in the New Work draft without asking.
   const previous = storedDraft();
-  if (previous && previous.text && previous.text.trim()) {
-    if (!confirm("Replace the existing unsent New Work draft with this community task?")) return;
+  if (previous && !generatedText(previous.text)) {
+    if (!confirm("Replace your unsent New Work text with this community task?")) return;
   }
   hideNotice();
-  $("#new-input").value = profile.instruction + assignment;
+  $("#new-input").value = communityText(profile, assignment);
   showTemplate(profile);
   saveNewDraft();
   go("#/new"); // User can inspect and edit before submitting to the General Agent runtime.
@@ -1129,6 +1146,7 @@ async function saveSettings() {
   }
   $("#settings-dialog").close();
   updateModelLabel();
+  if (!$("#view-community").hidden) renderCommunity();
 }
 
 function updateModelLabel() {

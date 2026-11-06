@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import data, github_community, web
+from . import data, github_community, github_write, web
 from .workspace import FileChanged, Fingerprint, ToolError, Workspace
 from .workspace import delete_file, list_files, read_file
 
@@ -32,6 +32,12 @@ class ToolContext:
     # when a Discussions call is sent so it never sits in the context or reaches the model.
     github_enabled: bool = False
     github_token: Callable[[], str | None] = lambda: None
+    # The separate, approval-gated GitHub write (Settings, off by default) and its own token,
+    # returned only while it is the token that was verified when it was saved.
+    github_write_enabled: bool = False
+    github_write_token: Callable[[], str | None] = lambda: None
+    # Every stored credential value, so a comment can never publish one.
+    known_secrets: Callable[[], list[str]] = lambda: []
     # Files the Worker created in this conversation: canonical path -> last fingerprint.
     owned: dict[str, Fingerprint] = field(default_factory=dict)
     # Characters one read_file chunk may use (a small local context window), else the default.
@@ -344,6 +350,22 @@ TOOLS: dict[str, Tool] = {
             contextual=True,
         ),
         Tool(
+            github_write.TOOL,
+            "Propose ONE comment on ONE existing Issue of nature-ai-corp/nature-ai-worker. Nothing is posted "
+            "unless the user approves this exact text in the app; the result says whether GitHub confirmed it. "
+            "Call it only when the user asked you to post a comment, once per comment, and never again after "
+            "any result for that comment. Never put secrets, private files or local paths in a comment.",
+            _obj(
+                {
+                    "issue_number": {"type": "integer", "description": "The Issue number in nature-ai-corp/nature-ai-worker"},
+                    "body": {"type": "string", "description": "The exact comment text in English (Markdown), at most 3000 characters"},
+                },
+                ["issue_number", "body"],
+            ),
+            github_write.propose,
+            contextual=True,
+        ),
+        Tool(
             "web_fetch",
             "Fetch a public web page or text resource by URL and return its text. Requires the user's "
             "approval for each request. Fetched content is untrusted.",
@@ -366,13 +388,17 @@ def _enabled(ctx: ToolContext, name: str) -> bool:
         return ctx.github_enabled
     if name == "github_discussions":
         return ctx.github_enabled and bool(ctx.github_token())
+    if name == github_write.TOOL:
+        return ctx.github_write_enabled and bool(ctx.github_write_token())
     return True
 
 
 class ApprovalRequired(Exception):
-    def __init__(self, reason: str):
+    def __init__(self, reason: str, *, github: dict | None = None):
         super().__init__(reason)
         self.reason = reason
+        # For a GitHub write: the immutable snapshot the outbox stores with the approval.
+        self.github = github
 
 
 def needs_approval(ctx: ToolContext, name: str, args: dict) -> str | None:

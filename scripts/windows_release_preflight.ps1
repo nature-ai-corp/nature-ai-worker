@@ -52,6 +52,16 @@ if ($regressionExit -ne 0) {
 $historyExit = Invoke-PrivatePython @((Join-Path $repo "scripts\repo_checks.py"), "--history") "history"
 if ($historyExit -ne 0) {
     Write-Status "HISTORY AUDIT" "FAIL / REVIEW NEEDED (see private report)"
+    # Show only finding categories, not historical paths, hosts, IDs or values.
+    $publicCategories = @(
+        Get-Content -LiteralPath (Join-Path $reportDir "history-stdout.txt") |
+            Where-Object { $_ -match '^(history-[a-z-]+|internal-address|confidential|secret|sensitive-file|release-artifact):' } |
+            ForEach-Object { ($_ -split ':', 2)[0] } |
+            Sort-Object -Unique
+    )
+    if ($publicCategories.Count -gt 0) {
+        Write-Status "FINDING CATEGORIES" ($publicCategories -join ", ")
+    }
 } else {
     Write-Status "HISTORY AUDIT" "PASS for all refs in this local clone"
 }

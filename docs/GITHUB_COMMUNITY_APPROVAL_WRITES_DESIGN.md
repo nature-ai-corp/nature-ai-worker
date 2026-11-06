@@ -2,21 +2,35 @@
 
 **Status:** Design review / implementation specification only. **No GitHub write tool is implemented or enabled by this document.** The current released installer v0.1.1 is unchanged. This specification applies only to the existing Standalone General Agent, never the private NATURE AI Platform Server or Platform Client.
 
-## Open-source product placement: GitHub Community in Work Center
+## Product decision: optional GitHub Community Agent (customer-ready)
 
-Make GitHub Community a **first-class, optional Work Center feature** in the existing Nature AI Worker Standalone UI, not a hidden Tool Registry setting and **not a second agent**. The existing General Agent, Work records, approval UI and task execution remain the only runtime.
+**Selected product approach: GitHub Community Agent, option B.** This is a **prebuilt professional Agent Profile** that ships with the open-source Nature AI Worker Standalone edition and is ready for customers to enable, not a second Agent Runtime, separate workflow engine, or enterprise Platform feature. It uses the existing General Agent execution engine, provider configuration, Tool Registry, work records, approvals, SQLite storage, and encrypted credentials.
 
-**Recommended navigation and workflow:**
+### Discoverability and first-run experience
 
-- Add a sidebar entry **GitHub Community** under **Work Center**, alongside My Work; show it only when the Standalone GitHub integration is enabled. Do not put it inside Settings, file browser or Platform Client.
-- Its main panel is a focused view built on existing Work records: a **repository selector** (one explicitly allowlisted repository in the first release), and obvious actions **Review Issues**, **Review Discussions**, **Draft Replies** and **Community Work History**. Each action creates/opens an ordinary General Agent Work with the chosen repository and task instructions. Avoid a parallel agent/session/approval engine.
-- Show an integrated **Needs Approval** indicator using existing pending approvals. The exact comment target and body must remain visible and approval-bound. No auto-post controls, background sweeps, separate schedules or implicit approval from choosing a workflow.
-- In **Settings → Integrations → GitHub** (or the existing Settings Advanced section for initial rollout), offer Connect / Disconnect, allowed repository owner/name, token source/permission status, and a distinct disabled-by-default **Enable approved GitHub writes** option. Keep credentials encrypted and write-only in the settings API.
-- **Open-source from day one:** the repository is **configured by the user**, not permanently hardcoded to the NATURE AI Worker repository. Default examples/docs may reference `nature-ai-corp/nature-ai-worker`, but do not silently authorize it. Initial release may permit exactly **one** configured repository to minimize scope. All model-invoked tools must obtain the fixed, validated allowlisted repository from settings/context, never from free-form model arguments. Future multi-repo work can extend the allowlist, not add arbitrary remote access.
-- GitHub Community activities are ordinary Work Center records with GitHub-specific filtering and source links. Treat GitHub as an **integration/skill of the General Agent**, reusable for other code-hosting integrations later. No Platform Server APIs or Standalone/S–C data crossover.
-- All public UI text, docs, prompts and generated community drafts use English. Use familiar labels and simple first-run setup for Windows-first open-source users.
+- The Standalone **Work Center** offers a clearly named **GitHub Community Agent** entry with its own professional home/launch view. The entry must be discoverable without requiring customers to create an agent, edit prompts or assemble a workflow. Keep the overall Worker UI minimal.
+- A customer configures their AI provider once, then selects **Connect GitHub**, grants the least privileges needed, chooses/authorizes **their own public repository**, and can start the prebuilt Agent immediately. First-release scope may support one authorized repository, with future multiple-repository support. Do not hardcode the Nature AI Worker repository as the only possible target or silently authorize it.
+- Offer clearly named starter actions: **Review Issues**, **Review Discussions**, **Draft Replies**, **Needs Approval**, and **Community Work History**. A starter action opens an ordinary Work record with an appropriate prebuilt role instruction and selected GitHub repository binding; all execution and human decisions stay in the existing Worker Work Center.
+- The prebuilt profile supplies an English-language **role, instructions, workflows-as-guidance, and reusable task prompts** for issue triage, discussion review, evidence-grounded response drafts, and community summaries. It must not introduce a dedicated multi-agent orchestration layer, background scheduler, persistent autonomous work loop, or separate agent state machine.
+- Keep GitHub-specific Knowledge grounded in the selected repository's public README, CONTRIBUTING, SUPPORT, applicable docs and release notes when available; clearly label missing or unverified context. The model must not invent project commitments, fixes or release promises.
+- GitHub-specific UI shows the configured repository, connection/permission status, recent community work and outstanding approvals. Any user-facing text and public materials are in English. The configuration should be clear for a first-time open-source customer.
 
-**Fast-track scope rule:** first implement secure per-user repository binding and single Issue-comment approval end-to-end; a minimal GitHub Community sidebar entry may initially open an ordinary Work with a prefilled community instruction. Advanced dashboards, automatic moderation, bulk actions, multi-repository selector, and scheduled work are separate follow-up features. Do not delay core security or native Windows runtime acceptance for UI embellishments.
+### Shared runtime, strict safety
+
+- **Separate, off-by-default read and write capabilities.** Read-only use must work without enabling write mode. A write-capable credential is not derived from the existing read-only token. No automatic posts; every distinct comment must be approved via the *existing* Worker approval system with immutable target/body/actor binding and durable outcome records.
+- Model tools never choose arbitrary API hosts, owner/repo, HTTP methods, or GraphQL queries; use the user-allowlisted repository from trusted application settings/context. Maintain public-only limitation for the first version unless separately reviewed. Fail closed if repository binding, token permissions, or targets cannot be verified.
+- GitHub Community Agent Profile is optional and **Standalone-only**. The private NATURE AI Platform Server and S–C Platform Client retain their existing behavior and isolation. Nothing is installed or enabled there.
+- The current General Agent remains present for general work. GitHub-specific instructions/allowed tools are scoped to the Community Agent profile and its Work records. A customer should not need to build an Agent. Both profiles share **one runtime**, not separate processes.
+- Preserve the existing Apache-2.0 license and include only safe examples, English setup/help, targeted tests, and native Windows acceptance evidence. Use the name **GitHub Community Agent** in feature and user documentation.
+
+### Fast-track delivery sequence
+
+1. Ship the selectable **prebuilt Community Agent Profile and public-repository setup**, reusing existing Work and model runtime, with read-only triage/drafts. For speed, starter actions may initially be prefilled Work instructions, not a complex new dashboard.
+2. Add the smallest **explicitly approved** write operation: one comment on one GitHub Issue, with durable outbox and no automatic retry of unknown outcomes, as specified below.
+3. Test through the real native Windows Worker (not solely a mocked agent); preserve regression checks for General Agent and Platform Client isolation.
+4. Expand to Discussion posting, labels, multi-repository views, background automation or advanced reporting **only in later approved phases**. Do not hold the initial usable open-source release for those optional features.
+
+**Scope note:** User has selected the Community Agent product direction, not authorized any particular live GitHub posting. Real external posting requires the precise user approval described later in this document.
 
 ## Objective and limits
 

@@ -20,6 +20,7 @@
         <a class="nav-item" href="#/in-progress" data-filter="in-progress">Work In Progress</a>
         <a class="nav-item" href="#/attention" data-filter="attention">Needs My Attention</a>
         <a class="nav-item" href="#/finished" data-filter="finished">Finished Work</a>
+        <a id="nav-community" class="nav-item" href="#/community">GitHub Community Agent</a>
       </nav>
       <h2 class="nav-heading" id="recent-heading">Recent Work</h2>
       <nav id="work-nav" aria-labelledby="recent-heading"></nav>
@@ -45,6 +46,29 @@
         <div class="page-body">
           <p id="list-description" class="muted"></p>
           <ul id="work-list" class="work-list"></ul>
+        </div>
+      </section>
+
+      <!-- Prebuilt GitHub Community Agent profile, using the existing Worker runtime -->
+      <section id="view-community" class="view" aria-labelledby="community-heading" hidden>
+        <header class="page-header"><h1 id="community-heading" tabindex="-1">GitHub Community Agent</h1></header>
+        <div class="page-body">
+          <p class="muted">Your ready-to-use open-source community assistant. Work is handled by Nature AI Worker's existing agent and approval system.</p>
+          <div class="card">
+            <h2 class="section-title">Connected repository</h2>
+            <p id="community-repository"></p>
+            <p id="community-connection" class="muted small" role="status"></p>
+            <button type="button" id="community-settings">Configure GitHub in Settings</button>
+          </div>
+          <h2 class="section-title">Start community work</h2>
+          <div class="examples" id="community-actions">
+            <button type="button" data-community-task="issues">Review Issues</button>
+            <button type="button" data-community-task="discussions">Review Discussions</button>
+            <button type="button" data-community-task="drafts">Draft Replies</button>
+            <button type="button" data-community-task="report">Community Report</button>
+          </div>
+          <p class="muted small">These actions create ordinary Work tasks with a prebuilt professional profile. Posting is never automatic: an exact Issue comment requires separate user approval.</p>
+          <a href="#/attention">Needs My Attention / Approvals</a>
         </div>
       </section>
 

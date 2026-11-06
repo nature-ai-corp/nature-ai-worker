@@ -304,6 +304,12 @@ The automated tests never contact a real AI provider. To check a provider yourse
 - The web fetch tool returns text only (HTML, plain text, JSON, XML). It does not run JavaScript.
 - **Windows-first packaged release.** The Windows installer was validated on native Windows 11. Source installation was tested on Linux (including Ubuntu and WSL2); macOS has not been tested. Native Windows source development setups may require extra configuration. See [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
+## Community and support
+
+Nature AI Worker welcomes questions, feedback and practical contributions. For help choosing a model, Windows installation or other usage questions, visit [GitHub Discussions](https://github.com/nature-ai-corp/nature-ai-worker/discussions) (when enabled). Report reproducible defects using the [bug report form](https://github.com/nature-ai-corp/nature-ai-worker/issues/new/choose), and follow [CONTRIBUTING.md](CONTRIBUTING.md) for patches.
+
+Read the [support guide](SUPPORT.md) and [Community Code of Conduct](CODE_OF_CONDUCT.md). **Do not post security vulnerabilities publicly**: use the private reporting channel in [SECURITY.md](SECURITY.md). Community AI assistance is currently only a [reviewed proposal](docs/COMMUNITY_AI_MODERATION_POLICY.md), not an autonomous moderator.
+
 ## Maintainer and project identity
 
 **NATURE AI CORP** maintains the Nature AI Worker open-source project under the [nature-ai-corp](https://github.com/nature-ai-corp) GitHub organization. Repository ownership, project releases, issue triage and documentation are managed under the organization. GitHub also displays individual accounts for their actual commits and contributions; those contributor records remain intact and do not replace the organization as the project identity.

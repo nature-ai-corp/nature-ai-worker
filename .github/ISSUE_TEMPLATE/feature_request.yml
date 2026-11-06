@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose a focused improvement to Nature AI Worker
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Nature AI Worker is a lightweight, single-user general-purpose AI worker. For large architectural proposals, please discuss the idea before implementation. Do not include private Platform code or data.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

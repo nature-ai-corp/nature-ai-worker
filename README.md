@@ -304,6 +304,14 @@ The automated tests never contact a real AI provider. To check a provider yourse
 - The web fetch tool returns text only (HTML, plain text, JSON, XML). It does not run JavaScript.
 - **Windows-first packaged release.** The Windows installer was validated on native Windows 11. Source installation was tested on Linux (including Ubuntu and WSL2); macOS has not been tested. Native Windows source development setups may require extra configuration. See [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
+## GitHub Community read-only tool (development branch)
+
+The General Agent can use the `github_issues` tool to read **public** Issues in `nature-ai-corp/nature-ai-worker` using GitHub's official API. It can list recent issues and inspect a specific issue, then use the public text as **untrusted data** when summarizing or drafting English replies. No GitHub token is required for this limited public-only integration.
+
+This tool **does not** read GitHub Discussions yet, does not post comments, does not edit Issues, and cannot access arbitrary repositories or private Platform data. It is separate from the eventual credential-backed, approval-gated community workflow in [Issue #33](https://github.com/nature-ai-corp/nature-ai-worker/issues/33).
+
+This source-level capability has not yet been validated through an installed Windows Worker. It is **not included in the published v0.1.1 installer**. Any public release or upgrade is a separate verified process.
+
 ## Community and support
 
 Nature AI Worker welcomes questions, feedback and practical contributions. For help choosing a model, Windows installation or other usage questions, visit [GitHub Discussions](https://github.com/nature-ai-corp/nature-ai-worker/discussions) (when enabled). Report reproducible defects using the [bug report form](https://github.com/nature-ai-corp/nature-ai-worker/issues/new/choose), and follow [CONTRIBUTING.md](CONTRIBUTING.md) for patches.

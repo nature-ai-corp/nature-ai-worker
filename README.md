@@ -1,10 +1,12 @@
 # Nature AI Worker
 
+**An open-source project maintained by [NATURE AI CORP](https://github.com/nature-ai-corp).**
+
 **A self-hosted AI agent that works on the files in a folder on your computer.**
 Connect the model you already use, describe a task in plain language, and approve anything risky before it happens.
 
 [![CI](https://github.com/nature-ai-corp/nature-ai-worker/actions/workflows/ci.yml/badge.svg)](https://github.com/nature-ai-corp/nature-ai-worker/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/nature-ai-corp/nature-ai-worker)](https://github.com/nature-ai-corp/nature-ai-worker/releases/tag/v0.1.0)
+[![Release](https://img.shields.io/github/v/release/nature-ai-corp/nature-ai-worker)](https://github.com/nature-ai-corp/nature-ai-worker/releases/tag/v0.1.1)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 ![A finished piece of work in Nature AI Worker: status, execution facts, the agent's update, the report.md result with Preview and Download, the input file it read, the tool activity and the conversation](docs/screenshots/11-work-detail.png)
@@ -20,7 +22,13 @@ Connect the model you already use, describe a task in plain language, and approv
 - **Small and local.** One Python process, SQLite, and a plain web UI. API keys are encrypted at rest and only sent to the endpoint you configured.
 - **Apache-2.0 licensed.**
 
-## Quick start
+## Download — Windows v0.1.1
+
+**Windows 10/11 x64:** [Download the official installer](https://github.com/nature-ai-corp/nature-ai-worker/releases/download/v0.1.1/NatureAIWorker-Setup-0.1.1.exe) · [SHA256 checksums](https://github.com/nature-ai-corp/nature-ai-worker/releases/download/v0.1.1/SHA256SUMS.txt) · [Release notes](https://github.com/nature-ai-corp/nature-ai-worker/releases/tag/v0.1.1)
+
+The Windows installer includes its own Python runtime and dependencies. No Python, Git, WSL, Docker or administrator privileges are needed. Choose an AI provider or local model in the first-run setup. Check the SHA256 before installation. The app listens locally; do not expose it directly to the network.
+
+## Quick start — source installation
 
 Requires Python 3.11–3.14 and a model that supports tool calling (for example, a tool-capable model in Ollama). On Ubuntu or WSL, install the venv package first: `sudo apt install python3-venv` (see [Ubuntu and WSL prerequisites](#ubuntu-and-wsl-prerequisites)).
 
@@ -36,13 +44,13 @@ Open **http://127.0.0.1:8080** (port taken? run `nature-worker --port 8081`), pi
 
 Want something to try? The [sales report demo](examples/sales-report/) has a synthetic dataset, a ready-made task and the correct answers to check against. To run with Docker instead, see [Option B](#option-b-docker-compose).
 
-> **Status:** [v0.1.0](https://github.com/nature-ai-corp/nature-ai-worker/releases/tag/v0.1.0), an early release for **single-user, local use**. Do not expose it to a network. See [Known limitations](#known-limitations) and [SECURITY.md](SECURITY.md).
+> **Status:** [v0.1.1](https://github.com/nature-ai-corp/nature-ai-worker/releases/tag/v0.1.1), an early release for **single-user, local use**. Do not expose it to a network. See [Known limitations](#known-limitations) and [SECURITY.md](SECURITY.md).
 
 ---
 
 ## Installation
 
-### Windows installer (development builds)
+### Windows installer (official release)
 
 A per-user installer, `NatureAIWorker-Setup-<version>.exe`, brings its own pinned Python runtime and every dependency. It needs no Python, Git, WSL, Docker or administrator rights. It adds a Start-menu entry that starts the app and opens it in your browser, plus an Apps & Features entry. Uninstalling keeps your data and workspace; removing them is a separate, explicit Start-menu step. Upgrades go through the same verified, rolled-back-on-failure engine as `nature-worker-upgrade`. Verify the published SHA-256 before running a downloaded installer. See [docs/WINDOWS_STANDALONE_INSTALLER.md](docs/WINDOWS_STANDALONE_INSTALLER.md).
 
@@ -213,7 +221,7 @@ All settings are optional environment variables (see `.env.example`):
 - **Source checkout or `pip install .`** (the quick start above): `git pull`, then `pip install .`, then restart. When the Worker starts on older data, it backs up the data folder to `data/backups/` and then migrates it. It refuses to open data written by a newer version.
 - **Managed installation:** `nature-worker-upgrade upgrade --bundle <release>` checks the release's signature and every file before it installs anything, shows the release notes, and asks you to confirm the version. It then lets running work finish, backs up your data, switches versions and checks that the new version works. If any step fails, it returns to the previous version and its data.
 
-See [docs/UPGRADES.md](docs/UPGRADES.md). **No official signed release has been published yet** ([docs/RELEASES.md](docs/RELEASES.md)).
+See [docs/UPGRADES.md](docs/UPGRADES.md). The official Windows v0.1.1 release bundle is Ed25519-signed and its verified installer is available from [GitHub Releases](https://github.com/nature-ai-corp/nature-ai-worker/releases/tag/v0.1.1) (see [docs/RELEASES.md](docs/RELEASES.md)).
 
 ---
 
@@ -271,7 +279,7 @@ scripts/repo_checks.py  License, secret and artifact checks (CI)
 
 ## Verification status
 
-v0.1.0 was checked as follows. Details and evidence are in [docs/VERIFICATION.md](docs/VERIFICATION.md).
+**v0.1.1 Windows-first release:** 628 automated tests passed, 64 skipped, 0 failed on the tagged release code; final signed Windows installer verified and tested for installation, startup and clean exit on a separate Windows computer. GitHub-hosted CI was not run for the final release due to Actions billing/budget limitations. Earlier v0.1.0 checks are summarized below. Details and evidence are in [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
 | Area | How it was verified |
 |---|---|
@@ -294,7 +302,15 @@ The automated tests never contact a real AI provider. To check a provider yourse
 - **One run at a time per conversation.** Runs happen inside the HTTP request. If the server stops in the middle of a task, the task is not resumed. Unanswered tool calls are closed out the next time you send a message.
 - **Tool-calling quality depends on the model.** Small local models may call tools poorly. Use **Test connection** to check.
 - The web fetch tool returns text only (HTML, plain text, JSON, XML). It does not run JavaScript.
-- **Linux first.** Tested on Linux (Ubuntu 24.04 in CI, and WSL2 during development). macOS has not been tested. On Windows, the installer above is the supported route; its native acceptance status is in [docs/VERIFICATION.md](docs/VERIFICATION.md). Running from source on native Windows is not tested.
+- **Windows-first packaged release.** The Windows installer was validated on native Windows 11. Source installation was tested on Linux (including Ubuntu and WSL2); macOS has not been tested. Native Windows source development setups may require extra configuration. See [docs/VERIFICATION.md](docs/VERIFICATION.md).
+
+## Maintainer and project identity
+
+**NATURE AI CORP** maintains the Nature AI Worker open-source project under the [nature-ai-corp](https://github.com/nature-ai-corp) GitHub organization. Repository ownership, project releases, issue triage and documentation are managed under the organization. GitHub also displays individual accounts for their actual commits and contributions; those contributor records remain intact and do not replace the organization as the project identity.
+
+Nature AI Worker is open source; **NATURE AI Platform Server and its proprietary code, enterprise data and private infrastructure are not part of this repository**. The approved Platform Client (S–C) interface is a client-side interoperability contract, not publication of Platform Server internals.
+
+For project discussion or bugs, use [GitHub Issues](https://github.com/nature-ai-corp/nature-ai-worker/issues). For security disclosures follow [SECURITY.md](SECURITY.md). Contributions follow [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

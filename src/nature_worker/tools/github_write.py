@@ -1,13 +1,14 @@
 # SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
 # SPDX-License-Identifier: Apache-2.0
-"""The one approval-gated GitHub write: post one comment on one Issue of the Worker repository.
+"""The one approval-gated GitHub write: post one comment on one Issue of the configured repository.
 
 * Off by default, with its own setting and its own credential (never the read-only token).
   Only fine-grained personal access tokens with an expiry date are accepted: a classic token
   cannot be limited to one repository, so it is refused, as are tokens that do not say who
   they belong to.
-* The model supplies only an issue number and the comment text. Repository, host, path and
-  method are constants. Before the approval is shown, the target is checked (public
+* The model supplies only an issue number and the comment text. The repository is the one
+  allowlisted in Settings (the token is verified for exactly that repository); host, path
+  and method are constants. Before the approval is shown, the target is checked (public
   repository, an Issue rather than a pull request, not locked) and an immutable snapshot is
   stored in the outbox (``github_outbox.py``) with the approval request.
 * Nothing is sent from the generic tool path. After the user approves, ``execute`` rebinds
@@ -109,7 +110,7 @@ def _secret_problem(body: str, ctx: "ToolContext") -> str | None:
 # -- GitHub reads (identity, repository, Issue) ---------------------------------------
 
 
-def check_write_token(token: str) -> str:
+def check_write_token(token: str, repo: str) -> str:
     """The GitHub login of a usable write token, or ToolError. Fails closed."""
     if not valid_write_token(token):
         raise ToolError("Only a fine-grained personal access token (github_pat_...) can be used to post.")
@@ -123,16 +124,17 @@ def check_write_token(token: str) -> str:
     login = user.get("login") if isinstance(user, dict) else None
     if not isinstance(login, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,39}", login):
         raise ToolError("GitHub did not say who the write token belongs to.")
-    status, headers, content = gc._send("GET", gc.API_ROOT, token=token)
+    status, headers, content = gc._send("GET", gc.api_root(repo), token=token)
     gc._check_status(status, headers, "repository")
-    repo = gc._json(content)
-    if not isinstance(repo, dict) or repo.get("full_name") != gc.REPOSITORY or repo.get("private") is not False:
-        raise ToolError("The write token does not see the public nature-ai-corp/nature-ai-worker repository.")
+    info = gc._json(content)
+    if not isinstance(info, dict) or str(info.get("full_name", "")).lower() != repo.lower() \
+            or info.get("private") is not False:
+        raise ToolError(f"The write token does not see the public repository {repo}.")
     return login
 
 
-def _target(token: str, number: int) -> dict:
-    status, headers, content = gc._send("GET", f"{gc.API_ROOT}/issues/{number}", token=token)
+def _target(token: str, repo: str, number: int) -> dict:
+    status, headers, content = gc._send("GET", f"{gc.api_root(repo)}/issues/{number}", token=token)
     gc._check_status(status, headers, "issue")
     issue = gc._json(content)
     if not isinstance(issue, dict) or gc._number(issue.get("number")) != number:
@@ -165,12 +167,13 @@ def propose(ctx: "ToolContext", args: dict, approved: bool):
     token = ctx.github_write_token() if ctx.github_write_enabled else None
     if not token:
         raise ToolError("Posting GitHub comments is turned off in Settings.")
-    actor = check_write_token(token)
-    target = _target(token, number)
-    url = f"{gc.HTML_ROOT}/issues/{number}"
+    repo = ctx.github_repository
+    actor = check_write_token(token, repo)
+    target = _target(token, repo, number)
+    url = f"{gc.html_root(repo)}/issues/{number}"
     snapshot = {
-        "tool_name": TOOL, "operation": OPERATION, "repository": gc.REPOSITORY,
-        "method": "POST", "path": f"/repos/{gc.REPOSITORY}/issues/{number}/comments",
+        "tool_name": TOOL, "operation": OPERATION, "repository": repo,
+        "method": "POST", "path": f"/repos/{repo}/issues/{number}/comments",
         "issue_number": number, "issue_url": url, "source_url": url,
         "issue_title": target["title"], "issue_state": target["state"],
         "target_updated_at": target["updated_at"],
@@ -218,14 +221,16 @@ def _revalidate(op: dict, ctx: "ToolContext") -> None:
         raise ToolError("there is no verified GitHub write token any more.")
     if token_fingerprint(token) != op["token_fingerprint"]:
         raise ToolError("the GitHub write token changed after the proposal.")
+    if ctx.github_repository != op["repository"]:
+        raise ToolError(f"{op['repository']} is no longer the allowlisted repository.")
     if normalize_arguments(snap["arguments"]) != snap["arguments"] or snap["arguments"]["body"] != op["body"]:
         raise ToolError("the stored proposal is inconsistent.")
     problem = _secret_problem(op["body"], ctx)
     if problem:
         raise ToolError(problem)
-    if check_write_token(token) != op["actor"]:
+    if check_write_token(token, op["repository"]) != op["actor"]:
         raise ToolError("the GitHub write token now belongs to a different account.")
-    target = _target(token, op["issue_number"])
+    target = _target(token, op["repository"], op["issue_number"])
     if target["updated_at"] != snap["target_updated_at"]:
         raise ToolError(f"Issue #{op['issue_number']} changed after the proposal.")
 
@@ -233,7 +238,7 @@ def _revalidate(op: dict, ctx: "ToolContext") -> None:
 def _send_once(token: str, snap: dict) -> tuple[str, str, dict]:
     """One POST. Returns (state, detail, result fields). Never retries."""
     number = snap["issue_number"]
-    url = f"{gc.API_ROOT}/issues/{number}/comments"
+    url = f"{gc.api_root(snap['repository'])}/issues/{number}/comments"
     headers = {"Accept": "application/vnd.github+json", "User-Agent": gc.USER_AGENT,
                "X-GitHub-Api-Version": "2022-11-28", "Authorization": f"Bearer {token}"}
     try:
@@ -300,7 +305,7 @@ def reconcile(outbox: "Outbox", op: dict, token: Callable[[], str | None]) -> di
     matches, seen = [], 0
     for page in range(1, RECONCILE_PAGES + 1):
         status, headers, content = gc._send(
-            "GET", f"{gc.API_ROOT}/issues/{op['issue_number']}/comments",
+            "GET", f"{gc.api_root(op['repository'])}/issues/{op['issue_number']}/comments",
             params={"since": since.strftime("%Y-%m-%dT%H:%M:%SZ"), "per_page": 100, "page": page},
             token=token())
         gc._check_status(status, headers, "issue")

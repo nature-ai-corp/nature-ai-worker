@@ -988,9 +988,12 @@ function updateGithubTokenStatus() {
   $("#s-github-clear-row").hidden = source !== "stored";
   const write = state.settings.github_write_token_source === "stored";
   $("#s-github-write-token").placeholder = write ? "Leave empty to keep the current token" : "Paste a fine-grained GitHub token";
+  const other = state.settings.github_write_token_repository;
   $("#s-github-write-token-status").textContent = write
     ? `A verified token for @${state.settings.github_write_actor} is stored (encrypted). Comments are posted as this account.`
-    : "No posting token: comments cannot be proposed.";
+    : other && other !== state.settings.github_repository
+      ? `The stored posting token was verified for ${other}, not ${state.settings.github_repository}; enter it again to use it here.`
+      : "No posting token: comments cannot be proposed.";
   $("#s-github-write-clear-row").hidden = !write;
 }
 
@@ -1004,6 +1007,8 @@ function openSettings(firstRun = false) {
   $("#s-web").checked = !!s.web_fetch_enabled;
   $("#s-github").checked = !!s.github_enabled;
   $("#s-github-repo").textContent = s.github_repository || "";
+  $("#s-github-default-repo").textContent = s.github_default_repository || "";
+  $("#s-github-repository").value = s.github_repository || "";
   $("#s-github-token").value = "";
   $("#s-github-clear").checked = false;
   $("#s-github-write").checked = !!s.github_write_enabled;
@@ -1028,6 +1033,7 @@ function settingsBody() {
     api_key: $("#s-key").value.trim() || null,
     web_fetch_enabled: $("#s-web").checked,
     github_enabled: $("#s-github").checked,
+    github_repository: $("#s-github-repository").value.trim() || null,
     github_token: $("#s-github-token").value.trim() || null,
     clear_github_token: $("#s-github-clear").checked,
     github_write_enabled: $("#s-github-write").checked,

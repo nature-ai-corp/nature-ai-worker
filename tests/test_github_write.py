@@ -461,3 +461,43 @@ def test_platform_client_never_loads_the_write_path():
             "'nature_worker.github_outbox', 'nature_worker.credentials', 'nature_worker.agent'))))")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout
     assert out.strip() == "[]"
+
+
+# -- the repository allowlist ----------------------------------------------------------------
+
+
+def test_write_token_is_only_used_for_the_repository_it_was_verified_for(client, fake_model, github):
+    setup(client, fake_model)
+    conv_id, _ = propose(client, fake_model)
+    # The user switches the allowlist to another repository before approving.
+    s = configure(client, endpoint=fake_model.url + "/v1", github_write_enabled=True,
+                  github_repository="octo-org/demo")
+    assert s["github_write_token_source"] == "none"
+    assert s["github_write_token_repository"] == "nature-ai-corp/nature-ai-worker"
+    fake_model.queue(openai_text("Not posted."))
+    approve(client, conv_id)
+    op = operation(client, conv_id)
+    assert op["state"] == "failed_before_send" and github.posts == []
+    fake_model.queue(openai_text("ok"))
+    client.post(f"/api/conversations/{new_conversation(client)}/messages", json={"text": "hi"})
+    assert "github_post_issue_comment" not in {t["function"]["name"] for t in fake_model.requests[-1]["body"]["tools"]}
+
+
+def test_a_proposal_for_a_repository_no_longer_allowlisted_is_refused(config, github):
+    from nature_worker.db import Database
+    from nature_worker.github_outbox import Outbox
+    db = Database(config.data_dir / "worker.db")
+    out = Outbox(db)
+    ctx = ToolContext(Workspace(config.workspace_dir), github_write_enabled=True,
+                      github_write_token=lambda: WRITE_TOKEN)
+    with pytest.raises(Exception) as exc:
+        execute(ctx, "github_post_issue_comment", {"issue_number": 99, "body": BODY})
+    snap = {**exc.value.github, "conversation_id": "c", "tool_call_id": "t"}
+    conv = db.create_conversation()["id"]
+    approval_id = out.propose(conv, "t", gw.TOOL, snap["arguments"], "Post", snap)
+    _, op = out.decide(db.get_approval(approval_id), True)
+    other = ToolContext(Workspace(config.workspace_dir), github_write_enabled=True,
+                        github_repository="octo-org/demo", github_write_token=lambda: WRITE_TOKEN)
+    assert "no longer the allowlisted repository" in gw.execute(out, op, other)
+    assert out.get(op["id"])["state"] == "failed_before_send" and github.posts == []
+    db.close()

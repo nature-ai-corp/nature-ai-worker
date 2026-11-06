@@ -258,26 +258,36 @@ def create_app(config: Config | None = None) -> FastAPI:
         if not github_community.valid_repository(repository):
             raise HTTPException(400, "Enter the GitHub repository as owner/name, for example "
                                      f"{github_community.DEFAULT_REPOSITORY}.")
+        # Every token is checked before anything is stored: a refused save changes nothing.
         github_token = (body.github_token or "").strip()
         if github_token and not github_community.valid_token(github_token):
             raise HTTPException(400, "That does not look like a GitHub token.")
+        write_token = (body.github_write_token or "").strip()
+        stored_read = creds.get("github", github_community.API_HOST)[0]
+        stored_write = creds.get("github_write", github_community.API_HOST)[0]
+        read_after = None if body.clear_github_token else github_token or stored_read
+        write_after = None if body.clear_github_write_token else write_token or stored_write
+        if read_after and read_after == write_after:
+            log.warning("GitHub token not saved: the read-only and the posting token are the same")
+            raise HTTPException(400, "The read-only token and the posting token must be two different tokens. "
+                                     "Put the posting token only in \"GitHub token for posting comments\".")
+        actor = None
+        if write_token and not body.clear_github_write_token:
+            try:
+                # Saved only after GitHub confirms who it belongs to and that it is suitable.
+                actor = github_write.check_write_token(write_token, repository)
+            except ToolError as e:
+                log.warning("GitHub write token not saved: %s", e)  # the reason only, never the token
+                raise HTTPException(400, f"The GitHub write token was not saved: {e}") from None
         if body.clear_github_token:
             creds.set("github", None)
         elif github_token:
             creds.set("github", github_token, github_community.API_HOST)
-        write_token = (body.github_write_token or "").strip()
-        if write_token and write_token in (github_token, creds.get("github", github_community.API_HOST)[0]):
-            raise HTTPException(400, "Use a separate token for posting, not the read-only token.")
         if body.clear_github_write_token:
             creds.set("github_write", None)
             db.set_settings({"github_write_actor": None, "github_write_token_fp": None,
                              "github_write_repository": None})
         elif write_token:
-            try:
-                # Saved only after GitHub confirms who it belongs to and that it is suitable.
-                actor = github_write.check_write_token(write_token, repository)
-            except ToolError as e:
-                raise HTTPException(400, f"The GitHub write token was not saved: {e}") from None
             creds.set("github_write", write_token, github_community.API_HOST)
             db.set_settings({"github_write_actor": actor, "github_write_repository": repository,
                              "github_write_token_fp": github_write.token_fingerprint(write_token)})

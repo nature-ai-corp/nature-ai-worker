@@ -501,3 +501,27 @@ def test_a_proposal_for_a_repository_no_longer_allowlisted_is_refused(config, gi
     assert "no longer the allowlisted repository" in gw.execute(out, op, other)
     assert out.get(op["id"])["state"] == "failed_before_send" and github.posts == []
     db.close()
+
+
+def test_one_token_in_both_fields_is_refused_and_changes_nothing(client, fake_model, github):
+    configure(client, endpoint=fake_model.url + "/v1", github_token=READ_TOKEN)
+    for body in ({"github_token": WRITE_TOKEN, "github_write_token": WRITE_TOKEN},   # same new token twice
+                 {"github_write_token": READ_TOKEN}):                                # the stored read token
+        r = client.put("/api/settings", json={"provider": "openai_compatible", "model": "m",
+                                              "endpoint": fake_model.url + "/v1", **body})
+        assert r.status_code == 400 and "two different tokens" in r.json()["detail"]
+    from nature_worker.credentials import CredentialStore
+    store = CredentialStore(client.app.state.config.data_dir)
+    assert store.get("github", gc.API_HOST)[0] == READ_TOKEN and store.get("github_write", gc.API_HOST)[0] is None
+    setup(client, fake_model)
+    r = client.put("/api/settings", json={"provider": "openai_compatible", "model": "m",
+                                          "endpoint": fake_model.url + "/v1", "github_token": WRITE_TOKEN})
+    assert r.status_code == 400 and store.get("github", gc.API_HOST)[0] == READ_TOKEN
+
+
+def test_a_refused_write_token_changes_nothing(client, fake_model, github):
+    github.scopes = "repo"
+    r = client.put("/api/settings", json={"provider": "openai_compatible", "model": "m", "endpoint": fake_model.url,
+                                          "github_token": READ_TOKEN, "github_write_token": WRITE_TOKEN})
+    assert r.status_code == 400
+    assert client.get("/api/settings").json()["github_token_source"] == "none"

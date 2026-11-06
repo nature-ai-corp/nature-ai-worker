@@ -78,7 +78,9 @@ def github_comments(repo: str, issue: int) -> list[dict]:
     out = []
     for page in range(1, 6):
         req = urllib.request.Request(
-            f"https://api.github.com/repos/{repo}/issues/{issue}/comments?per_page=100&page={page}",
+            # Anonymous reads are served from a public cache for 60 s; a unique parameter bypasses it.
+            f"https://api.github.com/repos/{repo}/issues/{issue}/comments?per_page=100&page={page}"
+            f"&nocache={uuid.uuid4().hex}",
             headers={"Accept": "application/vnd.github+json", "User-Agent": "NatureAIWorker-Acceptance"})
         with urllib.request.urlopen(req, timeout=30) as resp:
             items = json.loads(resp.read())
@@ -158,7 +160,7 @@ def main() -> int:
                f"HTTP {status} state={op2['state']} detail={op2['detail']}")
     run.notes.append(f"P2 agent reply: {answer2}")
 
-    time.sleep(3)
+    time.sleep(65)  # also outlast any cached copy
     after = github_comments(repo, args.issue)
     found = {k: [c for c in after if f"({k}, run {marker})" in (c.get("body") or "")] for k in texts}
     one = found["P1"][0] if len(found["P1"]) == 1 else {}

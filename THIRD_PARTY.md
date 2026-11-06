@@ -1,10 +1,20 @@
 # Third-party dependencies
 
-Runtime dependencies installed by `pip install .` (from a clean install, 2026-10-17), with license metadata as declared by each package.
-All are permissive licenses compatible with Apache-2.0. `certifi` is MPL-2.0 and is used unmodified as a library, which MPL-2.0 permits.
+Runtime dependencies installed by `pip install .` (and by the optional `documents` extra: defusedxml, et_xmlfile, openpyxl, pypdf), pinned in `requirements.lock`, with the license metadata declared by each installed package. Re-verified on 2026-10-26 from the installed package metadata with `python scripts/repo_checks.py --print-licenses` (CI runs `--licenses`, which fails on an unknown or incompatible license and on a pinned package missing from this table).
+
+All runtime dependencies are under permissive licenses compatible with distributing this project under Apache-2.0, except `certifi`, which is MPL-2.0. MPL-2.0 is a file-level copyleft: using certifi unmodified as a separate library, as this project does, is permitted. Modifying certifi's own files would oblige us to publish those modifications under MPL-2.0.
+
 No third-party code or assets are copied into this repository; the web UI uses no external libraries, fonts or images.
 
-Re-check before each release, for example: `pip install pip-licenses && pip-licenses --from=mixed`.
+## Distribution notes
+
+- **Release bundles** (see [docs/RELEASES.md](docs/RELEASES.md)) contain the dependency wheels below, unmodified, each with its own license files. Publishing a bundle is a redistribution of those packages, which all of these licenses permit. The `cryptography` wheels include a statically linked OpenSSL (4.0.3 in cryptography 50.0.2); OpenSSL is Apache-2.0 since version 3.0.
+- **Windows bundles and the Windows installer** contain the same packages as Windows x64 wheels, listed with their SHA-256 in `packaging/windows/wheels-win_amd64-cp312.sha256` (all 42 checked against PyPI's published digests on 2026-10-28). `click` 8.5.0 no longer requires `colorama` on Windows, so no Windows-only package is added. They also contain a **CPython 3.12.15 runtime** built by [python-build-standalone](https://github.com/astral-sh/python-build-standalone) (release 20261009, pinned in `packaging/windows/runtime.json`), unmodified. CPython is under the PSF License Version 2. Its Windows build contains third-party libraries (among them OpenSSL, SQLite, libffi, zlib, bzip2, Tcl/Tk) and Microsoft Visual C++ runtime files under the "Additional Conditions for this Windows binary build" in its `LICENSE.txt`. The runtime also contains pip (MIT, with vendored packages under their own licenses). The installer ships all these license texts in `licenses\THIRD_PARTY_LICENSES.txt`, generated from the files themselves by `scripts/windows_installer.py`.
+- **Build tools (not shipped as files):** `setuptools` 84.0.0 (MIT) builds the Worker wheel. It is hash-pinned in `packaging/build-requirements.txt` and used without build isolation. Inno Setup 6.7.3 compiles the Windows installer, whose setup program contains Inno Setup's own code under the [Inno Setup License](https://jrsoftware.org/files/is/license.txt). That license requires keeping its copyright notice and web address, which NOTICE acknowledges. jrsoftware separately *requests* that commercial users buy a license ([open question](docs/WINDOWS_STANDALONE_INSTALLER.md#licensing-review)).
+- **Docker images.** The `Dockerfile` builds on `python:3.14-slim` (Debian), whose system packages are under many licenses, including GPL. Building an image locally raises no issue. Publishing a pre-built image is a distribution of those packages and needs the base image's license and source-availability obligations to be met. **No image is published by this repository.**
+- **Platform contract.** `src/nature_worker/contracts/client-interface-v1.openapi.json` is an interface description extracted from the NATURE AI Platform's own OpenAPI document. It is not third-party material, but it is NATURE AI Platform material. Including it here publishes it under this repository's license; see [docs/OPEN_SOURCE_PROTECTION.md](docs/OPEN_SOURCE_PROTECTION.md).
+
+## Runtime dependencies
 
 | Package | Version | License |
 |---|---|---|
@@ -17,8 +27,10 @@ Re-check before each release, for example: `pip install pip-licenses && pip-lice
 | charset-normalizer | 3.5.2 | MIT |
 | click | 8.5.0 | BSD-3-Clause |
 | cryptography | 50.0.2 | Apache-2.0 OR BSD-3-Clause |
+| defusedxml | 0.7.1 | Python Software Foundation License |
 | distro | 1.9.0 | Apache Software License |
 | docstring_parser | 0.18.0 | MIT License |
+| et_xmlfile | 2.0.0 | MIT |
 | fastapi | 0.143.3 | MIT |
 | google-auth | 2.62.0 | Apache Software License |
 | google-genai | 2.31.0 | Apache-2.0 |
@@ -30,19 +42,33 @@ Re-check before each release, for example: `pip install pip-licenses && pip-lice
 | idna | 3.20 | BSD-3-Clause |
 | jiter | 0.17.0 | MIT |
 | openai | 3.33.0 | Apache-2.0 |
+| openpyxl | 3.1.5 | MIT |
 | opentelemetry-api | 1.45.1 | Apache-2.0 |
 | pyasn1 | 0.6.4 | BSD-2-Clause |
 | pyasn1_modules | 0.4.2 | BSD License |
 | pycparser | 3.11 | BSD-3-Clause |
 | pydantic | 2.14.1 | MIT |
 | pydantic_core | 2.50.1 | MIT |
+| pypdf | 6.21.3 | BSD-3-Clause |
 | requests | 2.34.2 | Apache Software License |
 | sniffio | 1.3.1 | MIT License; Apache Software License |
 | starlette | 1.8.0 | BSD-3-Clause |
 | tenacity | 9.1.4 | Apache Software License |
 | truststore | 0.10.5 | MIT |
-| typing-inspection | 0.4.4 | MIT |
 | typing_extensions | 4.16.0 | PSF-2.0 |
+| typing-inspection | 0.4.4 | MIT |
 | urllib3 | 2.8.0 | MIT |
 | uvicorn | 0.54.0 | BSD-3-Clause |
 | websockets | 16.1.1 | BSD-3-Clause |
+
+## Development and test dependencies (not distributed)
+
+Pinned in `requirements-dev.lock`; used only to run the tests.
+
+| Package | Version | License |
+|---|---|---|
+| iniconfig | 2.3.1 | MIT |
+| packaging | 26.3 | Apache-2.0 OR BSD-2-Clause |
+| pluggy | 1.7.0 | MIT License |
+| Pygments | 2.21.0 | BSD-2-Clause |
+| pytest | 9.1.1 | MIT |

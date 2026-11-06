@@ -14,6 +14,13 @@ credentials.enc
 *.sqlite
 *.sqlite3
 acceptance-*.md
+upgrade-e2e-report.md
+
+# Release signing keys, bundles and locally trusted keys: never commit
+*.pem
+trusted-keys.json
+release.json
+release.json.sig
 
 # Python
 __pycache__/

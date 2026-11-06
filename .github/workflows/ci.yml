@@ -4,7 +4,7 @@ name: CI
 # step contacts a real model provider.
 on:
   push:
-    branches: [main]
+    branches: [main, 'release/**']
   pull_request:
   workflow_dispatch:
 
@@ -36,8 +36,115 @@ jobs:
           python -m pip install -r requirements.lock -r requirements-dev.lock
           python -m pip install --no-deps .
           python -m pip check
+      - name: Launch real installed Worker on Linux
+        run: python scripts/real-worker-smoke.py
       - name: Run tests
         run: python -m pytest -q
+
+  newest-dependencies:
+    # pyproject.toml allows newer SDK releases than requirements.lock pins (anthropic 2.x sends
+    # the key as a Bearer token where 1.x used X-Api-Key). This job installs what a plain
+    # `pip install .` resolves today, so such changes show up here, not at users.
+    name: Tests with the newest supported dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install the package with unpinned dependencies
+        run: |
+          python -m pip install ".[dev,documents]"
+          python -m pip check
+          python -m pip freeze | grep -iE "^(anthropic|openai|google-genai|httpx|openpyxl|pypdf)=="
+      - name: Run tests
+        run: python -m pytest -q
+
+  windows-security:
+    name: Windows client security (Python ${{ matrix.python }})
+    runs-on: windows-2022
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Parse local Windows RC signer helper (no signing secrets)
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'scripts/windows_rc_stage.ps1'), [ref]$tokens, [ref]$errors
+          ) | Out-Null
+          if ($errors) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements.lock -r requirements-dev.lock
+          python -m pip install --no-deps .
+          python -m pip check
+      - name: Launch real installed Nature AI Worker process
+        run: python scripts/real-worker-smoke.py
+      - name: Run the full test suite on Windows
+        run: python -m pytest -q
+
+  repo-checks:
+    name: License, secret and artifact checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0  # --history scans every committed blob
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned dependencies (license metadata)
+        run: python -m pip install -r requirements.lock -r requirements-dev.lock
+      - name: Check license, NOTICE, SPDX headers, secrets, sensitive files, artifacts, dependency licenses
+        run: python scripts/repo_checks.py --licenses --history
+
+  upgrade-e2e:
+    name: Real upgrades on a disposable installation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned dependencies
+        run: python -m pip install -r requirements.lock -r requirements-dev.lock
+      - name: Build signed test releases, install, upgrade, interrupt, recover, roll back
+        run: python scripts/upgrade_e2e.py --workdir "${{ runner.temp }}/upgrade-e2e"
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: upgrade-e2e-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/upgrade-e2e/upgrade-e2e-report.md
+            ${{ runner.temp }}/upgrade-e2e/logs/
+          if-no-files-found: ignore
 
   docker:
     name: Docker build and runtime

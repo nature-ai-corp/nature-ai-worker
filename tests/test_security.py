@@ -1,7 +1,10 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Workspace confinement (acceptance E), approvals (F) and credential handling."""
 
 import logging
 import os
+import sys
 
 import pytest
 
@@ -10,6 +13,7 @@ from nature_worker.agent import SYSTEM_PROMPT
 from nature_worker.credentials import CredentialStore, RedactSecretsFilter
 from nature_worker.tools import ApprovalRequired, ToolContext, ToolError, execute
 from nature_worker.tools.workspace import Workspace
+from os_helpers import assert_private, make_link, try_link
 
 
 @pytest.fixture
@@ -20,10 +24,16 @@ def sandbox(tmp_path):
     outside.mkdir()
     (outside / "secret.txt").write_text("TOP-SECRET")
     (ws / "ok.txt").write_text("fine")
-    os.symlink(outside / "secret.txt", ws / "link_to_secret.txt")
-    os.symlink(outside, ws / "link_dir")
-    os.symlink(ws / "ok.txt", ws / "inner_link.txt")
+    # Without the Windows symlink privilege, only the cases that need a link are skipped.
+    try_link(outside / "secret.txt", ws / "link_to_secret.txt")
+    try_link(outside, ws / "link_dir", directory=True)
+    try_link(ws / "ok.txt", ws / "inner_link.txt")
     return Workspace(ws), outside
+
+
+def _needs_links(ws, *names):
+    if not all(os.path.lexists(ws.root / name) for name in names):
+        pytest.skip("creating symbolic links needs Developer Mode or administrator rights on Windows")
 
 
 # -- E: workspace escape --------------------------------------------------------
@@ -35,6 +45,8 @@ def sandbox(tmp_path):
 ])
 def test_escape_attempts_are_blocked(sandbox, path):
     ws, _ = sandbox
+    if path.split("/")[0] in ("link_to_secret.txt", "link_dir"):
+        _needs_links(ws, path.split("/")[0])
     with pytest.raises(ToolError):
         ws.read_text(path)
 
@@ -42,19 +54,42 @@ def test_escape_attempts_are_blocked(sandbox, path):
 @pytest.mark.parametrize("path", ["../evil.txt", "link_dir/evil.txt", "link_to_secret.txt", "/tmp/evil.txt"])
 def test_writes_outside_workspace_are_blocked(sandbox, path):
     ws, outside = sandbox
+    if path.split("/")[0] in ("link_to_secret.txt", "link_dir"):
+        _needs_links(ws, path.split("/")[0])
     with pytest.raises(ToolError):
         ws.write_text(path, "pwned")
     assert (outside / "secret.txt").read_text() == "TOP-SECRET"
     assert not (outside / "evil.txt").exists()
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="NTFS junctions exist only on Windows")
+def test_junction_escape_is_blocked_on_windows(tmp_path):
+    # A junction needs no privilege on Windows, so it is the realistic escape route there.
+    import _winapi
+    ws, outside = tmp_path / "ws", tmp_path / "outside"
+    ws.mkdir()
+    outside.mkdir()
+    (outside / "secret.txt").write_text("TOP-SECRET")
+    _winapi.CreateJunction(str(outside), str(ws / "junction"))
+    workspace = Workspace(ws)
+    for path in ("junction/secret.txt", "junction"):
+        with pytest.raises(ToolError):
+            workspace.read_text(path)
+    with pytest.raises(ToolError):
+        workspace.write_text("junction/evil.txt", "pwned")
+    assert not (outside / "evil.txt").exists()
+    assert not any(e["path"].startswith("junction") for e in workspace.list("."))
+
+
 def test_symlinks_inside_workspace_still_work(sandbox):
     ws, _ = sandbox
+    _needs_links(ws, "inner_link.txt")
     assert ws.read_text("inner_link.txt") == "fine"
 
 
 def test_listing_hides_escaping_symlinks(sandbox):
     ws, _ = sandbox
+    _needs_links(ws, "inner_link.txt", "link_to_secret.txt", "link_dir")
     paths = {e["path"] for e in ws.list(".")}
     assert "ok.txt" in paths and "inner_link.txt" in paths
     assert "link_to_secret.txt" not in paths and "link_dir" not in paths
@@ -234,8 +269,9 @@ def test_api_key_never_stored_in_plaintext_or_returned(client, config, fake_mode
     assert key not in client.get("/api/settings").text
     for f in config.data_dir.iterdir():
         assert key.encode() not in f.read_bytes(), f"key found in plaintext in {f.name}"
-    assert (config.data_dir / "credentials.enc").stat().st_mode & 0o077 == 0
-    assert (config.data_dir / "master.key").stat().st_mode & 0o077 == 0
+    assert_private(config.data_dir)
+    assert_private(config.data_dir / "credentials.enc")
+    assert_private(config.data_dir / "master.key")
 
     # The key is sent to the provider but not stored in the conversation.
     fake_model.queue(openai_text("hi"))
@@ -296,8 +332,8 @@ def test_log_redaction_covers_tracebacks(config):
 
 
 def test_dangling_symlinks_do_not_break_listing(client, config, tmp_path):
-    os.symlink(config.workspace_dir / "gone.txt", config.workspace_dir / "dangling")
-    os.symlink(tmp_path / "nowhere", config.workspace_dir / "dangling_out")
+    make_link(config.workspace_dir / "gone.txt", config.workspace_dir / "dangling")
+    make_link(tmp_path / "nowhere", config.workspace_dir / "dangling_out")
     (config.workspace_dir / "real.txt").write_text("x")
     r = client.get("/api/files")
     assert r.status_code == 200

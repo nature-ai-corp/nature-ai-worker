@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Runs the real server process (acceptance H and I).
 
 Starts ``python -m nature_worker`` as a subprocess, drives it over HTTP,
@@ -92,17 +94,18 @@ def test_no_platform_dependencies():
     """Acceptance I: the package imports only the standard library, its own
     modules and its declared third-party dependencies."""
     allowed_third_party = {"fastapi", "uvicorn", "httpx", "httpcore", "httpx2", "openai", "anthropic",
-                           "google", "cryptography", "pydantic"}
+                           "google", "cryptography", "pydantic",
+                           "openpyxl", "pypdf", "defusedxml"}  # the optional `documents` extra
     found = set()
     for path in (SRC / "nature_worker").rglob("*.py"):
-        for node in ast.walk(ast.parse(path.read_text())):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.Import):
                 found.update(a.name.split(".")[0] for a in node.names)
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
                 found.add(node.module.split(".")[0])
     third_party = {m for m in found if m not in sys.stdlib_module_names and m != "nature_worker"}
     assert third_party <= allowed_third_party, third_party - allowed_third_party
-    text = " ".join(p.read_text().lower() for p in SRC.rglob("*") if p.suffix in (".py", ".js", ".html", ".css"))
+    text = " ".join(p.read_text(encoding="utf-8").lower() for p in SRC.rglob("*") if p.suffix in (".py", ".js", ".html", ".css"))
     for marker in ("nature_ai_platform", "nature-ai-platform", "nature_platform"):
         assert marker not in text
 

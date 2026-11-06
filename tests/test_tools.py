@@ -1,5 +1,8 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Built-in data tools and web fetch safeguards."""
 
+import os
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -37,6 +40,10 @@ def test_search_text(ws, tmp_path):
     assert "a.md:2: Invoice 42 due" in out and "sub/b.txt:1: another invoice" in out
     assert "bin.dat" not in out
     assert data.search_text(ws, {"query": r"\d+ due", "regex": True}).startswith("a.md:2")
+    # One file (a model checking the document it wrote passes its path); still only inside the workspace.
+    assert data.search_text(ws, {"query": "invoice", "path": "sub/b.txt"}) == "sub/b.txt:1: another invoice"
+    with pytest.raises(ToolError, match="outside the workspace"):
+        data.search_text(ws, {"query": "x", "path": "../outside.txt"})
 
 
 @pytest.mark.parametrize("expr,expected", [("2+3*4", "14"), ("(120.5+99)*0.2", "43.9"), ("sqrt(16)+max(1,7)", "11.0"), ("2**10", "1024")])
@@ -56,6 +63,15 @@ def test_read_long_file_in_chunks(ws, tmp_path):
     assert "offset=100000" in first
     second = execute(ToolContext(ws), "read_file", {"path": "big.txt", "offset": 100000})
     assert second == "x" * 50_000
+
+
+def test_read_one_bounded_part(ws, tmp_path):
+    (tmp_path / "doc.md").write_bytes(("# A\n" + "a" * 3000 + "\n# B\nbbb\n").encode("utf-8"))
+    part = execute(ToolContext(ws), "read_file", {"path": "doc.md", "offset": 3004, "limit": 6})
+    assert part.startswith("\n# B\nb") and "[Truncated: showing characters 3004-3010 of 3013." in part
+    # A limit never widens the chunk the context allows.
+    small = ToolContext(ws, read_budget=lambda: 2_000)
+    assert "showing characters 0-2000" in execute(small, "read_file", {"path": "doc.md", "limit": 50_000})
 
 
 def test_binary_file_is_refused(ws, tmp_path):
@@ -138,6 +154,9 @@ def test_dns_rebinding_and_redirect_to_private_are_blocked(ws, local_http, monke
 
 
 def _online() -> bool:
+    # Real internet tests are opt-in: DNS/TCP reachability does not guarantee HTTP 200.
+    if os.environ.get("NATURE_WORKER_LIVE_WEB_TEST") != "1":
+        return False
     try:
         socket.create_connection(("example.com", 443), timeout=3).close()
         return True

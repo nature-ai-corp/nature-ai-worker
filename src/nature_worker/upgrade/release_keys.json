@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "comment": "Official NATURE AI Worker Ed25519 release public keys. Private signing keys are never stored in this repository. See docs/RELEASES.md.",
+  "keys": [
+    {
+      "key_id": "64ecfc2da2ed12e9",
+      "public_key": "3iohvG/qjuQlGC3mTK5/YIzd8Uzyxs+dR3Jmi8m277c=",
+      "comment": "NATURE AI Official Release Key 2026"
+    }
+  ]
+}

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Shared fixtures.
 
 ``FakeModelServer`` is a local HTTP server that speaks the wire format of
@@ -27,6 +29,7 @@ class FakeModelServer:
         self.responses: list[tuple[int, dict]] = []
         self.requests: list[dict] = []
         self.delay = 0.0  # seconds to wait before each reply, to observe a run in progress
+        self.get_payload: dict = {"data": [], "models": []}  # GET answers (model lists, Ollama /api/ps)
         server = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -34,7 +37,7 @@ class FakeModelServer:
                 pass
 
             def do_GET(self):
-                self._reply(200, {"data": [], "models": []})
+                self._reply(200, server.get_payload)
 
             def do_POST(self):
                 length = int(self.headers.get("content-length") or 0)
@@ -96,6 +99,18 @@ def openai_text(text: str) -> tuple[int, dict]:
 
 def openai_error(status: int, message: str) -> tuple[int, dict]:
     return status, {"error": {"message": message, "type": "error", "code": None}}
+
+
+def anthropic_key_sent(headers: dict) -> str | None:
+    """The API key an Anthropic SDK request carried. The official SDK sends it as `X-Api-Key`
+    up to 1.x and as `Authorization: Bearer` from 2.0 on; pyproject.toml supports both, so
+    tests accept either form, but never both and never anything else."""
+    bearer = headers.get("authorization", "")
+    forms = [headers["x-api-key"]] if "x-api-key" in headers else []
+    if bearer.startswith("Bearer "):
+        forms.append(bearer[len("Bearer "):])
+    assert len(forms) <= 1, f"the key was sent twice: {sorted(headers)}"
+    return forms[0] if forms else None
 
 
 def anthropic_response(*calls: tuple[str, dict], text: str | None = None) -> tuple[int, dict]:

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 # Docker verification for the documented Compose deployment (README, Option B).
 #
 # Builds the image and checks: /api/health and the container HEALTHCHECK, the
@@ -35,7 +37,7 @@ wait_healthy() {
   fail "/api/health did not respond within 60 s"
 }
 
-cp -r "$ROOT"/{Dockerfile,compose.yaml,.dockerignore,requirements.lock,pyproject.toml,README.md,LICENSE,src} "$WORK"/
+cp -r "$ROOT"/{Dockerfile,compose.yaml,.dockerignore,requirements.lock,pyproject.toml,README.md,LICENSE,NOTICE,src} "$WORK"/
 mkdir "$WORK/data" "$WORK/workspace"
 echo "hello from the host" > "$WORK/workspace/hello.txt"
 docker compose version
@@ -45,7 +47,8 @@ compose build
 compose up -d
 wait_healthy
 health=$(api "$BASE/api/health")
-[ "$(echo "$health" | json 'd["ok"], d["version"]')" = "True 0.1.0" ] || fail "unexpected health response: $health"
+expected_version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+[ "$(echo "$health" | json 'd["ok"], d["version"]')" = "True $expected_version" ] || fail "unexpected health response: $health"
 pass "/api/health: $health"
 
 # -- container user and permissions --------------------------------------------------

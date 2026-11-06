@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Provider endpoint selection and credential routing.
 
 API keys must only ever reach the endpoint the user configured (or the
@@ -8,7 +10,7 @@ bound to the endpoint they were saved for.
 
 import pytest
 
-from conftest import (FakeModelServer, anthropic_response, configure, conversation, gemini_response,
+from conftest import (FakeModelServer, anthropic_key_sent, anthropic_response, configure, conversation, gemini_response,
                       new_conversation, openai_error, openai_text, send)
 from nature_worker import providers
 from nature_worker.credentials import CredentialStore
@@ -53,7 +55,7 @@ def test_official_endpoints_are_explicit_defaults(monkeypatch):
     assert str(providers.make_provider("openai", "m", KEY, None).inner.client.base_url) == "https://api.openai.com/v1/"
     assert str(providers.make_provider("anthropic", "m", KEY, None).inner.client.base_url) == "https://api.anthropic.com"
     assert str(providers.make_provider("deepseek", "m", KEY, None).inner.client.base_url) == "https://api.deepseek.com"
-    gem = providers.make_provider("gemini", "m", KEY, None).inner.client
+    gem = providers.make_provider("gemini", "m", KEY, None).inner.inner.client  # inside the retry wrapper
     assert gem._api_client.vertexai is False
     assert gem._api_client._http_options.base_url == "https://generativelanguage.googleapis.com/"
 
@@ -87,7 +89,7 @@ def test_anthropic_ambient_credentials_are_not_injected(client, fake_model, monk
     fake_model.queue(anthropic_response(text="ok"))
     send(client, new_conversation(client), "hi")
     headers = fake_model.requests[0]["headers"]
-    assert headers["x-api-key"] == KEY
+    assert anthropic_key_sent(headers) == KEY  # the configured key, not the ambient token
     assert "AMBIENT" not in str(headers) and "x-leak" not in headers
 
 

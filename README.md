@@ -14,7 +14,7 @@ Connect the model you already use, describe a task in plain language, and approv
 ## Highlights
 
 - **One built-in General Agent.** No agents, workflows or code to set up. It reads, searches and writes files, summarizes CSV/TSV/JSON tables, does exact arithmetic, and can fetch web pages if you turn that on.
-- **You stay in control.** Overwriting or deleting a file and fetching a web page always wait for your approval. This is enforced where tools run, not just requested in the prompt.
+- **You stay in control.** Changing or deleting one of your files and fetching a web page always wait for your approval. The agent may revise only the files it created itself in the same conversation, and only while they are exactly as it left them. This is enforced where tools run, not just requested in the prompt.
 - **Confined to one workspace folder.** Paths outside it, `..` traversal and escaping symlinks are blocked. There is no shell or code-execution tool.
 - **Your model, your choice:** OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Ollama (local models), or any OpenAI-compatible API.
 - **Small and local.** One Python process, SQLite, and a plain web UI. API keys are encrypted at rest and only sent to the endpoint you configured.
@@ -28,7 +28,7 @@ Requires Python 3.11–3.14 and a model that supports tool calling (for example,
 git clone https://github.com/nature-ai-corp/nature-ai-worker.git
 cd nature-ai-worker
 python3 -m venv .venv && source .venv/bin/activate
-pip install .
+pip install -c requirements.lock .
 nature-worker
 ```
 
@@ -41,6 +41,10 @@ Want something to try? The [sales report demo](examples/sales-report/) has a syn
 ---
 
 ## Installation
+
+### Windows installer (development builds)
+
+A per-user installer, `NatureAIWorker-Setup-<version>.exe`, brings its own pinned Python runtime and every dependency. It needs no Python, Git, WSL, Docker or administrator rights. It adds a Start-menu entry that starts the app and opens it in your browser, plus an Apps & Features entry. Uninstalling keeps your data and workspace; removing them is a separate, explicit Start-menu step. Upgrades go through the same verified, rolled-back-on-failure engine as `nature-worker-upgrade`. Verify the published SHA-256 before running a downloaded installer. See [docs/WINDOWS_STANDALONE_INSTALLER.md](docs/WINDOWS_STANDALONE_INSTALLER.md).
 
 ### Option A: Python 3.11–3.14
 
@@ -75,9 +79,11 @@ git clone https://github.com/nature-ai-corp/nature-ai-worker.git
 cd nature-ai-worker
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install .
+pip install -c requirements.lock .
 nature-worker
 ```
+
+`-c requirements.lock` installs exactly the dependency versions the tests and releases use. Plain `pip install .` also works and may pick newer releases of the provider SDKs; CI tests those too, but they have not been checked against the real services.
 
 Open **http://127.0.0.1:8080** in your browser.
 
@@ -163,11 +169,13 @@ Statuses describe how the agent's last run ended, not whether your goal was met.
 | Tool | What it does | Approval |
 |---|---|---|
 | `list_files` | List files and folders in the workspace | No |
-| `read_file` | Read a text file (long files are read in chunks) | No |
+| `read_file` | Read a text file, or the text of a .docx, .xlsx or .pdf file (long content is read in chunks) | No |
 | `search_text` | Find text or a regex across workspace files | No |
 | `table_summary` | Row and column statistics for CSV, TSV or JSON tables | No |
 | `calculate` | Exact arithmetic (safe expression evaluator, no code execution) | No |
-| `write_file` | Create a file | No for new files; **yes to overwrite** |
+| `write_file` | Create or replace a file | No for new files and for files the agent created in this conversation; **yes for any other existing file** |
+| `append_file` | Add text to the end of a file, to write long documents in parts (1 MB per call, 5 MB per file) | Same as `write_file` |
+| `replace_text` | Correct one exact piece of text in a text file (must match exactly once; same encoding; atomic) | Same as `write_file` |
 | `delete_file` | Delete a file | **Always** |
 | `web_fetch` | Fetch a public web page as text (only when enabled in Settings) | **Always** |
 
@@ -197,6 +205,15 @@ All settings are optional environment variables (see `.env.example`):
 - Alternatively, set keys only as environment variables, and nothing is written to disk.
 - **Keys only go where you configured them.** OpenAI, Anthropic, Gemini and DeepSeek keys are only sent to those providers' official endpoints. A key saved for an Ollama or OpenAI-compatible endpoint is bound to that exact endpoint. If you change the endpoint, the key is not sent to the new address until you enter it again.
 - SDK environment overrides are ignored (a warning at startup names any that are set): `OPENAI_BASE_URL`, `OPENAI_CUSTOM_HEADERS`, `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID`, `OPENAI_ADMIN_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, `ANTHROPIC_AUTH_TOKEN`, `GOOGLE_GEMINI_BASE_URL`, `GOOGLE_VERTEX_BASE_URL`, `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_GENAI_USE_ENTERPRISE`, `GOOGLE_API_KEY`. To use a proxy or gateway, choose **OpenAI-compatible API** and enter its URL in Settings.
+
+---
+
+## Upgrading
+
+- **Source checkout or `pip install .`** (the quick start above): `git pull`, then `pip install .`, then restart. When the Worker starts on older data, it backs up the data folder to `data/backups/` and then migrates it. It refuses to open data written by a newer version.
+- **Managed installation:** `nature-worker-upgrade upgrade --bundle <release>` checks the release's signature and every file before it installs anything, shows the release notes, and asks you to confirm the version. It then lets running work finish, backs up your data, switches versions and checks that the new version works. If any step fails, it returns to the previous version and its data.
+
+See [docs/UPGRADES.md](docs/UPGRADES.md). **No official signed release has been published yet** ([docs/RELEASES.md](docs/RELEASES.md)).
 
 ---
 
@@ -239,9 +256,15 @@ src/nature_worker/
   providers/        One adapter per API (OpenAI-compatible, Anthropic, Gemini, Ollama)
   tools/            Workspace sandbox, file tools, data tools, guarded web fetch
   static/           The web UI (plain HTML/CSS/JS, no build step)
+  migrations.py     Versioned data migrations and data-root backups
+  maintenance.py    Coordinated stop for upgrades, one Worker per data root
+  upgrade/          Verified, transactional upgrades (nature-worker-upgrade)
 tests/              Automated tests
 examples/           Synthetic demo data (sales report demo)
 scripts/acceptance.py   Real-provider acceptance check
+scripts/upgrade_e2e.py  Real upgrade tests on a disposable installation
+scripts/release_bundle.py  Build and sign a release bundle
+scripts/repo_checks.py  License, secret and artifact checks (CI)
 ```
 
 ---
@@ -265,14 +288,16 @@ The automated tests never contact a real AI provider. To check a provider yourse
 ## Known limitations
 
 - **Single user, local use only.** There is no login and no user separation: anyone who can reach the port can use the agent, read the workspace and use your configured provider. The server listens on `127.0.0.1` by default, and Docker Compose publishes the port on `127.0.0.1` only. Do not bind to `0.0.0.0` or expose the port to a network without an authenticating reverse proxy in front. See [SECURITY.md](SECURITY.md) for the security model and residual risks.
-- **Text files only.** The agent reads UTF-8 text, CSV/TSV and JSON. PDF, Word, Excel and images are not supported.
+- **Text and common documents, read-only.** The agent reads text files (UTF-8, UTF-16 with a byte-order mark and Windows-1252, as Excel saves CSV on Windows; any other encoding is reported, never silently garbled), CSV/TSV and JSON, and the text of Word (.docx) files. Excel (.xlsx) and PDF need the optional extra: `pip install -c requirements.lock '.[documents]'`. Formulas are read as the values Excel saved, never calculated; macros, scripts, links and embedded objects are ignored. Scanned PDFs (no text layer), images and old .doc/.xls files are not supported. Limits: 20 MB per document, 300 PDF pages, 10,000 rows per sheet, 2 million extracted characters. The agent cannot write Word, Excel or PDF files.
 - **No streaming.** Replies appear when each step finishes. The UI polls for progress every second.
 - **No context management.** The whole conversation is sent to the model on every step. Very long conversations eventually exceed the model's context window. The app reports this clearly; start a new conversation.
 - **One run at a time per conversation.** Runs happen inside the HTTP request. If the server stops in the middle of a task, the task is not resumed. Unanswered tool calls are closed out the next time you send a message.
 - **Tool-calling quality depends on the model.** Small local models may call tools poorly. Use **Test connection** to check.
 - The web fetch tool returns text only (HTML, plain text, JSON, XML). It does not run JavaScript.
-- **Linux first.** Tested on Linux (Ubuntu 24.04 in CI, and WSL2 during development). macOS and native Windows have not been tested; on Windows, use WSL2 or Docker.
+- **Linux first.** Tested on Linux (Ubuntu 24.04 in CI, and WSL2 during development). macOS has not been tested. On Windows, the installer above is the supported route; its native acceptance status is in [docs/VERIFICATION.md](docs/VERIFICATION.md). Running from source on native Windows is not tested.
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE). The third-party dependencies and their licenses are listed in [THIRD_PARTY.md](THIRD_PARTY.md).
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). The third-party dependencies and their licenses are listed in [THIRD_PARTY.md](THIRD_PARTY.md).
+
+You may use, modify and redistribute this software, including commercially, under the Apache License. The license does not grant rights to the project's names or logo. If you distribute a modified version, give it your own name ([TRADEMARKS.md](TRADEMARKS.md)). Official releases are identified by signature ([docs/RELEASES.md](docs/RELEASES.md)). Contributions are made under the Apache License with a DCO sign-off ([CONTRIBUTING.md](CONTRIBUTING.md)). [docs/OPEN_SOURCE_PROTECTION.md](docs/OPEN_SOURCE_PROTECTION.md) explains what is protected and how.

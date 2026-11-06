@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Adapter for the Anthropic Claude Messages API."""
 
 from __future__ import annotations
@@ -71,4 +73,4 @@ class AnthropicChat:
             elif block.type == "tool_use":
                 args = block.input if isinstance(block.input, dict) else {}
                 calls.append(ToolCall(id=block.id, name=block.name, arguments=args))
-        return ChatResult(text="\n".join(texts), tool_calls=calls)
+        return ChatResult(text="\n".join(texts), tool_calls=calls, truncated=resp.stop_reason == "max_tokens")

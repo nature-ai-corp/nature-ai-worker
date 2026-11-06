@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+ * SPDX-License-Identifier: Apache-2.0 */
 "use strict";
 
 const $ = (sel) => document.querySelector(sel);
@@ -40,6 +42,7 @@ async function api(method, path, body, raw) {
   } catch (e) {
     throw new Error("Cannot reach the Nature AI Worker server. Is it still running?");
   }
+  noteServerVersion(resp.headers.get("X-Nature-Worker-Version"));
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) {
     let detail = data.detail;
@@ -47,6 +50,33 @@ async function api(method, path, body, raw) {
     throw new Error(detail || `Request failed (HTTP ${resp.status}).`);
   }
   return data;
+}
+
+// The version that first answered this page. A different version answering
+// later means the Worker was upgraded: this page's script is outdated.
+let pageVersion = null;
+function noteServerVersion(version) {
+  if (!version) return;
+  if (pageVersion === null) pageVersion = version;
+  if (version === pageVersion || document.getElementById("upgraded")) return;
+  document.body.prepend(el("div", { id: "upgraded", role: "alert" },
+    `Nature AI Worker was upgraded to ${version}. Reload this page before you continue. `,
+    el("button", { type: "button", onclick: () => location.reload() }, "Reload")));
+}
+
+// Upgrading is done with `nature-worker-upgrade`, which has to stop this server.
+function versionLine(s) {
+  const i = s.installation || {};
+  let text = `Nature AI Worker ${s.version}`;
+  if (!i.managed) return `${text} (source or pip installation)`;
+  const a = i.available;
+  if (a && a.version && a.version !== s.version) {
+    text += a.eligible
+      ? ` · ${a.version} is available${a.official ? "" : " (not an official NATURE AI release)"}: run nature-worker-upgrade upgrade`
+      : ` · ${a.version} is not eligible: ${(a.reasons || []).join("; ")}`;
+  }
+  if (i.last_upgrade) text += ` · last upgrade: ${i.last_upgrade.outcome}`;
+  return text;
 }
 
 function el(tag, attrs = {}, ...children) {
@@ -496,8 +526,11 @@ function toolCard(call, result, time) {
       time ? el("time", { class: "time muted small", datetime: new Date(time * 1000).toISOString(), title: formatTime(time) }, formatClock(time)) : null,
       el("span", { class: "state " + cls }, stateText)));
   const body = [];
-  if (call.name === "write_file" && call.arguments && typeof call.arguments.content === "string") {
-    body.push("Content written:\n" + call.arguments.content);
+  if ((call.name === "write_file" || call.name === "append_file") && call.arguments && typeof call.arguments.content === "string") {
+    body.push((call.name === "append_file" ? "Content appended:\n" : "Content written:\n") + call.arguments.content);
+  }
+  if (call.name === "replace_text" && call.arguments && typeof call.arguments.old_text === "string") {
+    body.push("Replaced:\n" + call.arguments.old_text + "\n\nWith:\n" + String(call.arguments.new_text ?? ""));
   }
   if (result) body.push("Result:\n" + result.content);
   if (body.length) details.append(el("pre", {}, body.join("\n\n")));
@@ -510,9 +543,12 @@ function toolCard(call, result, time) {
 
 function approvalCard(a) {
   const args = { ...a.arguments };
-  const content = typeof args.content === "string" ? args.content : null;
-  delete args.content;
-  const pre = el("pre", {}, JSON.stringify(args, null, 2) + (content !== null ? "\n\ncontent:\n" + content : ""));
+  // Text arguments are shown as written, not JSON-escaped, so the user can read what would change.
+  let text = "";
+  for (const key of ["content", "old_text", "new_text"]) {
+    if (typeof args[key] === "string") { text += `\n\n${key}:\n${args[key]}`; delete args[key]; }
+  }
+  const pre = el("pre", {}, JSON.stringify(args, null, 2) + text);
   const approve = el("button", { class: "primary" }, "Approve");
   const deny = el("button", { class: "danger" }, "Deny");
   const decide = async (ok) => {
@@ -581,9 +617,21 @@ function buildUpdate(box, conv, w, status) {
   if (status === "working") {
     const calls = conv.messages.filter((m) => m.role === "assistant").flatMap((m) => m.tool_calls || []);
     const last = calls[calls.length - 1];
+    const stopping = state.stopping === conv.id;
+    const stop = el("button", { class: "secondary small", type: "button",
+      title: "Stops before the next step. A step already running (for example a file being written) finishes first." },
+      stopping ? "Stopping after the current step…" : "Stop");
+    stop.disabled = stopping;
+    stop.addEventListener("click", async () => {
+      state.stopping = conv.id;
+      stop.disabled = true;
+      stop.textContent = "Stopping after the current step…";
+      try { await api("POST", `/api/conversations/${conv.id}/stop`); } catch (e) { showError(e.message); }
+    });
     box.append(el("div", { class: "update working-box" },
       el("span", { class: "working" }, "Working"),
-      el("p", { class: "muted small" }, last ? `Latest step: ${last.name} ${argsSummary(last.arguments)}` : "Waiting for the model's first step.")));
+      el("p", { class: "muted small" }, last ? `Latest step: ${last.name} ${argsSummary(last.arguments)}` : "Waiting for the model's first step."),
+      stop));
     return;
   }
   if (status === "needs_approval") {
@@ -719,6 +767,7 @@ async function runWithPolling(fn) {
   stopPolling();
   state.busy = false;
   state.busyId = null;
+  state.stopping = null;
   await refreshCurrent();
   if (error && state.current && state.current.id === id) showError(error.message);  // never in other work
   loadWork(true);
@@ -788,12 +837,44 @@ async function uploadFile(file) {
   } catch (e) {
     if (!/already exists/.test(e.message) || !confirm(`${file.name} already exists. Replace it?`)) {
       if (!/already exists/.test(e.message)) alert(e.message);
-      return;
+      return false;
     }
-    try { await api("PUT", url(true), undefined, file); } catch (e2) { alert(e2.message); return; }
+    try { await api("PUT", url(true), undefined, file); } catch (e2) { alert(e2.message); return false; }
   }
   loadFiles();
   if (!$("#view-new").hidden) renderNew();
+  return true;
+}
+
+let quickUploadTarget = "new";
+function quickAttach(target) {
+  quickUploadTarget = target;
+  $("#quick-upload").click();
+}
+async function finishQuickAttach(file) {
+  const target = quickUploadTarget === "work" ? "work" : "new";
+  const status = $(target === "new" ? "#new-attachment-status" : "#work-attachment-status");
+  const button = $(target === "new" ? "#new-attach" : "#work-attach");
+  button.disabled = true;
+  status.textContent = "Uploading " + file.name + "…";
+  try {
+    const ok = await uploadFile(file);
+    if (ok) {
+      // Files live in the existing Standalone workspace. Put their names in the
+      // assignment/message too, so the agent knows which file the user attached.
+      const input = $(target === "new" ? "#new-input" : "#input");
+      const reference = "Use the attached workspace file: " + JSON.stringify(file.name);
+      if (!input.value.includes(reference)) {
+        input.value += (input.value.trim() ? "\n" : "") + reference;
+        if (target === "new") saveNewDraft();
+      }
+      status.textContent = file.name + " attached. Its name was added to your instructions.";
+    } else {
+      status.textContent = "Attachment not added.";
+    }
+  } finally {
+    button.disabled = false;
+  }
 }
 
 // ---------------------------------------------------------------- Settings
@@ -809,6 +890,7 @@ function updateProviderFields() {
   const spec = state.settings.providers[id];
   $("#s-model").placeholder = MODEL_HINTS[id] || "";
   $("#s-endpoint-row").hidden = !spec.needs_endpoint;
+  $("#s-context-row").hidden = $("#s-provider").value !== "ollama";
   $("#s-endpoint").placeholder = ENDPOINT_HINTS[id] || "";
   if (id === "ollama" && !$("#s-endpoint").value) $("#s-endpoint").value = spec.default_endpoint;
   $("#s-key-row").firstChild.textContent = spec.needs_key ? "API key" : "API key (optional)";
@@ -845,6 +927,8 @@ function openSettings(firstRun = false) {
   $("#s-key").value = "";
   $("#s-web").checked = !!s.web_fetch_enabled;
   $("#s-steps").value = s.max_steps;
+  $("#s-context").value = s.context_window || "";
+  $("#s-version").textContent = versionLine(s);
   $("#setup-intro").hidden = !firstRun;
   $("#settings-heading").textContent = firstRun ? "Set up your AI model" : "Settings";
   $("#s-cancel").hidden = firstRun && !s.configured;
@@ -860,6 +944,7 @@ function settingsBody() {
     api_key: $("#s-key").value.trim() || null,
     web_fetch_enabled: $("#s-web").checked,
     max_steps: parseInt($("#s-steps").value, 10) || 20,
+    context_window: $("#s-context-row").hidden ? null : (parseInt($("#s-context").value, 10) || null),
   };
 }
 
@@ -941,6 +1026,13 @@ async function init() {
     if (!$("#template-list").hidden && !e.target.closest(".template-picker")) closeTemplateList(false);
   });
   $("#list-new-work").addEventListener("click", newWork);
+  $("#new-attach").addEventListener("click", () => quickAttach("new"));
+  $("#work-attach").addEventListener("click", () => quickAttach("work"));
+  $("#quick-upload").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (file) await finishQuickAttach(file);
+  });
   $("#new-manage-files").addEventListener("click", () => { $("#files-panel").hidden = false; loadFiles(); });
   $("#toggle-sidebar").addEventListener("click", () => $("#sidebar").classList.toggle("open"));
   $(".skip-link").addEventListener("click", (e) => { e.preventDefault(); $("#main").focus(); });

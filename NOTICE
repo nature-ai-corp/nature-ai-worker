@@ -1,0 +1,25 @@
+Nature AI Worker
+Copyright 2026 The Nature AI Worker Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+"The Nature AI Worker Authors" means the copyright holders of the
+contributions in this repository, as recorded in its version history.
+
+"NATURE AI" and "Nature AI Worker" are names used by the project's
+maintainers to identify their software and official releases. The Apache
+License does not grant permission to use these names or the project's logo
+(Section 6); see TRADEMARKS.md.
+
+This source distribution contains no third-party code; dependencies are
+installed separately (see THIRD_PARTY.md for their licenses).
+
+Binary distributions - release bundles and the Windows installer - include
+third-party software unmodified: the Python packages listed in THIRD_PARTY.md
+(each wheel carries its own license files) and, in Windows bundles and the
+Windows installer, a CPython runtime built by python-build-standalone, which
+itself contains third-party libraries. The Windows installer reproduces all
+these license texts in THIRD_PARTY_LICENSES.txt, installed in its "licenses"
+folder. The installer program itself is built with Inno Setup, Copyright (C)
+1997-2026 Jordan Russell, Portions Copyright (C) 2000-2026 Martijn Laan
+(https://jrsoftware.org/).

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Usability fixes from user testing (WKR-022): new chat drafts, file preview, listen port."""
 
 import json
@@ -15,6 +17,7 @@ import pytest
 from conftest import openai_text
 from nature_worker.app import MAX_PREVIEW_BYTES
 from test_process import _free_port, _start, _stop
+from os_helpers import try_link
 
 
 # -- UX-002: read-only file preview ---------------------------------------------------
@@ -24,7 +27,7 @@ from test_process import _free_port, _start, _stop
     ("data.json", '{"a": 1}'), ("UPPER.CSV", "x,y\n"),
 ])
 def test_preview_supported_text_files(client, config, name, content):
-    (config.workspace_dir / name).write_text(content)
+    (config.workspace_dir / name).write_text(content, newline="")  # the same bytes on every OS
     r = client.get("/api/files/content", params={"path": name})
     assert r.status_code == 200
     assert r.json() == {"path": name, "content": content}
@@ -58,8 +61,8 @@ def test_preview_of_missing_file_or_folder(client, config):
 def test_preview_keeps_workspace_restrictions(client, config):
     outside = config.workspace_dir.parent / "secret.md"
     outside.write_text("TOP-SECRET")
-    os.symlink(outside, config.workspace_dir / "link.md")
-    for path in ["../secret.md", str(outside), "link.md", "sub/../../secret.md"]:
+    linked = try_link(outside, config.workspace_dir / "link.md")
+    for path in ["../secret.md", str(outside), *(["link.md"] if linked else []), "sub/../../secret.md"]:
         r = client.get("/api/files/content", params={"path": path})
         assert r.status_code == 400, path
         assert "TOP-SECRET" not in r.text

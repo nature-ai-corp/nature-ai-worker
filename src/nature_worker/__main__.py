@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Start the server: ``python -m nature_worker`` or ``nature-worker``."""
 
 from __future__ import annotations
@@ -11,9 +13,12 @@ import sys
 
 import uvicorn
 
+from . import __version__
 from .app import create_app
 from .config import Config
 from .credentials import CredentialStore, RedactSecretsFilter
+from .installation_mode import ModeError
+from .maintenance import RUNTIME_LOCK, MaintenanceWatcher, RuntimeLock, write_runtime_info
 from .providers import SDK_ENV_OVERRIDES
 
 
@@ -31,19 +36,31 @@ def _check_port_free(host: str, port: int) -> str | None:
         return f"Cannot listen on {host}: {e.strerror}. Check NATURE_WORKER_HOST."
     family, kind, proto, _, addr = infos[0]
     with socket.socket(family, kind, proto) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # as uvicorn does
+        if sys.platform != "win32":
+            # As uvicorn's server does on POSIX. On Windows it does not: there
+            # SO_REUSEADDR would let a bind succeed, or fail with WSAEACCES,
+            # on a port another program is using.
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(addr)
         except OSError as e:
+            find = (f"netstat -ano | findstr :{port}" if sys.platform == "win32"
+                    else f"ss -ltnp 'sport = :{port}'")
             if e.errno == errno.EADDRINUSE:
                 return (
                     f"Port {port} is already in use on {host}. Another program (or another copy of "
                     f"Nature AI Worker) is using it.\n"
                     f"  Start on a different port:  nature-worker --port {port + 1 if port < 65535 else 8081}\n"
-                    f"  Or find what is using it:   ss -ltnp 'sport = :{port}'"
+                    f"  Or find what is using it:   {find}"
                 )
-            if e.errno == errno.EACCES:
+            if e.errno == errno.EACCES and port < 1024 and sys.platform != "win32":
                 return f"Not allowed to listen on port {port}. Ports below 1024 need extra privileges; use --port 8080 or higher."
+            if e.errno == errno.EACCES:
+                return (f"Not allowed to listen on port {port}: it is in use by another program, or reserved "
+                        "by the operating system.\n"
+                        f"  Start on a different port:  nature-worker --port {port + 1 if port < 65535 else 8081}\n"
+                        + ("  Reserved ranges:            netsh interface ipv4 show excludedportrange protocol=tcp"
+                           if sys.platform == "win32" else f"  Or find what is using it:   {find}"))
             return f"Cannot listen on {host}:{port}: {e.strerror}."
     return None
 
@@ -73,6 +90,11 @@ def main() -> None:
         print(f"Error: {problem}", file=sys.stderr)
         sys.exit(1)
     config.ensure_dirs()
+    # One Worker per data root. The OS releases the lock if the process dies.
+    lock = RuntimeLock(config.data_dir / RUNTIME_LOCK)
+    if not lock.acquire():
+        print(f"Error: another Nature AI Worker is already using {config.data_dir}.", file=sys.stderr)
+        sys.exit(1)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     # HTTP client libraries can log request details; keep them quiet.
     for name in ("httpx", "httpcore", "httpx2", "httpcore2", "openai", "anthropic", "google_genai"):
@@ -87,10 +109,32 @@ def main() -> None:
             "Ignoring %s: model endpoints and keys come from Settings, not SDK environment overrides.",
             ", ".join(ignored),
         )
-    app = create_app(config)
+    try:
+        app = create_app(config)
+    except ModeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    server = uvicorn.Server(uvicorn.Config(app, host=config.host, port=config.port, log_config=None))
+
+    def drain(on: bool) -> None:
+        app.state.draining = on
+        if on:
+            logging.getLogger("nature_worker").info(
+                "Upgrade requested: accepting no new work; stopping when running work has finished.")
+
+    # An upgrade asks a running Worker to stop through its data root (maintenance.py).
+    watcher = MaintenanceWatcher(config.data_dir, busy=app.state.agent.active_runs, on_drain=drain,
+                                 on_ready=lambda: setattr(server, "should_exit", True))
+    watcher.start()
+    write_runtime_info(config.data_dir, __version__, config.port)
     print(f"Nature AI Worker is running at http://{config.host}:{config.port}")
+    print(f"Version: {__version__}")
     print(f"Workspace folder: {config.workspace_dir}")
-    uvicorn.run(app, host=config.host, port=config.port, log_config=None)
+    try:
+        server.run()
+    finally:
+        watcher.stop()
+        lock.release()
 
 
 if __name__ == "__main__":

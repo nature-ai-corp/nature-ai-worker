@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Basic text and data processing tools."""
 
 from __future__ import annotations
@@ -27,7 +29,12 @@ def search_text(ws: Workspace, args: dict) -> str:
         raise ToolError(f"Invalid regular expression: {e}") from None
 
     results: list[str] = []
-    for entry in ws.list(args.get("path") or ".", recursive=True):
+    path = args.get("path") or "."
+    target = ws.resolve(path)
+    # A single file may be searched too (a model checking the document it just wrote passes its path).
+    entries = [{"path": ws.display(target), "type": "file", "size": target.stat().st_size}] \
+        if target.is_file() else ws.list(path, recursive=True)
+    for entry in entries:
         if entry["type"] != "file" or (entry["size"] or 0) > MAX_SEARCH_FILE_BYTES:
             continue
         try:
@@ -43,9 +50,16 @@ def search_text(ws: Workspace, args: dict) -> str:
     return "\n".join(results) if results else "No matches found."
 
 
-def _load_rows(ws: Workspace, path: str) -> list[dict]:
-    text = ws.read_text(path)
+def _load_rows(ws: Workspace, path: str, sheet: str | None = None) -> list[dict]:
     lower = path.lower()
+    if lower.endswith((".xlsx", ".xlsm")):
+        from .documents import sheet_rows
+        rows = sheet_rows(ws, path, sheet)
+        if not rows:
+            return []
+        header = [h or f"column_{i + 1}" for i, h in enumerate(rows[0])]
+        return [dict(zip(header, r)) for r in rows[1:] if any(v != "" for v in r)]
+    text = ws.read_text(path)
     if lower.endswith(".json"):
         try:
             data = json.loads(text)
@@ -66,7 +80,7 @@ def _load_rows(ws: Workspace, path: str) -> list[dict]:
             except csv.Error:
                 delimiter = ","
         return list(csv.DictReader(io.StringIO(text), delimiter=delimiter))
-    raise ToolError("Supported table formats: .csv, .tsv, .json")
+    raise ToolError("Supported table formats: .csv, .tsv, .json, .xlsx")
 
 
 def _number(value) -> float | None:
@@ -82,7 +96,8 @@ def _number(value) -> float | None:
 
 def table_summary(ws: Workspace, args: dict) -> str:
     path = _require(args, "path")
-    rows = _load_rows(ws, path)
+    sheet = args.get("sheet")
+    rows = _load_rows(ws, path, sheet if isinstance(sheet, str) and sheet.strip() else None)
     if not rows:
         return "The table has no rows."
     columns: list[str] = []

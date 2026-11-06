@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Common model interface and provider factory.
 
 Conversation history is passed to providers in one neutral format::
@@ -12,6 +14,8 @@ Each adapter converts this to its own API format and returns a ``ChatResult``.
 from __future__ import annotations
 
 import contextlib
+import logging
+import time
 import os
 import threading
 from dataclasses import dataclass, field
@@ -40,6 +44,10 @@ class ChatResult:
     tool_calls: list[ToolCall]
     # Provider-specific data stored with the assistant message (e.g. reasoning content).
     meta: dict[str, Any] = field(default_factory=dict)
+    # The reply stopped at the model's output limit: its text and any tool-call arguments
+    # may be incomplete (OpenAI finish_reason "length", Anthropic stop_reason "max_tokens",
+    # Gemini MAX_TOKENS, Ollama done_reason "length").
+    truncated: bool = False
 
 
 class ProviderError(Exception):
@@ -168,11 +176,20 @@ def effective_endpoint(provider: str, endpoint: str | None) -> str | None:
     return normalize_endpoint(endpoint or spec.get("default_endpoint"))
 
 
+def read_budget(provider) -> int | None:
+    """Characters one tool result should use for this provider, if it knows its context window."""
+    budget = getattr(provider, "read_budget", None)
+    return budget() if callable(budget) else None
+
+
 class _RedactingProvider:
     """Keeps the API key out of error messages and replies even if an endpoint echoes it."""
 
     def __init__(self, inner: Provider, secret: str | None):
         self.inner, self.secret = inner, secret
+
+    def read_budget(self) -> int | None:
+        return read_budget(self.inner)
 
     def _clean(self, text: str) -> str:
         return text.replace(self.secret, "[REDACTED]") if self.secret and len(self.secret) >= 6 else text
@@ -186,7 +203,40 @@ class _RedactingProvider:
         return result
 
 
-def make_provider(provider: str, model: str, api_key: str | None, endpoint: str | None) -> Provider:
+# Transient failures worth one more try. A model request changes nothing anywhere, so repeating
+# it is safe; a timeout is not retried (a slow local model would then block for many minutes).
+RETRY_KINDS = ("network", "server", "rate_limit")
+RETRY_DELAYS = (2.0, 6.0)   # at most two retries, then the error is reported as before
+log = logging.getLogger(__name__)
+
+
+class _RetryingProvider:
+    """Bounded retries for adapters whose SDK does not retry itself (Ollama, Gemini). The OpenAI
+    and Anthropic SDKs already retry connection errors, 408/409/429 and 5xx twice."""
+
+    def __init__(self, inner: Provider, delays: tuple[float, ...] | None = None, sleep=time.sleep):
+        self.inner, self.delays, self.sleep = inner, RETRY_DELAYS if delays is None else delays, sleep
+
+    def read_budget(self) -> int | None:
+        return read_budget(self.inner)
+
+    def chat(self, system: str, messages: list[dict], tools: list[dict]) -> ChatResult:
+        for attempt, delay in enumerate((*self.delays, None)):
+            try:
+                return self.inner.chat(system, messages, tools)
+            except ProviderError as e:
+                if e.kind not in RETRY_KINDS or delay is None:
+                    raise
+                log.warning("Model request failed (%s), retry %d of %d in %.0f s", e.kind, attempt + 1,
+                            len(self.delays), delay)
+                self.sleep(delay)
+        raise AssertionError("unreachable")
+
+
+def make_provider(provider: str, model: str, api_key: str | None, endpoint: str | None, *,
+                  retry: bool = True, context_window: int | None = None) -> Provider:
+    """``retry=False`` for the connection test in Settings, which should answer at once.
+    ``context_window``: Ollama's num_ctx (other providers manage their own context)."""
     if provider not in PROVIDERS:
         raise provider_error("config", f"Unknown provider '{provider}'")
     if not model:
@@ -215,5 +265,7 @@ def make_provider(provider: str, model: str, api_key: str | None, endpoint: str 
         else:
             from .ollama_chat import OllamaChat
 
-            adapter = OllamaChat(model, endpoint, api_key)
+            adapter = OllamaChat(model, endpoint, api_key, context_window=context_window)
+    if retry and provider in ("gemini", "ollama"):
+        adapter = _RetryingProvider(adapter)
     return _RedactingProvider(adapter, api_key)

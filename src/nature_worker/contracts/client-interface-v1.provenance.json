@@ -1,0 +1,12 @@
+{
+  "client_interface_version": "1.3",
+  "operations": 28,
+  "source": "GET /openapi.json of a running private NATURE AI Platform deployment (host not recorded)",
+  "retrieved_at": "2026-10-26T01:20:00Z",
+  "source_sha256": "dc22c471e7ce67427a30679b8e7e6c7b0f724a08ae1ef96245811fc11df04e75",
+  "canonical_sha256": "c17e87a991369ff354646e2656a0edeae097a2095d222a739dfa1d38ed61a348",
+  "extraction": "scripts/client_interface_contract.py extract --public: the operations marked x-nature-client-interface plus every schema and security scheme they reference, copied unchanged except that the Platform's free-text 'description' annotations are removed (security-scheme descriptions are kept)",
+  "committed_contract_compared": false,
+  "committed_contract_note": "The Platform repository's committed docs/client-interface-v1.openapi.json was not accessible from the Worker host. Compare it with: python -I scripts/client_interface_contract.py compare --ignore-descriptions <committed.json> src/nature_worker/contracts/client-interface-v1.openapi.json",
+  "canonical_sha256_before_descriptions_removed": "2e6a40d627cf49b14794f752381989bd5882084101a05ed3135a14eed0c37178"
+}

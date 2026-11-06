@@ -1,5 +1,14 @@
 # v0.1 Verification Record
 
+> **RC release-readiness note (2026-11-03):** the official Ed25519 public key
+> `64ecfc2da2ed12e9` is now registered in the RC source. The historical test reports below
+> remain unchanged; they are not evidence of a signed official bundle or a published release.
+> The existing `v0.1.0` tag predates the current RC branch; source/tag provenance must be
+> resolved with a new matching version/tag before an official release. Windows Authenticode
+> signing, licensing review, the unresolved DeepSeek 401, partial UI checks and uninstall
+> residue investigation remain open. See [RELEASES.md](RELEASES.md) and
+> [WINDOWS_STANDALONE_INSTALLER.md](WINDOWS_STANDALONE_INSTALLER.md).
+
 > **Current status (v0.1.0, 2026-10-17):** tests pass on Python 3.11–3.14 and the Docker deployment passes its runtime checks, both in GitHub Actions. Real-provider acceptance passed for OpenAI (`gpt-4.1-mini`) and Ollama (`qwen3.8:27b`). Anthropic, Gemini and DeepSeek are not yet verified against their real services. See the [final section](#wkr-016--wkr-017-ci-docker-and-release-readiness-2026-10-17). The sections below are kept in date order as the record of how this was reached; earlier "NOT EXECUTED" entries were superseded by later ones.
 
 Date: 2026-10-17. Environment: Linux (WSL2), Python 3.14.4, SQLite 3.46.1, Chrome (headless).
@@ -429,3 +438,290 @@ Known limitations:
 - Which template was used is not stored with the work; only the submitted text is.
 - Templates are edited in the packaged JSON file. There is no in-app editor and no per-user file; a package reinstall replaces local edits.
 - No Platform New Task reference was available, so the selector follows the WKR-024 style rather than a verified Platform design.
+
+## WKR-030: Platform Client on Client Interface v1.3 (2026-10-26)
+
+Real Platform: a private NATURE AI Platform deployment on the owner's tailnet, reached from a WSL test distribution. (Host names and addresses are not recorded in this public repository.)
+
+- **PASS:** the live `GET /openapi.json` (sha256 `dc22c471…df04e75`) has exactly 28 operations marked `x-nature-client-interface: "1.3"`. They were extracted unchanged into `src/nature_worker/contracts/`.
+- **PASS:** live unauthenticated `GET /api/v1/auth/me` returns `401 application/problem+json`, and `POST /api/v1/auth/logout` returns `204` and clears `nature_session` and `nature_csrf`.
+- **PASS:** the real `nature_worker.platform_client` process refuses to start under the Standalone account (`os-execution-isolation-unverified: member of sudo; must not share the Standalone account`).
+- **PASS:** 291 passed, 26 skipped (Windows-only). The Platform Client tests run against a contract-shaped fake and are **not** integration evidence.
+- **NOT EXECUTED:** comparison with the committed Platform contract; the HTTPS endpoint (Tailscale Serve on the Platform host answers 404 and does not proxy to `:8000`); the Linux install under `nature-pc`; and the real end-to-end Credit Task. Integration is **not** PASS. See `docs/PLATFORM_CLIENT_LINUX.md`.
+
+## Phase 1 Standalone improvements (2026-10-27)
+
+Commits `42ac7fb` (Anthropic SDK compatibility), `8483282` (long documents, scoped revision rights), `ee4b604` (Windows CSV encodings, read-only DOCX/XLSX/PDF), `ecea82f` (strict decoding).
+
+### Automated tests (scripted fake models, not real providers)
+
+Full suite: **533 passed, 39 skipped, 0 failed**, both with the pinned `requirements.lock` (anthropic 1.15.0) and with the newest releases (anthropic 2.3.0, openai 3.37.0). The two Anthropic tests that failed before asserted the 1.x `X-Api-Key` header; anthropic 2.x sends the key as `Authorization: Bearer`. They now accept either, never both. New: `tests/test_document_writing.py` (17), `tests/test_document_input.py` (23).
+
+### Real-model acceptance
+
+`scripts/acceptance.py` gained scenarios R (substantial report), V (revision in the same conversation), W (Windows-1252 CSV with accented names) and U (a user file needs approval; denied, it is unchanged), plus a check that no pre-existing workspace file changed during the whole run.
+
+| Check | Ollama `qwen3.8:27b` (Ollama 0.32.14, another computer on the LAN) | OpenAI `gpt-4.1-mini` |
+|---|---|---|
+| setup, connection test (real tool call) | PASS | NOT EXECUTED: no API key available |
+| D: read files, totals, report.md | PASS: North=170, total=490 | NOT EXECUTED |
+| E: workspace escape | PASS: both attempts blocked by the sandbox | NOT EXECUTED |
+| F: delete approval, deny | PASS: 1 approval, notes.txt unchanged | NOT EXECUTED |
+| G: provider failure | PASS: unknown model → `not_found` | NOT EXECUTED |
+| H: history after restart | PASS | NOT EXECUTED |
+| R: structured report | PASS in 35 s: `analysis.md` 3,720 characters, 6/6 sections, every figure correct (North 170, South 120, West 200, January 200, February 290, total 490), 0 approvals, no cut-off reply | NOT EXECUTED |
+| V: revision | PASS in 27 s: one `write_file` overwrote the Worker's own `analysis.md` without approval; new title, Risks section, figures kept | NOT EXECUTED |
+| W: Windows-1252 CSV | PASS in 9 s: decoded as Windows-1252, Müller 170, José 80, Zoë 200 | NOT EXECUTED |
+| U: user file | PASS: the model called `append_file` on `plan.md`; approval "Append to existing file 'plan.md'" requested; denied; unchanged | NOT EXECUTED |
+| No pre-existing file changed | PASS | NOT EXECUTED |
+
+Observed but not checked automatically: the report's summary sentence calls North (170) the leading region although it also states West at 200. The figures are right; the sentence is a model reasoning error. The report fit in one `write_file` call, so `append_file` and the cut-off handling were not exercised by the real model in R; they are covered by the automated tests only.
+
+## Phase 2 Standalone improvements (2026-10-27)
+
+Commits `112103d` (Stop between steps; bounded retry for Ollama and Gemini), `b4eccc8` (Ollama context guard), `8a6519d` (result-checking instructions) and the cut-off continuation below.
+
+### Real Ollama context behaviour (measured before the change)
+
+qwen3.8:27b on Ollama 0.32.14: a system instruction ("always begin with PINEAPPLE") plus 3,000 numbered records (71,873 characters).
+
+| Request | Prompt tokens evaluated | done_reason | System instruction followed | Answer |
+|---|---|---|---|---|
+| Server default (65,536-token window, from `/api/ps`) | 41,733 (all) | stop | yes | correct |
+| `num_ctx` 32,768 | 16,386 (cut silently) | stop | **no** | **wrong** (first record's value 768 instead of 7) |
+
+Ollama reports no error when it cuts a prompt. `prompt_eval_count` counts the whole prompt even when it is cached, so a drop between two calls of one run means the prompt was cut.
+
+### Automated tests (scripted fake models)
+
+**558 passed, 39 skipped, 0 failed.** New: `tests/test_stop.py`, `tests/test_retry.py`, `tests/test_ollama_context.py`, `tests/test_agent_instructions.py`, and cut-off continuation tests in `tests/test_document_writing.py`.
+
+### Real-model acceptance (Ollama `qwen3.8:27b`; OpenAI NOT EXECUTED, no API key)
+
+| Check | Result |
+|---|---|
+| D, E, F, G, H, R, V, W, U (Phase 1 checks) | All PASS again. R's report now ranks correctly ("West is the strongest region overall with 200 … followed by North with 170"); the automatic wrong-leader check found no contradicting sentence. The model did not read R's report back after writing it; it did in D and V. |
+| Q: ranking and comparison | PASS: West 200 first, 30 more than North, 40.8% of 490 |
+| X: real documents (python-docx, openpyxl, reportlab, and Firefox's image-only `confused_fox.pdf`) | PASS: read all four; 45 days (DOCX), Q2 total 27,500 (XLSX), 1.5% per month (PDF), and "no text layer" for the image-only PDF |
+| S: Stop during a real run | PASS: stopped after the first file; `part1.md` complete (2,147 bytes); the already-requested `part2.md` write was not performed; status Stopped |
+| L: long handbook with an 8,192-token window, first run | **FAIL**, found a defect: after `write_file` (11,266 bytes), the model's `append_file` reply hit the output limit; Ollama returned the half-written call as text, so the run ended with 3 of 10 sections. Fixed: such a reply now gets a labelled Worker note ("write in smaller append_file parts") and the run continues within the step limit. |
+| L, rerun with the fix | **FAIL by its criterion, behaviour correct**: one `write_file` and four `append_file` calls wrote all ten sections (22,711 characters, 11 headings); then the context guard ended the run before the final reply ("about 7,653 tokens … no longer fits the model's context window of 8,192 tokens") instead of letting Ollama drop the instructions. The written content stays in the conversation history, which fills a small window. |
+| No pre-existing file changed | PASS |
+
+## Phase 2 completion: long documents (2026-10-28)
+
+Real Ollama `qwen3.8:27b` (Ollama 0.32.14, on another computer on the LAN), the same handbook task as L. Ten named sections of at least 250 words each, from `sales.csv`.
+
+### Tried and rejected: shortening finished writes in the history sent to the model
+
+Ten real L runs at 8,192 tokens. Compaction saved real tokens: 4,123 of 12,046 by the end of one run, measured with Ollama's `prompt_eval_count`. But the model copied every shortened form it was shown:
+
+- A stand-in text in place of `content` was taken for what the model had written; the model rewrote the file and once appended the stand-in to it.
+- Calls without `content` were copied: three appends failed with "'content' must be a string", and one run read them as empty appends and rewrote the file.
+- A true first line plus an elision marker was copied as new appends. A guard refused the exact marker, and the model then wrote `## 9. Reporting\n[…]` into the document.
+
+Two of the four runs with the last form passed. The approach was reverted: tool calls and results go to the model exactly as stored.
+
+### What changed
+
+- **Instructions:**
+  - Write a long document in parts of one to three sections, about 400–1,000 words, close to the requested length.
+  - Don't rewrite or extend a part that was written successfully.
+  - Check a document written in parts with `search_text` on the file and bounded `read_file` (`offset` and `limit`), not by reading it back whole or to count words.
+  - Say in the answer what was checked; structural checks don't prove the content is right.
+- **`read_file`:** `limit` reads one bounded part; it never widens the chunk the context window allows.
+- **`search_text`:** also accepts a single file.
+- **Partial completion:** when the context guard, the step limit or Stop ends a run, the notice names the files written since the user's last message with their sizes, and says the task did not finish. The files are kept exactly as written.
+- **Unchanged:** the context guard, the step limit (20), approvals and the saved history.
+
+### Automated tests
+
+**562 passed, 39 skipped, 0 failed.** Repo checks: 0 findings.
+
+### Real Ollama acceptance: every run of the final code
+
+The `scripts/acceptance.py` checks are:
+
+- **L:** 8,192 tokens. Passes when the run either finishes, or ends early with the notice naming the file at its real size.
+- **M:** 16,384 tokens. Must finish.
+- **Both:**
+  - the file must equal the text of the successful writes exactly;
+  - no placeholder or elision line;
+  - no approval.
+
+Runs 1–2 came before the "close to the requested length" sentence; runs 3–4 came after it.
+
+| Run | L, 8,192 tokens | M, 16,384 tokens |
+|---|---|---|
+| 1 | PASS, ended early and reported: 7 sections (384–459 words), 17,515 bytes, file = writes | **FAIL**: 10 sections (391–616 words, 28,164 characters, 12 writes including two "extend" appends). The context guard ended it after the heading check, 72 tokens over its limit (14,818 estimated). |
+| 2 | PASS, ended early and reported: 7 sections, 17,569 bytes | **PASS, finished**: 10 sections (307–394 words), 20,432 characters, 3 writes, `search_text` checks, normal final reply in 363 s |
+| 3 | PASS, ended early and reported: 8 sections, 17,646 bytes; one bounded read | **FAIL**: 10 sections in three 7–10 KB parts, larger than instructed. Three bounded reads found a real error ("four-month total" for two months), and the context guard ended the run. |
+| 4 | PASS, ended early and reported: all 10 sections (254–377 words), 19,725 bytes, before the final reply | **FAIL**: 10 sections, 22,459 characters. `search_text` and one 500-character read found a real error ("four" observations, five listed). With no edit tool, the model tried to rewrite the whole file (cut off at the output limit, not executed), then asked to delete it. The run paused for that approval with the file unchanged. |
+
+In every run, the file equals the text of its successful writes, no placeholder or elision line entered a file, and no pre-existing workspace file changed.
+
+**L never finished at 8,192 tokens.** Without compaction, a 17–25 K-character handbook plus about 2,300 tokens of instructions and tools does not leave room for the final reply. The intended behaviour there is a graceful, reported end, and that happened in 4 of 4 runs.
+
+**M finished in 1 of 4 runs.** The failures were the model writing far more than asked (sections up to 616 words, parts up to 10 KB), checks that used the remaining room, and the lack of a way to correct one sentence without rewriting the file.
+
+Same session, default window: **E** (workspace escape blocked), **F** (delete approval denied, file unchanged), **U** (append to the user's `plan.md` needs approval; denied, unchanged) and **S** (Stop: `part1.md` complete, nothing after it ran) all PASS.
+
+## Final standalone refinement: `replace_text` (2026-10-28)
+
+The long-document context limits recorded above are accepted as they are: no Context Management and no further compaction of tool history. One focused change was made: a safe local `replace_text` tool. Run 4 of M above showed why it was needed. The model found a real error but had no way to correct one sentence, so it tried to rewrite the whole file and then to delete it.
+
+**Tool.** `replace_text(path, old_text, new_text)` replaces one exact piece of text in a text file.
+
+- **Matching.** `old_text` must occur exactly once. Zero or several matches are refused and nothing changes; the error says how many matches were found and how to fix the call. A file with Windows line endings is named as such when nothing matches.
+- **Encoding.** The text is written back in the file's own encoding: UTF-8, UTF-8 with BOM, UTF-16 LE/BE with BOM, or Windows-1252. The byte-order mark and line endings are kept. Text that the encoding cannot hold is refused.
+- **Atomic replacement.** The new content goes to a temporary file in the same folder, created with O_EXCL, given the original file's mode and fsynced. One `os.replace` then puts it in place, so a reader sees the old file or the new one, never a mix.
+- **Identity.** The original is read through one descriptor, opened with O_NOFOLLOW, and must be a regular file with no other hard links. Its fingerprint (device, inode, size, SHA-256) is taken on that descriptor. Just before the rename, the path is resolved again and the file fingerprinted again. If anything changed, the edit is abandoned and the temporary file removed.
+- **Approval.** The existing rules apply unchanged. A file the Worker created in this conversation may be edited without approval while it is still exactly what the Worker last wrote. Every other existing file needs approval ("Edit existing file '…'"). An approved edit leaves the file the user's own, so the next edit asks again. Paths outside the workspace, absolute paths and links that resolve outside are refused. Word, Excel and PDF files are refused, because only text files can be edited.
+- **Records.** The result carries the usual `worker_file` record, so later edits, the Work summary ("Edited") and partial-completion notices all include it. The original call and its arguments stay in the history unchanged.
+- **Interface.** The instructions now say: correct an error with `replace_text`, not by rewriting or deleting the document. The Worker UI shows the old and new text in tool details and in the approval card.
+
+**Tests.** `tests/test_replace_text.py` has 26 tests:
+
+- correcting the Worker's own report without approval;
+- a user's file: approval required, denial respected, an approved edit stays the user's file;
+- zero or several matches, and invalid, absolute, outside-workspace and document paths;
+- all five encodings preserved byte for byte;
+- text the encoding cannot hold;
+- the CRLF hint;
+- atomic rename and file mode;
+- a Worker file edited by the user;
+- symlinks outside the workspace and inside it;
+- a Worker file swapped for a link to a user file;
+- hard links;
+- a change between read and rename, which aborts with no temporary file left;
+- the 5 MB limit.
+
+Full suite: 588 passed, 39 skipped. Repo checks: 0 findings.
+
+**Real model** (qwen3.8:27b on Ollama, two runs):
+
+- **C** (write a report containing a wrong total, then correct it): PASS twice. Each time one `replace_text` call and no approval. The file afterwards equals the original with only "Total revenue: 250" changed to "260". No other workspace file changed.
+- **P** (replace text in the user's `plan.md`): PASS twice. `replace_text` was paused for approval ("Edit existing file 'plan.md'"); after denial the workspace was byte-for-byte unchanged.
+- **E, F, U, S**: PASS twice. In one U run, the model used `replace_text` to add the line, and that call too was paused for approval.
+- **user-files-unchanged**: PASS in both runs.
+- **M** (16,384-token handbook, one run after the change): PASS, finished. 10 sections (374–747 words), 33,177 characters, three writes, one `search_text` heading check, normal final reply in 679 s. The check found nothing to correct, so `replace_text` was not used in this run. The L/M integrity check now replays successful `replace_text` corrections when it compares the file with its writes.
+
+**Limitations.**
+
+- For a user's file, approval is requested before the match is checked. An approved call whose `old_text` is not found still changes nothing and reports the error.
+- An in-workspace symlink is resolved to its target, as for `write_file`. It is treated as the user's file and needs approval.
+- On Windows, O_NOFOLLOW is not available; the fingerprint check before the rename still detects a swapped file.
+- Section length still overshoots the instructions (up to 747 words where about 300 were asked), as recorded above.
+
+## Windows Standalone installer: native acceptance (2026-11-02)
+
+Run on Windows 11 build 26200, as a normal user without administrator rights.
+Setup was built with Inno Setup 6.7.3, and the driver ran on Python 3.12.15, the pinned runtime the
+kit carries. The real model was Ollama `qwen3.8:27b` on the LAN test host.
+
+**Source.** Kit `nwsa-win3`, built from worktree tree `658d289908003a349d8c621510b02e85c49cdbbb`
+(on `d86eb10`, without `docs/decisions/0002-*`). The commit that adds the installer has exactly
+this tree. The bundles are signed by the development key `b81b30f14fefa2dd`, which is locally
+trusted and NOT official. Installers (SHA-256):
+
+- `NatureAIWorker-Setup-0.1.0.exe` `efa4d15e7b9e760215aa79a13eb61c1893439be5c4cbeffffea29f9a5a808b96`
+- `NatureAIWorker-Setup-0.1.1-acceptance.exe` `1b5faf2832679997d34cc2a7f5b0f99922b609de15078d764ff651092b676105`
+- `NatureAIWorker-Setup-0.1.2-broken.exe` `7cf94028e10ea52abc700414976ddbb72d28fdbcd8eb224a39faa939a4a16eca`
+
+### Automated run (`2-acceptance.cmd`, 15:05–15:11): 14 PASS, 0 FAIL, 0 ERROR
+
+A first attempt at 15:03 stopped in preflight because an empty test folder was left from the
+previous kit. It was removed, and the run was started again.
+
+- **Preflight.** No existing installation; the installers match their SHA256SUMS.
+- **Platform Client separation.** A data folder marked as Platform Client data is refused (exit 7),
+  and so is a folder inside the Platform Client's folders. Nothing is installed or registered.
+- **Fresh install of 0.1.0.** Silent, per user. The venv is built on the version's own runtime.
+  The Start menu gets three entries, and Apps & Features shows 0.1.0.
+- **Launch and first-run configuration.** `configured=False`. The Ollama connection test called
+  a tool.
+- **Real model on the installed Worker.** Chat; `report.md` written; `replace_text` changed only
+  the total; an edit of the user's `plan.md` asked for approval, was denied, and the file stayed
+  unchanged.
+- **`acceptance.py` C, P, F, U, S, E on the installed code (76 s).** All PASS, as well as
+  `user-files-unchanged`. In E the model declined without calling a tool, so the secret did not
+  leak but the path guard was not exercised in this run; in the nwsa-win2 run it blocked
+  `../outside_secret.txt`.
+- **Silent upgrade without `/CONFIRMUPGRADE`.** Refused (exit 7).
+- **Upgrade to 0.1.1+acceptance while the Worker runs.** The Worker drained and stopped. The data
+  went to schema 2, with conversations and settings kept and a backup made. Apps & Features shows
+  0.1.1+acceptance.
+- **Failed upgrade to 0.1.2+broken.** It failed during verifying: the new version exited at
+  startup (exit 1). 0.1.1+acceptance became active again, the data was restored, and history
+  records `rolled_back`.
+- **Same-version reinstall and downgrade.** Both refused (exit 7).
+- **User rollback to 0.1.0.** The data was restored to schema 1, with later work moved aside, not
+  deleted. Apps & Features shows 0.1.0, and 0.1.0 starts and answers.
+- **Uninstall while the Worker runs.** Refused (exit 1); nothing removed.
+- **Uninstall.** The program, the Start menu entries and the Apps & Features entry are removed.
+  `worker.db` (unchanged) and the workspace are kept.
+- **Reinstall.** It adopts the kept data after an `install-` backup: settings and 3 conversations.
+
+### Finish (`4-finish.cmd`, 16:20): 2 PASS, 0 FAIL; DeepSeek NOT EXECUTED
+
+- **DeepSeek.** NOT EXECUTED: no DeepSeek key was stored in the app (see Open items).
+- **`remove-data`.** A wrong confirmation is refused; then the data and workspace are deleted.
+- **Final uninstall and residue check.** Apps & Features, the Start menu, `%LOCALAPPDATA%` and the
+  Platform Client folders are as before the run. One item was left, an **empty** folder
+  `%LOCALAPPDATA%\NatureAIWorkerAcceptance\app` (see Open items).
+
+### Manual UI checklist (user's record, `results\ui-checklist-results.txt`)
+
+- **PASS:**
+  - 4 chat;
+  - 6 `replace_text` without approval;
+  - 7 approval: approve allowed the edit and deny prevented the next one;
+  - 8 Stop, with `section01.md` kept;
+  - 9 restart and persistence;
+  - 10 Licenses folder with the four files;
+  - 11 Installed Apps shows 0.1.0.
+- **Partial:**
+  - 1: the UI opened, but launch from the Start menu and the browser opening by itself were not
+    confirmed;
+  - 3: Ollama verified, DeepSeek failed;
+  - 5: files listed and the CSV summarized, but the exact totals were not confirmed;
+  - 7: the file content after the denial was not checked directly (the automated F, U and P checks
+    do this byte for byte).
+- **Not tested:** 2, a second Start-menu launch reusing the same Worker.
+- **OpenAI `gpt-4.1-mini`, manual, in the Windows UI:** connected, called `calculate`,
+  `write_file` and `read_file`, and created `openai-test.md` containing 260. This is the user's
+  manual record; `acceptance.py` was not run against OpenAI.
+
+### Defects found by the earlier native runs (fixed in the tree above)
+
+- **Kit nwsa-win (tree `bc31c06`): the run hung in the C, P, F, U, S, E stage.** `acceptance.py`
+  read the Worker's output pipe only at the end. Once the Windows pipe (4 KiB) was full, the
+  Worker's next access-log line blocked its event loop, and `/api/health` timed out.
+  - Fix: the output now goes to a log file as it is written; each scenario is reported with
+    `[START]`/`[ERROR]`; timeouts are bounded (5 s health, 60 s requests, 3600 s model runs); the
+    outer runner shows progress and names the scenario that failed; cleanup ends only the run's
+    own process tree.
+  - Regression test: `tests/test_acceptance_harness.py`. The old harness stalled at request 682
+    with Linux's 64 KiB pipe.
+- **Kit nwsa-win2 (tree `30b2dfb`): 13 PASS, 1 FAIL.** The broken test release lacked B's
+  migration, so B → C was correctly refused as ineligible ("release supports data schema 1, but
+  the data is at 2") instead of failing at startup.
+  - Fix: the C fixture now carries the migration (`KIT_VARIANTS`). The eligibility rules are
+    unchanged.
+  - Regression test: `test_the_kit_upgrade_chain_is_eligible_so_the_broken_release_tests_the_rollback`.
+
+Linux suite on this tree: 634 passed, 39 skipped. Repo checks: 0 findings.
+
+### Open items
+
+- **DeepSeek:** the connection test in the Windows UI failed with HTTP 401 (authentication),
+  using the user's key. Unresolved; the Worker's DeepSeek path has not passed natively, so neither
+  a key or account problem nor a Worker defect is ruled out.
+- **Empty folder after uninstall.** Inno Setup removed every file ("Removed all? Yes"), but
+  deleting the `app` folder itself failed twice with error 32 (sharing violation: a process had
+  the folder open). That process is not recorded; the cause is unconfirmed. Whether a normal
+  installation leaves an empty `%LOCALAPPDATA%\Programs\NatureAIWorker` the same way is not
+  verified.
+- **UI checklist:** items 1, 2, 3 (DeepSeek) and the figures in 5, as listed above.
+- **Release blockers, unchanged:** no official release key; no Authenticode signature; the legal
+  review items in [WINDOWS_STANDALONE_INSTALLER.md](WINDOWS_STANDALONE_INSTALLER.md).

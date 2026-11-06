@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """Work view: a read-only summary of one conversation for the "My Work" interface.
 
 Everything here is derived from records that already exist: messages, tool
@@ -41,7 +43,7 @@ def _status(messages: list[dict], pending: list[dict], running: bool) -> tuple[s
         return "not_started", ""
     last = messages[-1]
     if last["role"] == "notice":
-        if (last["meta"] or {}).get("error") == "step_limit":
+        if (last["meta"] or {}).get("error") in ("step_limit", "stopped", "truncated"):
             return "stopped", last["content"]
         return "failed", last["content"]
     if last["role"] == "assistant" and not last["tool_calls"]:
@@ -94,11 +96,16 @@ def summarize(conv: dict, messages: list[dict], approvals: list[dict], running: 
     for r in results:
         meta = r["meta"] or {}
         call = calls.get(r["tool_call_id"])
-        if meta or not call or not isinstance((call.get("arguments") or {}).get("path"), str):
+        if meta.get("error") or meta.get("denied") or not call \
+                or not isinstance((call.get("arguments") or {}).get("path"), str):
             continue  # only successful calls with a path count
         path = _normalize(workspace, call["arguments"]["path"])
         if r["tool_name"] == "write_file":
             deliverables[path] = {"written_at": r["created_at"], "action": r["content"].split(" ", 1)[0]}
+        elif r["tool_name"] == "append_file":
+            deliverables.setdefault(path, {"action": "Appended"})["written_at"] = r["created_at"]
+        elif r["tool_name"] == "replace_text":
+            deliverables.setdefault(path, {"action": "Edited"})["written_at"] = r["created_at"]
         elif r["tool_name"] == "delete_file":
             deliverables.pop(path, None)
         elif r["tool_name"] in INPUT_TOOLS:

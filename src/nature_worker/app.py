@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
+# SPDX-License-Identifier: Apache-2.0
 """FastAPI application: JSON API plus the static web UI."""
 
 from __future__ import annotations
@@ -17,6 +19,10 @@ from pydantic import BaseModel, Field
 from . import __version__
 from .agent import Agent, ConversationBusy
 from .config import Config
+from .installation_mode import initialize_standalone, require_standalone
+from .maintenance import require_no_upgrade_in_progress
+from .migrations import DB_FILE, migrate, stamp_new_database
+from .transition_cleanup import require_no_failed_sc_residue
 from .credentials import CredentialStore
 from .db import Database
 from .providers import PROVIDERS, ProviderError, effective_endpoint, make_provider
@@ -24,6 +30,7 @@ from .tools import TOOLS, ToolContext, ToolError
 from .tools.workspace import Workspace
 from .templates import load_templates
 from .work import summarize
+from .upgrade.layout import installation_summary
 
 log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
@@ -40,6 +47,8 @@ class SettingsIn(BaseModel):
     clear_api_key: bool = False
     web_fetch_enabled: bool = False
     max_steps: int = Field(default=DEFAULT_MAX_STEPS, ge=1, le=100)
+    # Ollama only: the context window to request (num_ctx). None: the Ollama server's default.
+    context_window: int | None = Field(default=None, ge=2048, le=1_048_576)
 
 
 class TestIn(BaseModel):
@@ -47,6 +56,7 @@ class TestIn(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     endpoint: str | None = Field(default=None, max_length=500)
     api_key: str | None = Field(default=None, max_length=1000)
+    context_window: int | None = Field(default=None, ge=2048, le=1_048_576)
 
 
 class MessageIn(BaseModel):
@@ -68,8 +78,21 @@ def _validate_endpoint(endpoint: str | None) -> str | None:
 
 def create_app(config: Config | None = None) -> FastAPI:
     config = config or Config.from_env()
+    # Check before creating workspace or opening any local Agent/database state.
+    # A failed enterprise transition must not expose staged S-C data.
+    require_standalone(config.data_dir)
+    require_no_failed_sc_residue(config.data_dir)
+    require_no_upgrade_in_progress(config.data_dir)
     config.ensure_dirs()
-    db = Database(config.data_dir / "worker.db")
+    initialize_standalone(config.data_dir)
+    require_no_failed_sc_residue(config.data_dir)
+    # Refuses data from a newer version; migrates older data after a backup.
+    fresh = not (config.data_dir / DB_FILE).exists()
+    if not fresh:
+        migrate(config.data_dir)
+    db = Database(config.data_dir / DB_FILE)
+    if fresh:
+        stamp_new_database(config.data_dir)
     creds = CredentialStore(config.data_dir)
     workspace = Workspace(config.workspace_dir)
 
@@ -82,17 +105,18 @@ def create_app(config: Config | None = None) -> FastAPI:
         s.setdefault("max_steps", DEFAULT_MAX_STEPS)
         return s
 
-    def build_provider(provider: str | None, model: str, endpoint: str | None, api_key: str | None = None):
+    def build_provider(provider: str | None, model: str, endpoint: str | None, api_key: str | None = None,
+                       retry: bool = True, context_window: int | None = None):
         if not provider:
             from .providers import provider_error
 
             raise provider_error("config", "No model provider configured. Open Settings to add one.")
         key = api_key or creds.get(provider, effective_endpoint(provider, endpoint))[0]
-        return make_provider(provider, model, key, endpoint)
+        return make_provider(provider, model, key, endpoint, retry=retry, context_window=context_window)
 
     def current_provider():
         s = settings()
-        return build_provider(s["provider"], s["model"], s["endpoint"])
+        return build_provider(s["provider"], s["model"], s["endpoint"], context_window=s.get("context_window"))
 
     agent = Agent(
         db,
@@ -108,6 +132,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     app = FastAPI(title="Nature AI Worker", version=__version__, docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.db, app.state.agent, app.state.config = db, agent, config
+    app.state.draining = False  # set while stopping for an upgrade (see maintenance.py)
     if "*" not in config.allowed_hosts:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=config.allowed_hosts)
 
@@ -118,7 +143,15 @@ def create_app(config: Config | None = None) -> FastAPI:
             origin = request.headers.get("origin")
             if origin and urlsplit(origin).netloc != request.headers.get("host"):
                 return JSONResponse({"detail": "Cross-origin request blocked."}, status_code=403)
-        return await call_next(request)
+            if app.state.draining:
+                return JSONResponse({"detail": "Nature AI Worker is stopping for an upgrade. "
+                                     "Your work is saved; continue after it restarts."}, status_code=503)
+        response = await call_next(request)
+        # Lets an open page notice that a different version now answers its API.
+        response.headers["X-Nature-Worker-Version"] = __version__
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
     # -- UI -------------------------------------------------------------------
 
@@ -149,6 +182,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "api_key_source": key_source,  # never the key itself
             "web_fetch_enabled": s["web_fetch_enabled"],
             "max_steps": s["max_steps"],
+            "context_window": s.get("context_window"),
             "configured": configured,
             "workspace": str(config.workspace_dir),
             "providers": PROVIDERS,
@@ -156,6 +190,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "key_sources": {p: _key_status(p) for p in PROVIDERS},
             "key_endpoints": {p: creds.stored_endpoint(p) for p in PROVIDERS if PROVIDERS[p]["needs_endpoint"]},
             "version": __version__,
+            "installation": installation_summary(),
         }
 
     @app.get("/api/settings")
@@ -179,6 +214,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "endpoint": endpoint,
                 "web_fetch_enabled": body.web_fetch_enabled,
                 "max_steps": body.max_steps,
+                "context_window": body.context_window,
             }
         )
         return settings_view()
@@ -189,7 +225,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         try:
             provider = build_provider(
                 body.provider, body.model.strip(), _validate_endpoint(body.endpoint),
-                (body.api_key or "").strip() or None,
+                (body.api_key or "").strip() or None, retry=False, context_window=body.context_window,
             )
             result = provider.chat(
                 "You are a connection test. Follow the instruction exactly.",
@@ -272,6 +308,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         except ConversationBusy:
             raise HTTPException(409, "The agent is still working on the previous message.") from None
         return {"status": status}
+
+    @app.post("/api/conversations/{conv_id}/stop")
+    def stop_run(conv_id: str):
+        """Stop the running work before its next step (a step already running finishes)."""
+        conversation_or_404(conv_id)
+        return {"stopping": agent.stop(conv_id)}
 
     @app.post("/api/approvals/{approval_id}")
     def resolve_approval(approval_id: str, body: ApprovalIn):

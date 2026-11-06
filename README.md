@@ -304,13 +304,18 @@ The automated tests never contact a real AI provider. To check a provider yourse
 - The web fetch tool returns text only (HTML, plain text, JSON, XML). It does not run JavaScript.
 - **Windows-first packaged release.** The Windows installer was validated on native Windows 11. Source installation was tested on Linux (including Ubuntu and WSL2); macOS has not been tested. Native Windows source development setups may require extra configuration. See [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
-## GitHub Community read-only tool (development branch)
+## GitHub Community read-only tools (development branch)
 
-The General Agent can use the `github_issues` tool to read **public** Issues in `nature-ai-corp/nature-ai-worker` using GitHub's official API. It can list recent issues and inspect a specific issue, then use the public text as **untrusted data** when summarizing or drafting English replies. No GitHub token is required for this limited public-only integration.
+For maintainers triaging community questions, the General Agent can read GitHub Issues and Discussions of `nature-ai-corp/nature-ai-worker` through GitHub's official API, then summarize them and draft **English** replies for you to review. The tools are **off by default**: turn them on in **Settings → Advanced → Allow reading GitHub Issues and Discussions**.
 
-This tool **does not** read GitHub Discussions yet, does not post comments, does not edit Issues, and cannot access arbitrary repositories or private Platform data. It is separate from the eventual credential-backed, approval-gated community workflow in [Issue #33](https://github.com/nature-ai-corp/nature-ai-worker/issues/33).
+- **Issues** (`github_issues`): list issues, read one issue, or read its comments. Uses the public REST API **without a token** (GitHub allows about 60 requests per hour per address). Pull requests are excluded.
+- **Discussions** (`github_discussions`): list discussions with their category, or read one discussion with its comments. GitHub serves Discussions only through its GraphQL API, which always requires a token, so this tool appears only after you add a **GitHub token** in the same Settings section.
+  - Use a **fine-grained personal access token** with *Repository access: Public repositories (read-only)* and no permissions, or a classic token with **no scopes**. A classic token with any scope other than `read:discussion` (for example `repo` or `public_repo`) is **refused** before its data is used. Fine-grained tokens do not report their permissions, so limiting them is your responsibility.
+  - The token is stored encrypted with the Worker's other credentials (or read from `NATURE_WORKER_GITHUB_TOKEN`), is sent only to `api.github.com`, is never returned by the Worker's API, and never appears in model requests, conversation history or logs.
 
-This source-level capability has not yet been validated through an installed Windows Worker. It is **not included in the published v0.1.1 installer**. Any public release or upgrade is a separate verified process.
+Both tools are **read-only**: they cannot post, comment, label, close or change anything, and they cannot reach any other repository or URL (the repository and API host are fixed in the code; redirects and proxies are not followed). Links in results are rebuilt from issue and discussion numbers. GitHub text is treated as **untrusted data**, never as instructions or approval. Replies are drafts only; posting stays with you. Approval-gated write actions are separate, later scope in [Issue #33](https://github.com/nature-ai-corp/nature-ai-worker/issues/33). These tools exist only in Standalone; the Platform Client does not load them or the Standalone credentials.
+
+This capability is **not included in the published v0.1.1 installer**. Any public release or upgrade is a separate verified process.
 
 ## Community and support
 

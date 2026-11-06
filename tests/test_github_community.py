@@ -395,3 +395,47 @@ def test_platform_client_never_loads_github_tools_or_standalone_credentials():
             "'nature_worker.tools.github_community', 'nature_worker.credentials', 'nature_worker.agent')))")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout
     assert out.strip() == "[]"
+
+
+# -- the user's repository allowlist ------------------------------------------------------
+
+
+@pytest.mark.parametrize("name, ok", [
+    ("nature-ai-corp/nature-ai-worker", True), ("octo-org/demo.site", True), ("a/b", True),
+    ("https://github.com/a/b", False), ("a/b/c", False), ("owner", False), ("a/..", False),
+    ("-bad/x", False), ("a/b?x=1", False), ("", False), (None, False), ("a" * 40 + "/b", False),
+])
+def test_repository_names(name, ok):
+    assert gh.valid_repository(name) is ok
+
+
+def test_configured_repository_is_the_only_one_used(github, tmp_path):
+    ctx = ToolContext(Workspace(tmp_path), github_enabled=True, github_repository="octo-org/demo",
+                      github_token=lambda: TOKEN)
+    github.queue([issue(5)])
+    out = json.loads(execute(ctx, "github_issues", {}))
+    assert out["repository"] == "octo-org/demo" and "octo-org/demo" in out["scope"]
+    assert out["issues"][0]["url"] == "https://github.com/octo-org/demo/issues/5"
+    assert github.requests[0].url.path == "/repos/octo-org/demo/issues"
+    github.queue(repo_data(discussions={"nodes": [discussion_node()]}))
+    out = json.loads(execute(ctx, "github_discussions", {}))
+    assert out["discussions"][0]["url"] == "https://github.com/octo-org/demo/discussions/32"
+    assert github.graphql()[0]["variables"]["owner"] == "octo-org"
+    with pytest.raises(ToolError, match="Unexpected"):
+        execute(ctx, "github_issues", {"repository": "nature-ai-corp/nature-ai-worker"})
+
+
+def test_repository_setting_is_validated_kept_and_named_in_the_prompt(client, fake_model):
+    s = configure(client, endpoint=fake_model.url + "/v1", github_enabled=True)
+    assert s["github_repository"] == "nature-ai-corp/nature-ai-worker" == s["github_default_repository"]
+    for bad in ("https://github.com/x/y", "x", "x/y/z"):
+        r = client.put("/api/settings", json={"provider": "openai_compatible", "model": "m",
+                                              "endpoint": fake_model.url + "/v1", "github_repository": bad})
+        assert r.status_code == 400
+    s = configure(client, endpoint=fake_model.url + "/v1", github_enabled=True, github_repository="octo-org/demo")
+    assert s["github_repositories"] == ["octo-org/demo"]
+    assert configure(client, endpoint=fake_model.url + "/v1", github_enabled=True)["github_repository"] == "octo-org/demo"
+    fake_model.queue(openai_text("ok"))
+    send(client, new_conversation(client), "hi")
+    system = fake_model.requests[0]["body"]["messages"][0]["content"]
+    assert "octo-org/demo repository" in system and "nature-ai-corp/nature-ai-worker" not in system

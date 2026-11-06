@@ -282,3 +282,10 @@ dialog details { margin: 10px 0; }
   .file-actions { margin-left: 0; }
   #files-panel { position: fixed; z-index: 10; inset: 0 0 0 auto; width: 100%; }
 }
+
+.github-approval dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 8px 0; }
+.github-approval dt { font-weight: 600; }
+.github-approval dd { margin: 0; overflow-wrap: anywhere; }
+pre.github-comment { white-space: pre-wrap; border-left: 3px solid var(--warn-border); }
+.github-operation { border: 1px solid var(--border, #ccc); border-radius: 6px; padding: 8px; display: grid; gap: 4px; }
+.github-operation.s-outcome_unknown { background: var(--warn-bg); border-color: var(--warn-border); }

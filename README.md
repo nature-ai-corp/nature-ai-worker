@@ -304,18 +304,28 @@ The automated tests never contact a real AI provider. To check a provider yourse
 - The web fetch tool returns text only (HTML, plain text, JSON, XML). It does not run JavaScript.
 - **Windows-first packaged release.** The Windows installer was validated on native Windows 11. Source installation was tested on Linux (including Ubuntu and WSL2); macOS has not been tested. Native Windows source development setups may require extra configuration. See [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
-## GitHub Community read-only tools (development branch)
+## GitHub Community tools (development branch)
 
-For maintainers triaging community questions, the General Agent can read GitHub Issues and Discussions of `nature-ai-corp/nature-ai-worker` through GitHub's official API, then summarize them and draft **English** replies for you to review. The tools are **off by default**: turn them on in **Settings → Advanced → Allow reading GitHub Issues and Discussions**.
+The General Agent can help maintainers of **any GitHub repository** look after their community: read Issues and Discussions, summarize and classify them, draft **English** replies and, only with your approval of each exact comment, post a comment on an Issue. Everything is **off by default** and configured in **Settings → Advanced**. It is part of the Standalone Worker (Apache-2.0); there is no separate agent, workflow engine or automatic posting.
 
-- **Issues** (`github_issues`): list issues, read one issue, or read its comments. Uses the public REST API **without a token** (GitHub allows about 60 requests per hour per address). Pull requests are excluded.
-- **Discussions** (`github_discussions`): list discussions with their category, or read one discussion with its comments. GitHub serves Discussions only through its GraphQL API, which always requires a token, so this tool appears only after you add a **GitHub token** in the same Settings section.
-  - Use a **fine-grained personal access token** with *Repository access: Public repositories (read-only)* and no permissions, or a classic token with **no scopes**. A classic token with any scope other than `read:discussion` (for example `repo` or `public_repo`) is **refused** before its data is used. Fine-grained tokens do not report their permissions, so limiting them is your responsibility.
-  - The token is stored encrypted with the Worker's other credentials (or read from `NATURE_WORKER_GITHUB_TOKEN`), is sent only to `api.github.com`, is never returned by the Worker's API, and never appears in model requests, conversation history or logs.
+**Repository allowlist.** Enter the one repository the tools may use as `owner/name` (default and demonstration target: `nature-ai-corp/nature-ai-worker`). The agent cannot choose or reach any other repository: the repository and the API host come from Settings and the code, never from the model, and redirects and proxies are not followed. The setting is stored as a list so that several repositories can be allowed in a later version; this version allows exactly one.
 
-Both tools are **read-only**: they cannot post, comment, label, close or change anything, and they cannot reach any other repository or URL (the repository and API host are fixed in the code; redirects and proxies are not followed). Links in results are rebuilt from issue and discussion numbers. GitHub text is treated as **untrusted data**, never as instructions or approval. Replies are drafts only; posting stays with you. Approval-gated write actions are separate, later scope in [Issue #33](https://github.com/nature-ai-corp/nature-ai-worker/issues/33). These tools exist only in Standalone; the Platform Client does not load them or the Standalone credentials.
+**Reading** (`github_issues`, `github_discussions`):
+- Issues and their comments are read from the public REST API without a token (about 60 requests per hour per address). Pull requests are excluded.
+- Discussions need GitHub's GraphQL API, which always requires a token: add a **read-only token** (fine-grained, *Public repositories (read-only)*, or classic with no scopes). A classic token with scopes beyond `read:discussion` is refused. Private repositories are refused.
 
-This capability is **not included in the published v0.1.1 installer**. Any public release or upgrade is a separate verified process.
+**Posting one Issue comment** (`github_post_issue_comment`), separately enabled:
+- Uses its **own token**, never the read-only one: a **fine-grained** personal access token **with an expiry date**, limited to the allowlisted repository with only *Issues: Read and write*. Classic tokens are refused because they cannot be limited to one repository. GitHub checks the token when you save it, and it is used only for the repository it was verified for. The Worker cannot make an over-privileged token safe, so keep it minimal.
+- The agent can only **propose** a comment (an Issue number and the text). The Worker checks the target (public repository, an Issue rather than a pull request, not locked) and refuses text that contains credentials, private keys, local folder paths or invisible direction-control characters. It then shows you the repository, Issue, the GitHub account and the **exact text**. Nothing is posted unless you click **Approve and post**, and each approval is used at most once.
+- Before sending, the Worker checks again that the setting is on, the token and account are unchanged, and the Issue has not changed since the proposal. If anything differs, nothing is sent and a new proposal is needed.
+- Every attempt is recorded in a durable, append-only outbox in the local database **before** it is sent. The result is shown in the Work activity:
+  - **Posted (confirmed by GitHub)**, with a link to the comment.
+  - **Refused by GitHub**, or **Not posted: nothing was sent**.
+  - **Outcome unknown**: a timeout, a dropped connection, a server error or a Worker restart during the attempt. The comment may or may not have been published. It is **never sent again automatically**. **Reconcile** looks for it on GitHub read-only; not finding it does not prove it was not published. To post again, ask for a new comment and approve it again.
+
+Tokens are stored encrypted with the Worker's other credentials. They are sent only to `api.github.com`, never returned by the Worker's API, and never included in model requests, conversation history or logs. GitHub text is treated as **untrusted data**, never as instructions or approval. These tools exist only in Standalone; the Platform Client does not load them or the Standalone credentials.
+
+This capability is **not included in the published v0.1.1 installer**. Any public release is a separate verified process.
 
 ## Community and support
 

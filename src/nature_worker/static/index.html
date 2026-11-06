@@ -172,13 +172,24 @@
       <details>
         <summary>Advanced</summary>
         <label class="check"><input id="s-web" type="checkbox"> Allow web fetching (each request still needs your approval)</label>
-        <label class="check"><input id="s-github" type="checkbox"> Allow reading GitHub Issues and Discussions of <span id="s-github-repo">nature-ai-corp/nature-ai-worker</span> (read-only; nothing is ever posted)</label>
-        <label id="s-github-token-row">GitHub token (optional; needed for Discussions)
+        <label>GitHub repository (owner/name) the GitHub tools may use
+          <input id="s-github-repository" autocomplete="off" spellcheck="false" placeholder="nature-ai-corp/nature-ai-worker">
+          <span class="muted small">Only this repository is allowed; the agent cannot choose another one. Empty uses the default, <span id="s-github-default-repo">nature-ai-corp/nature-ai-worker</span>.</span>
+        </label>
+        <label class="check"><input id="s-github" type="checkbox"> Allow reading Issues and Discussions of <span id="s-github-repo">nature-ai-corp/nature-ai-worker</span> (read-only)</label>
+        <label id="s-github-token-row">Read-only GitHub token (optional; needed for Discussions). Never your posting token.
           <input id="s-github-token" type="password" autocomplete="off" spellcheck="false">
           <span id="s-github-token-status" class="muted small"></span>
           <span class="muted small">Use a fine-grained token with access to public repositories only (read-only), or a classic token with no scopes. A token that could write is refused. It is stored encrypted, sent only to api.github.com and never shown to the model.</span>
         </label>
         <label class="check" id="s-github-clear-row"><input id="s-github-clear" type="checkbox"> Remove the stored GitHub token</label>
+        <label class="check"><input id="s-github-write" type="checkbox"> Allow proposing GitHub Issue comments (each one is posted only after you approve its exact text)</label>
+        <label id="s-github-write-token-row">GitHub token for posting comments (separate from the read-only token)
+          <input id="s-github-write-token" type="password" autocomplete="off" spellcheck="false">
+          <span id="s-github-write-token-status" class="muted small"></span>
+          <span class="muted small">Use a fine-grained token with an expiry date, limited to the allowlisted repository with only "Issues: Read and write". Classic tokens are refused. GitHub checks the token when you save. A token may still allow more than this Worker uses; the Worker cannot make an over-privileged token safe.</span>
+        </label>
+        <label class="check" id="s-github-write-clear-row"><input id="s-github-write-clear" type="checkbox"> Remove the stored GitHub posting token</label>
         <label>Max agent steps per run <input id="s-steps" type="number" min="1" max="100"></label>
         <label id="s-context-row">Context size (Ollama, tokens) <input id="s-context" type="number" min="2048" max="1048576" step="1024" placeholder="server default">
           <span class="muted small">Empty uses the Ollama server's default. A conversation that no longer fits is stopped with a message instead of losing its instructions.</span></label>

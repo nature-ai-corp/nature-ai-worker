@@ -7,15 +7,16 @@ API keys are never stored here (see ``credentials.py``).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
-SCHEMA = """
+BASE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -51,6 +52,77 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 """
 
+# The durable outbox for approval-gated GitHub writes (see github_outbox.py). The tables are
+# additive and created on every open (IF NOT EXISTS), so they need no data-schema version:
+# older versions ignore them, and a rollback keeps the audit record.
+# The rules that keep it an audit record are enforced by SQLite itself, not only by the code:
+# rows start as 'proposed', their snapshot never changes, states only move along the allowed
+# transitions, a confirmed result is written once, and nothing is ever deleted. Operations are
+# not tied to a conversation: deleting the conversation keeps the record of a remote side effect.
+# One statement per entry, so each can also run on its own.
+GITHUB_OUTBOX_DDL = [
+    """CREATE TABLE IF NOT EXISTS github_operations (
+    id TEXT PRIMARY KEY,
+    approval_id TEXT NOT NULL UNIQUE,
+    conversation_id TEXT NOT NULL,
+    tool_call_id TEXT NOT NULL,
+    operation TEXT NOT NULL,          -- issue_comment
+    repository TEXT NOT NULL,
+    issue_number INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    body_sha256 TEXT NOT NULL,
+    snapshot TEXT NOT NULL,           -- canonical JSON of everything the user approves
+    fingerprint TEXT NOT NULL,        -- SHA-256 of the snapshot
+    actor TEXT NOT NULL,              -- GitHub login the token belonged to at proposal time
+    token_fingerprint TEXT NOT NULL,  -- truncated SHA-256 of the token, never the token
+    state TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    attempt_started_at REAL,
+    comment_id INTEGER,
+    comment_url TEXT,
+    comment_created_at TEXT,
+    detail TEXT,
+    UNIQUE (conversation_id, tool_call_id)
+)""",
+    """CREATE TABLE IF NOT EXISTS github_operation_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation_id TEXT,
+    approval_id TEXT,
+    event TEXT NOT NULL,
+    detail TEXT,
+    created_at REAL NOT NULL
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_github_operations_conv ON github_operations(conversation_id, created_at)",
+    """CREATE TRIGGER IF NOT EXISTS github_operations_insert BEFORE INSERT ON github_operations
+WHEN NEW.state != 'proposed' OR NEW.attempt_started_at IS NOT NULL OR NEW.comment_id IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'a GitHub operation starts as proposed'); END""",
+    """CREATE TRIGGER IF NOT EXISTS github_operations_immutable BEFORE UPDATE OF
+id, approval_id, conversation_id, tool_call_id, operation, repository, issue_number, body, body_sha256,
+snapshot, fingerprint, actor, token_fingerprint, created_at ON github_operations
+BEGIN SELECT RAISE(ABORT, 'the approved GitHub operation is immutable'); END""",
+    """CREATE TRIGGER IF NOT EXISTS github_operations_transition BEFORE UPDATE OF state ON github_operations
+WHEN NOT ((OLD.state = 'proposed' AND NEW.state IN ('approved', 'denied'))
+       OR (OLD.state = 'approved' AND NEW.state IN ('attempt_started', 'failed_before_send'))
+       OR (OLD.state = 'attempt_started'
+           AND NEW.state IN ('confirmed', 'rejected', 'outcome_unknown', 'failed_before_send'))
+       OR (OLD.state = 'outcome_unknown' AND NEW.state = 'reconciled'))
+BEGIN SELECT RAISE(ABORT, 'illegal GitHub operation state transition'); END""",
+    """CREATE TRIGGER IF NOT EXISTS github_operations_write_once BEFORE UPDATE OF
+attempt_started_at, comment_id, comment_url, comment_created_at ON github_operations
+WHEN OLD.attempt_started_at IS NOT NULL AND NEW.attempt_started_at IS NOT OLD.attempt_started_at
+  OR OLD.comment_id IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'a recorded GitHub attempt or result cannot change'); END""",
+    """CREATE TRIGGER IF NOT EXISTS github_operations_no_delete BEFORE DELETE ON github_operations
+BEGIN SELECT RAISE(ABORT, 'GitHub operations are an audit record and cannot be deleted'); END""",
+    """CREATE TRIGGER IF NOT EXISTS github_operation_events_no_update BEFORE UPDATE ON github_operation_events
+BEGIN SELECT RAISE(ABORT, 'GitHub operation events are append-only'); END""",
+    """CREATE TRIGGER IF NOT EXISTS github_operation_events_no_delete BEFORE DELETE ON github_operation_events
+BEGIN SELECT RAISE(ABORT, 'GitHub operation events are append-only'); END""",
+]
+
+SCHEMA = BASE_SCHEMA + "".join(statement + ";\n" for statement in GITHUB_OUTBOX_DDL)
+
 
 def _loads(value: str | None) -> Any:
     return json.loads(value) if value else None
@@ -64,6 +136,8 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.execute("PRAGMA journal_mode = WAL")
+        # A commit is on disk before it returns: the outbox records an attempt before sending it.
+        self._conn.execute("PRAGMA synchronous = FULL")
         self._conn.executescript(SCHEMA)
         self._conn.commit()
 
@@ -75,6 +149,18 @@ class Database:
             cur = self._conn.execute(sql, params)
             self._conn.commit()
             return cur
+
+    @contextlib.contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        """One atomic, committed-on-success unit of several statements."""
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield self._conn
+            except BaseException:
+                self._conn.rollback()
+                raise
+            self._conn.commit()
 
     def _all(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
         with self._lock:

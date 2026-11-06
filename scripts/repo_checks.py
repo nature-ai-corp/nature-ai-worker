@@ -113,9 +113,9 @@ def scan_text(path: str, text: str, found: Findings, *, tests: bool) -> None:
                     found.add("secret", where, f"possible {label}")
         if not tests:
             if PRIVATE_ADDRESS.search(line):
-                found.add("internal-address", where, f"private/tailnet address {PRIVATE_ADDRESS.search(line)[0]}")
+                found.add("internal-address", where, "private/tailnet address detected (value redacted)")
             if TAILNET_HOST.search(line):
-                found.add("internal-address", where, f"tailnet host name {TAILNET_HOST.search(line)[0]}")
+                found.add("internal-address", where, "tailnet host name detected (value redacted)")
         if CONFIDENTIAL.search(line):
             found.add("confidential", where, f"marker '{CONFIDENTIAL.search(line)[0]}'")
 

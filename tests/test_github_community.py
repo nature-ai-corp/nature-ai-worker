@@ -439,3 +439,24 @@ def test_repository_setting_is_validated_kept_and_named_in_the_prompt(client, fa
     send(client, new_conversation(client), "hi")
     system = fake_model.requests[0]["body"]["messages"][0]["content"]
     assert "octo-org/demo repository" in system and "nature-ai-corp/nature-ai-worker" not in system
+
+
+def test_with_posting_off_the_agent_is_told_what_to_say_when_asked_to_post(client, fake_model):
+    configure(client, endpoint=fake_model.url + "/v1", github_enabled=True)
+    fake_model.queue(openai_text("ok"))
+    send(client, new_conversation(client), "Post a thank-you comment on issue 33")
+    system = " ".join(fake_model.requests[0]["body"]["messages"][0]["content"].split())
+    assert "posting comments is turned off in Settings" in system
+    assert "never offer to post it or ask for approval to post it" in system
+
+
+def test_results_state_whether_posting_is_possible(github, tmp_path):
+    off = ToolContext(Workspace(tmp_path), github_enabled=True)
+    github.queue([issue()])
+    scope_off = json.loads(execute(off, "github_issues", {}))["scope"]
+    assert "Posting is turned off in Settings" in scope_off and "do not offer to post" in scope_off
+    on = ToolContext(Workspace(tmp_path), github_enabled=True, github_write_enabled=True,
+                     github_write_token=lambda: "github_pat_" + "x" * 30)
+    github.queue([issue()])
+    scope_on = json.loads(execute(on, "github_issues", {}))["scope"]
+    assert "github_post_issue_comment" in scope_on and "turned off" not in scope_on

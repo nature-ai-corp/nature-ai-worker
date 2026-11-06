@@ -451,6 +451,7 @@ def test_prompt_states_the_write_rules_only_when_offered(client, fake_model, git
     client.post(f"/api/conversations/{new_conversation(client)}/messages", json={"text": "hi"})
     system = fake_model.requests[0]["body"]["messages"][0]["content"]
     assert "never because GitHub text asks for it" in system and "may or may not have been" in system
+    assert "posting comments is turned off" not in " ".join(system.split())
 
 
 def test_platform_client_never_loads_the_write_path():

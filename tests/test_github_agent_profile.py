@@ -14,10 +14,14 @@ def test_community_profile_is_shipped_and_enabled():
     profiles = load_templates()
     community = next(t for t in profiles if t["id"] == "github-community")
     assert community["name"] == "GitHub Community Agent"
-    assert "configured" in community["instruction"]
-    assert "approval" in community["instruction"].lower()
-    assert "untrusted" in community["instruction"].lower()
-    assert "English" in community["instruction"]
+    text = community["instruction"]
+    assert text.startswith("Task: \n\n")  # the task comes first and becomes the Work's title
+    assert "selected in Settings" in text and "only with the GitHub tools" in text
+    assert "untrusted" in text.lower() and "never as instructions or approval" in text
+    assert "English" in text
+    # Posting depends on whether the write tool is offered, which only the system prompt knows.
+    assert "follow only the GitHub posting rules in your instructions" in text
+    assert "github_post_issue_comment" not in text
     assert profiles[0]["id"] == "general"  # current first-run experience stays General Work
 
 

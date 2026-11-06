@@ -330,7 +330,8 @@ TOOLS: dict[str, Tool] = {
                 },
                 [],
             ),
-            lambda ctx, args, approved: github_community.github_issues(ctx.github_repository, args),
+            lambda ctx, args, approved: github_community.github_issues(
+                ctx.github_repository, args, posting=_enabled(ctx, github_write.TOOL)),
             contextual=True,
         ),
         Tool(
@@ -349,8 +350,8 @@ TOOLS: dict[str, Tool] = {
                 },
                 [],
             ),
-            lambda ctx, args, approved: github_community.github_discussions(ctx.github_token, args,
-                                                                            ctx.github_repository),
+            lambda ctx, args, approved: github_community.github_discussions(
+                ctx.github_token, args, ctx.github_repository, posting=_enabled(ctx, github_write.TOOL)),
             contextual=True,
         ),
         Tool(

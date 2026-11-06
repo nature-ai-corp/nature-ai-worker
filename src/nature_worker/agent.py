@@ -85,7 +85,9 @@ GITHUB_RULES = """- The GitHub reading tools are read-only and read only the {re
 
 GITHUB_NO_WRITES = """, or post, comment, label, close or change anything on GitHub, so never say or offer
   that you can. When asked for a reply, write it as a draft in English for the maintainer to review and
-  post themselves, and end by saying the maintainer posts it (never offer to post it)"""
+  post themselves, and end by saying the maintainer posts it (never offer to post it or ask for approval
+  to post it). If the user asks you to post, say that posting comments is turned off in Settings ->
+  Advanced and give the draft for the maintainer to post"""
 
 GITHUB_WRITE_RULES = """- github_post_issue_comment is the only GitHub write. It proposes one comment on one Issue of
   {repository}; nothing is posted unless the user approves that exact text in the app.

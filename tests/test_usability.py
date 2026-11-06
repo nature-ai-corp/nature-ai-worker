@@ -146,6 +146,9 @@ def test_invalid_port_is_explained(tmp_path, args, env):
 # -- UX-001 and UX-002 in a real browser ----------------------------------------------------
 
 def _find_chrome():
+    # An explicit browser (e.g. Chrome or Edge on native Windows, where it is not on PATH).
+    if (path := os.environ.get("NATURE_WORKER_TEST_BROWSER")) and os.path.isfile(path):
+        return path
     for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
         if path := shutil.which(name):
             return path

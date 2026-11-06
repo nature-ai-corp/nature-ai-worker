@@ -177,6 +177,7 @@ function formatClock(ts) {
 function parseRoute() {
   const h = location.hash.replace(/^#/, "");
   if (h === "/new") return { view: "new" };
+  if (h === "/community") return { view: "community" };
   const f = h.match(/^\/(in-progress|attention|finished)$/);
   if (f) return { view: "list", filter: f[1] };
   const m = h.match(/^\/work\/([0-9a-f]+)$/) || h.match(/^([0-9a-f]{32})$/);
@@ -208,18 +209,23 @@ async function route() {
     state.current = null;
     state.filter = r.filter || "all";
     show(r.view);
-    if (r.view === "new") renderNew(); else await loadWork();
+    if (r.view === "new") renderNew();
+    else if (r.view === "community") renderCommunity();
+    else await loadWork();
   }
   loadWork(true);
 }
 
 function show(view) {
-  for (const v of ["list", "new", "work"]) $("#view-" + v).hidden = v !== view;
+  for (const v of ["list", "new", "work", "community"]) $("#view-" + v).hidden = v !== view;
   for (const a of document.querySelectorAll("#work-center .nav-item")) {
     if (view === "list" && a.dataset.filter === state.filter) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   }
-  const heading = { list: "#list-heading", new: "#new-heading", work: "#work-title" }[view];
+  const community = $("#nav-community");
+  if (view === "community") community.setAttribute("aria-current", "page");
+  else community.removeAttribute("aria-current");
+  const heading = { list: "#list-heading", new: "#new-heading", work: "#work-title", community: "#community-heading" }[view];
   $(heading).focus({ preventScroll: true });
   $("#main").scrollTop = 0;
 }
@@ -290,6 +296,69 @@ function renderList() {
         statusBadge(w.status, w.status_label),
         el("span", { class: "row-meta muted small" }, meta.join(" · ")))));
   }
+}
+
+// ---------------------------------------------------------------- GitHub Community Agent
+// A prebuilt professional profile, not a second runtime. Work is created through the
+// existing New Work flow. These starters only prepare editable user instructions:
+// GitHub tool permissions and posting approvals remain enforced by the backend.
+const COMMUNITY_TASKS = {
+  issues: "Review the newest open Issues of the configured public GitHub repository. Group them by type and urgency, identify unanswered questions, cite the source Issue URLs, and suggest maintainer next steps. Do not post or change any Issue.",
+  discussions: "Review recent Discussions of the configured public GitHub repository, including categories and relevant comments. Summarize questions needing attention, cite each Discussion URL, and suggest responsible next steps. Do not post.",
+  drafts: "Find recent public Issues or Discussions that would benefit from a maintainer reply. Read the full relevant threads and draft concise, friendly English responses with exact source URLs. Present drafts only; do not post anything.",
+  report: "Prepare a concise English GitHub Community status report for the configured public repository, based on the Issues and Discussions actually accessible through your tools. Cover themes, priority follow-ups, blockers, and uncertainty, with verifiable URLs. Do not invent metrics or publish anything.",
+};
+
+// The profile instruction starts with "Task: " (like the other templates, the part to fill comes
+// first), so each Work is titled by its task rather than by the shared role text.
+function communityText(profile, assignment) {
+  return profile.instruction.startsWith("Task: ")
+    ? "Task: " + assignment + profile.instruction.slice("Task: ".length)
+    : profile.instruction + assignment;
+}
+
+// Text the user did not write: empty, a template, or a starter exactly as generated.
+function generatedText(text) {
+  if (!text || !text.trim()) return true;
+  if (state.templates.some((t) => t.instruction === text)) return true;
+  const profile = state.templates.find((t) => t.id === "github-community");
+  return !!profile && Object.values(COMMUNITY_TASKS).some((a) => communityText(profile, a) === text);
+}
+
+function renderCommunity() {
+  const cfg = state.settings || {};
+  $("#community-repository").textContent = cfg.github_repository || "Not configured";
+  const notes = [];
+  if (!cfg.configured) notes.push("Connect an AI model in Settings first.");
+  if (!cfg.github_enabled) notes.push("GitHub reading is off. Enable it in Settings before starting review tasks.");
+  else if (cfg.github_token_source === "none") notes.push("Public Issues are available; Discussions need a separate read-only token.");
+  else notes.push("GitHub reading is enabled for this repository.");
+  if (cfg.github_write_enabled && cfg.github_write_token_source === "stored") {
+    notes.push(`Issue comments can be proposed as @${cfg.github_write_actor}; each exact comment still needs your approval.`);
+  } else notes.push("GitHub posting is off.");
+  $("#community-connection").textContent = notes.join(" ");
+}
+
+async function launchCommunityTask(task) {
+  const assignment = COMMUNITY_TASKS[task];
+  if (!assignment) return;
+  await loadTemplates();
+  const profile = state.templates.find(t => t.id === "github-community");
+  if (!profile) {
+    alert("The GitHub Community Agent profile is unavailable. Check the Worker installation.");
+    return;
+  }
+  if (!state.settings || !state.settings.configured) { openSettings(true); return; }
+  // Never overwrite text the user wrote in the New Work draft without asking.
+  const previous = storedDraft();
+  if (previous && !generatedText(previous.text)) {
+    if (!confirm("Replace your unsent New Work text with this community task?")) return;
+  }
+  hideNotice();
+  $("#new-input").value = communityText(profile, assignment);
+  showTemplate(profile);
+  saveNewDraft();
+  go("#/new"); // User can inspect and edit before submitting to the General Agent runtime.
 }
 
 // ---------------------------------------------------------------- New Work
@@ -1077,6 +1146,7 @@ async function saveSettings() {
   }
   $("#settings-dialog").close();
   updateModelLabel();
+  if (!$("#view-community").hidden) renderCommunity();
 }
 
 function updateModelLabel() {
@@ -1110,6 +1180,10 @@ async function init() {
     startWork(text);
   });
   $("#new-work").addEventListener("click", newWork);
+  $("#community-settings").addEventListener("click", () => openSettings(false));
+  for (const button of document.querySelectorAll("[data-community-task]")) {
+    button.addEventListener("click", () => launchCommunityTask(button.dataset.communityTask));
+  }
   $("#new-input").addEventListener("input", saveNewDraft);
   $("#template-button").addEventListener("click", () => {
     if ($("#template-list").hidden) openTemplateList(); else closeTemplateList(true);

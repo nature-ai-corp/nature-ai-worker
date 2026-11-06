@@ -8,14 +8,16 @@ import pytest
 
 from nature_worker.templates import TEMPLATES_FILE, TemplateError, load_templates
 
-EXPECTED = ["general", "research-summary", "data-analysis", "document-report", "file-organization"]
+EXPECTED = ["general", "research-summary", "data-analysis", "document-report", "file-organization",
+            "github-community"]
 
 
 def test_packaged_templates_load_in_order():
     templates = load_templates()
     assert [t["id"] for t in templates] == EXPECTED
     assert [t["name"] for t in templates] == ["General Work", "Research & Summary", "Data Analysis",
-                                              "Document & Report", "File Organization"]
+                                              "Document & Report", "File Organization",
+                                              "GitHub Community Agent"]
     assert templates[0]["instruction"] == ""  # General Work: the user's own words
     for t in templates:
         assert set(t) == {"id", "name", "description", "instruction"}

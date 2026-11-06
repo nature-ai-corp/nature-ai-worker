@@ -97,10 +97,16 @@ def html_root(repo: str) -> str:
     return f"https://github.com/{repo}"
 
 
-def scope(repo: str) -> str:
-    # Repeated in every result, where the model reads it just before it answers.
-    return (f"These tools can read only {repo}; no other repository can be read, and nothing can be posted "
-            "or changed on GitHub by them. Replies are drafts for the maintainer to post.")
+def scope(repo: str, posting: bool = False) -> str:
+    # Repeated in every result, where the model reads it just before it answers. It states whether
+    # posting is possible at all, because models otherwise offer to post when it is turned off.
+    if posting:
+        return (f"These tools can read only {repo}; no other repository can be read, and they change nothing. "
+                "A comment can be posted only through github_post_issue_comment, after the user approves "
+                "its exact text in the app.")
+    return (f"These tools can read only {repo}; no other repository can be read. Posting is turned off in "
+            "Settings: nothing can be posted or changed on GitHub. Present replies as drafts for the "
+            "maintainer to post; do not offer to post them or ask for approval to post.")
 
 
 def valid_token(token: str) -> bool:
@@ -205,8 +211,8 @@ def _fit(record: dict, items: list[dict], key: str, texts: list[dict] | None = N
             raise ToolError("The GitHub item is too large to return.")
 
 
-def _record(kind: str, mode: str, repo: str, **fields) -> dict:
-    return {"source": f"GitHub {kind} of {repo} (read-only)", "note": UNTRUSTED, "scope": scope(repo),
+def _record(kind: str, mode: str, repo: str, posting: bool, **fields) -> dict:
+    return {"source": f"GitHub {kind} of {repo} (read-only)", "note": UNTRUSTED, "scope": scope(repo, posting),
             "repository": repo, "mode": mode, **fields}
 
 
@@ -232,7 +238,7 @@ def _required_number(args: dict, mode: str) -> int:
     return number
 
 
-def github_issues(repo: str, args: dict) -> str:
+def github_issues(repo: str, args: dict, *, posting: bool = False) -> str:
     """List public issues, read one issue, or read the comments of one issue.
 
     Pull requests are excluded. No credentials are used. The tool cannot address
@@ -255,7 +261,7 @@ def github_issues(repo: str, args: dict) -> str:
             raise ToolError("Unexpected GitHub API response.")
         issues = [s for item in payload if isinstance(item, dict) and "pull_request" not in item
                   and (s := _issue(item, repo, detailed=False))]
-        return _fit(_record("Issues", mode, repo, state=state, page=params["page"], issues=issues), issues, "title")
+        return _fit(_record("Issues", mode, repo, posting, state=state, page=params["page"], issues=issues), issues, "title")
 
     number = _required_number(args, mode)
     if "state" in args:
@@ -267,14 +273,14 @@ def github_issues(repo: str, args: dict) -> str:
         if not isinstance(payload, dict) or "pull_request" in payload or _number(payload.get("number")) != number:
             raise ToolError("The requested item is not a public GitHub issue.")
         issues = [_issue(payload, repo, detailed=True)]
-        return _fit(_record("Issues", mode, repo, issues=issues), issues, "body")
+        return _fit(_record("Issues", mode, repo, posting, issues=issues), issues, "body")
 
     page = _page(args, 5)
     payload = _get(repo, f"/issues/{number}/comments", {"page": page, "per_page": MAX_COMMENTS}, "issue")
     if not isinstance(payload, list):
         raise ToolError("Unexpected GitHub API response.")
     comments = [c for item in payload if isinstance(item, dict) and (c := _issue_comment(repo, number, item))]
-    return _fit(_record("Issues", mode, repo, number=number, url=f"{html_root(repo)}/issues/{number}", page=page,
+    return _fit(_record("Issues", mode, repo, posting, number=number, url=f"{html_root(repo)}/issues/{number}", page=page,
                         comments=comments, more=len(payload) == MAX_COMMENTS), comments, "body")
 
 
@@ -375,7 +381,7 @@ def _graphql(query: str, variables: dict, token: str) -> dict:
     return repo
 
 
-def github_discussions(token: Callable[[], str | None], args: dict, repo: str) -> str:
+def github_discussions(token: Callable[[], str | None], args: dict, repo: str, *, posting: bool = False) -> str:
     """List Discussions (newest activity first) or read one Discussion with its comments."""
     _check_args(args, {"mode", "number", "after"})
     mode = args.get("mode", "list")
@@ -398,7 +404,7 @@ def github_discussions(token: Callable[[], str | None], args: dict, repo: str) -
         data = _graphql(DISCUSSIONS_QUERY, variables, secret)
         conn = data.get("discussions") or {}
         items = [d for node in conn.get("nodes") or [] if isinstance(node, dict) and (d := _discussion(node, repo))]
-        record = _record("Discussions", mode, repo, total=conn.get("totalCount"), discussions=items,
+        record = _record("Discussions", mode, repo, posting, total=conn.get("totalCount"), discussions=items,
                          **_paging(conn))
         return _redact(_fit(record, items, "title"), secret)
 
@@ -416,7 +422,7 @@ def github_discussions(token: Callable[[], str | None], args: dict, repo: str) -
     conn = node.get("comments") or {}
     comments = [c for item in conn.get("nodes") or [] if isinstance(item, dict)
                 and (c := _discussion_comment(repo, discussion["number"], item))]
-    record = _record("Discussions", mode, repo, discussion=discussion, comments=comments, **_paging(conn))
+    record = _record("Discussions", mode, repo, posting, discussion=discussion, comments=comments, **_paging(conn))
     return _redact(_fit(record, comments, "body", texts=[discussion, *comments]), secret)
 
 

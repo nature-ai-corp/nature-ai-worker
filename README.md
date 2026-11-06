@@ -308,6 +308,8 @@ The automated tests never contact a real AI provider. To check a provider yourse
 
 The General Agent can help maintainers of **any GitHub repository** look after their community: read Issues and Discussions, summarize and classify them, draft **English** replies and, only with your approval of each exact comment, post a comment on an Issue. Everything is **off by default** and configured in **Settings → Advanced**. It is part of the Standalone Worker (Apache-2.0); there is no separate agent, workflow engine or automatic posting.
 
+**Ready to use:** open **Work Center → GitHub Community Agent** for a prebuilt profile with starter tasks (review Issues, review Discussions, draft replies, community report). It runs as ordinary Work on the same General Agent; see [docs/GITHUB_COMMUNITY_AGENT.md](docs/GITHUB_COMMUNITY_AGENT.md).
+
 **Repository allowlist.** Enter the one repository the tools may use as `owner/name` (default and demonstration target: `nature-ai-corp/nature-ai-worker`). The agent cannot choose or reach any other repository: the repository and the API host come from Settings and the code, never from the model, and redirects and proxies are not followed. The setting is stored as a list so that several repositories can be allowed in a later version; this version allows exactly one.
 
 **Reading** (`github_issues`, `github_discussions`):

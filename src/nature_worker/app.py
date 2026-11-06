@@ -48,6 +48,9 @@ class SettingsIn(BaseModel):
     clear_api_key: bool = False
     web_fetch_enabled: bool = False
     github_enabled: bool = False
+    # The allowlisted repository ("owner/name"). None keeps the current one. Stored as a list so
+    # several repositories can be allowed later; this version allows exactly one.
+    github_repository: str | None = Field(default=None, max_length=140)
     github_token: str | None = Field(default=None, max_length=255)  # write-only; None/"" keeps the stored token
     clear_github_token: bool = False
     # The separate GitHub write (one approved Issue comment at a time): its own switch and token.
@@ -112,6 +115,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         s.setdefault("web_fetch_enabled", False)
         s.setdefault("github_enabled", False)
         s.setdefault("github_write_enabled", False)
+        if not s.get("github_repositories"):
+            s["github_repositories"] = [github_community.DEFAULT_REPOSITORY]
         s.setdefault("max_steps", DEFAULT_MAX_STEPS)
         return s
 
@@ -134,14 +139,18 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     def github_write_token() -> str | None:
         # Only the token that was verified when it was saved; never the read-only token.
+        # It was verified for one repository; it is not used for any other.
         token = creds.get("github_write", github_community.API_HOST)[0]
-        verified = settings().get("github_write_token_fp")
-        return token if token and verified and github_write.token_fingerprint(token) == verified else None
+        s = settings()
+        verified = s.get("github_write_token_fp")
+        if not (token and verified and github_write.token_fingerprint(token) == verified):
+            return None
+        return token if s.get("github_write_repository") == s["github_repositories"][0] else None
 
     def tool_context() -> ToolContext:
         s = settings()
         return ToolContext(workspace, bool(s["web_fetch_enabled"]), github_enabled=bool(s["github_enabled"]),
-                           github_token=github_token, github_write_enabled=bool(s["github_write_enabled"]),
+                           github_repository=s["github_repositories"][0], github_token=github_token, github_write_enabled=bool(s["github_write_enabled"]),
                            github_write_token=github_write_token, known_secrets=creds.all_values)
 
     outbox = Outbox(db)
@@ -214,11 +223,16 @@ def create_app(config: Config | None = None) -> FastAPI:
             "api_key_source": key_source,  # never the key itself
             "web_fetch_enabled": s["web_fetch_enabled"],
             "github_enabled": s["github_enabled"],
-            "github_repository": github_community.REPOSITORY,
+            "github_repository": s["github_repositories"][0],
+            "github_repositories": s["github_repositories"],
+            "github_default_repository": github_community.DEFAULT_REPOSITORY,
             "github_token_source": creds.get("github", github_community.API_HOST)[1],  # never the token
             "github_write_enabled": s["github_write_enabled"],
             "github_write_token_source": "stored" if github_write_token() else "none",
             "github_write_actor": s.get("github_write_actor") if github_write_token() else None,
+            # A stored token verified for a different repository than the one allowlisted now.
+            "github_write_token_repository": s.get("github_write_repository")
+            if creds.get("github_write", github_community.API_HOST)[0] else None,
             "max_steps": s["max_steps"],
             "context_window": s.get("context_window"),
             "configured": configured,
@@ -240,6 +254,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         if body.provider not in PROVIDERS:
             raise HTTPException(400, "Unknown provider.")
         endpoint = _validate_endpoint(body.endpoint)
+        repository = (body.github_repository or "").strip() or settings()["github_repositories"][0]
+        if not github_community.valid_repository(repository):
+            raise HTTPException(400, "Enter the GitHub repository as owner/name, for example "
+                                     f"{github_community.DEFAULT_REPOSITORY}.")
         github_token = (body.github_token or "").strip()
         if github_token and not github_community.valid_token(github_token):
             raise HTTPException(400, "That does not look like a GitHub token.")
@@ -252,15 +270,16 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise HTTPException(400, "Use a separate token for posting, not the read-only token.")
         if body.clear_github_write_token:
             creds.set("github_write", None)
-            db.set_settings({"github_write_actor": None, "github_write_token_fp": None})
+            db.set_settings({"github_write_actor": None, "github_write_token_fp": None,
+                             "github_write_repository": None})
         elif write_token:
             try:
                 # Saved only after GitHub confirms who it belongs to and that it is suitable.
-                actor = github_write.check_write_token(write_token)
+                actor = github_write.check_write_token(write_token, repository)
             except ToolError as e:
                 raise HTTPException(400, f"The GitHub write token was not saved: {e}") from None
             creds.set("github_write", write_token, github_community.API_HOST)
-            db.set_settings({"github_write_actor": actor,
+            db.set_settings({"github_write_actor": actor, "github_write_repository": repository,
                              "github_write_token_fp": github_write.token_fingerprint(write_token)})
         if body.clear_api_key:
             creds.set(body.provider, None)
@@ -275,6 +294,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "web_fetch_enabled": body.web_fetch_enabled,
                 "github_enabled": body.github_enabled,
                 "github_write_enabled": body.github_write_enabled,
+                "github_repositories": [repository],
                 "max_steps": body.max_steps,
                 "context_window": body.context_window,
             }

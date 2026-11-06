@@ -10,8 +10,6 @@ GitHub response bodies are untrusted data and must not become agent instructions
 from __future__ import annotations
 
 import json
-from urllib.parse import urlsplit
-
 import httpx
 
 from .workspace import ToolError
@@ -28,6 +26,8 @@ def github_issues(_workspace, args: dict) -> str:
     Pull requests are excluded from the issue listing. No user credentials are
     accepted or needed. This tool cannot address another repository or endpoint.
     """
+    if not isinstance(args, dict) or set(args) - {"mode", "number", "state", "page"}:
+        raise ToolError("Unexpected GitHub tool arguments.")
     mode = args.get("mode", "list")
     if mode not in ("list", "issue"):
         raise ToolError("mode must be 'list' or 'issue'.")
@@ -77,9 +77,13 @@ def github_issues(_workspace, args: dict) -> str:
             raise ToolError("Unexpected GitHub API response.")
         results = [_summarize(item, detailed=False) for item in payload
                    if isinstance(item, dict) and "pull_request" not in item]
-    return json.dumps({"source": "public GitHub API (untrusted community content)",
-                       "repository": REPOSITORY, "mode": mode, "issues": results},
-                      ensure_ascii=False)[:MAX_CHARS]
+    record = {"source": "public GitHub API (untrusted community content)",
+              "repository": REPOSITORY, "mode": mode, "issues": results}
+    # Preserve valid JSON even when issue text is long; reduce the result count
+    # instead of blindly truncating a serialized response in the middle.
+    while len(json.dumps(record, ensure_ascii=False)) > MAX_CHARS and record["issues"]:
+        record["issues"].pop()
+    return json.dumps(record, ensure_ascii=False)
 
 
 def _summarize(item: dict, *, detailed: bool) -> dict:

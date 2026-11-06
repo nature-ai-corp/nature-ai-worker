@@ -918,6 +918,16 @@ function updateKeyStatus() {
   $("#s-key-status").textContent = text;
 }
 
+function updateGithubTokenStatus() {
+  const source = state.settings.github_token_source;
+  $("#s-github-token").placeholder = source === "none" ? "Paste a read-only GitHub token" : "Leave empty to keep the current token";
+  $("#s-github-token-status").textContent =
+    source === "env" ? "Using the token from the server environment variable." :
+    source === "stored" ? "A token is stored (encrypted). Enter a new one to replace it." :
+    "No token: public Issues can be read, Discussions cannot.";
+  $("#s-github-clear-row").hidden = source !== "stored";
+}
+
 function openSettings(firstRun = false) {
   const s = state.settings;
   fillProviders();
@@ -926,6 +936,11 @@ function openSettings(firstRun = false) {
   $("#s-endpoint").value = s.endpoint || "";
   $("#s-key").value = "";
   $("#s-web").checked = !!s.web_fetch_enabled;
+  $("#s-github").checked = !!s.github_enabled;
+  $("#s-github-repo").textContent = s.github_repository || "";
+  $("#s-github-token").value = "";
+  $("#s-github-clear").checked = false;
+  updateGithubTokenStatus();
   $("#s-steps").value = s.max_steps;
   $("#s-context").value = s.context_window || "";
   $("#s-version").textContent = versionLine(s);
@@ -943,6 +958,9 @@ function settingsBody() {
     endpoint: $("#s-endpoint-row").hidden ? null : ($("#s-endpoint").value.trim() || null),
     api_key: $("#s-key").value.trim() || null,
     web_fetch_enabled: $("#s-web").checked,
+    github_enabled: $("#s-github").checked,
+    github_token: $("#s-github-token").value.trim() || null,
+    clear_github_token: $("#s-github-clear").checked,
     max_steps: parseInt($("#s-steps").value, 10) || 20,
     context_window: $("#s-context-row").hidden ? null : (parseInt($("#s-context").value, 10) || null),
   };

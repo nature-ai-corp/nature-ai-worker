@@ -163,7 +163,8 @@ def config(tmp_path, monkeypatch):
     from nature_worker.providers import SDK_ENV_OVERRIDES
 
     for var in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY",
-                "OPENAI_COMPATIBLE_API_KEY", "NATURE_WORKER_SECRET_KEY", *SDK_ENV_OVERRIDES):
+                "OPENAI_COMPATIBLE_API_KEY", "NATURE_WORKER_SECRET_KEY", "NATURE_WORKER_GITHUB_TOKEN",
+                *SDK_ENV_OVERRIDES):
         monkeypatch.delenv(var, raising=False)
     cfg = Config(data_dir=tmp_path / "data", workspace_dir=tmp_path / "workspace",
                  allowed_hosts=["testserver", "localhost", "127.0.0.1"])

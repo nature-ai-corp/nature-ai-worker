@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The Nature AI Worker Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Local storage for provider API keys.
+"""Local storage for provider API keys and the optional read-only GitHub token.
 
 Keys are resolved in this order:
 
@@ -36,6 +36,9 @@ ENV_VARS = {
     "gemini": "GEMINI_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
     "openai_compatible": "OPENAI_COMPATIBLE_API_KEY",
+    # Not a model provider: the read-only GitHub token for the community tools. A dedicated
+    # name, so a developer's general (often write-capable) GITHUB_TOKEN is never picked up.
+    "github": "NATURE_WORKER_GITHUB_TOKEN",
 }
 
 

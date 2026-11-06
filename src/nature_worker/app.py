@@ -26,7 +26,7 @@ from .transition_cleanup import require_no_failed_sc_residue
 from .credentials import CredentialStore
 from .db import Database
 from .providers import PROVIDERS, ProviderError, effective_endpoint, make_provider
-from .tools import TOOLS, ToolContext, ToolError
+from .tools import TOOLS, ToolContext, ToolError, github_community
 from .tools.workspace import Workspace
 from .templates import load_templates
 from .work import summarize
@@ -46,6 +46,9 @@ class SettingsIn(BaseModel):
     api_key: str | None = Field(default=None, max_length=1000)  # write-only; None/"" keeps the stored key
     clear_api_key: bool = False
     web_fetch_enabled: bool = False
+    github_enabled: bool = False
+    github_token: str | None = Field(default=None, max_length=255)  # write-only; None/"" keeps the stored token
+    clear_github_token: bool = False
     max_steps: int = Field(default=DEFAULT_MAX_STEPS, ge=1, le=100)
     # Ollama only: the context window to request (num_ctx). None: the Ollama server's default.
     context_window: int | None = Field(default=None, ge=2048, le=1_048_576)
@@ -102,6 +105,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         s.setdefault("model", "")
         s.setdefault("endpoint", None)
         s.setdefault("web_fetch_enabled", False)
+        s.setdefault("github_enabled", False)
         s.setdefault("max_steps", DEFAULT_MAX_STEPS)
         return s
 
@@ -118,10 +122,19 @@ def create_app(config: Config | None = None) -> FastAPI:
         s = settings()
         return build_provider(s["provider"], s["model"], s["endpoint"], context_window=s.get("context_window"))
 
+    def github_token() -> str | None:
+        # Bound to api.github.com like an endpoint-bound API key; never returned by the API.
+        return creds.get("github", github_community.API_HOST)[0]
+
+    def tool_context() -> ToolContext:
+        s = settings()
+        return ToolContext(workspace, bool(s["web_fetch_enabled"]), github_enabled=bool(s["github_enabled"]),
+                           github_token=github_token)
+
     agent = Agent(
         db,
         provider_factory=current_provider,
-        context_factory=lambda: ToolContext(workspace, bool(settings()["web_fetch_enabled"])),
+        context_factory=tool_context,
         max_steps=lambda: int(settings()["max_steps"]),
     )
 
@@ -181,6 +194,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             "endpoint": s["endpoint"],
             "api_key_source": key_source,  # never the key itself
             "web_fetch_enabled": s["web_fetch_enabled"],
+            "github_enabled": s["github_enabled"],
+            "github_repository": github_community.REPOSITORY,
+            "github_token_source": creds.get("github", github_community.API_HOST)[1],  # never the token
             "max_steps": s["max_steps"],
             "context_window": s.get("context_window"),
             "configured": configured,
@@ -202,6 +218,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         if body.provider not in PROVIDERS:
             raise HTTPException(400, "Unknown provider.")
         endpoint = _validate_endpoint(body.endpoint)
+        github_token = (body.github_token or "").strip()
+        if github_token and not github_community.valid_token(github_token):
+            raise HTTPException(400, "That does not look like a GitHub token.")
+        if body.clear_github_token:
+            creds.set("github", None)
+        elif github_token:
+            creds.set("github", github_token, github_community.API_HOST)
         if body.clear_api_key:
             creds.set(body.provider, None)
         elif body.api_key and body.api_key.strip():
@@ -213,6 +236,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "model": body.model.strip(),
                 "endpoint": endpoint,
                 "web_fetch_enabled": body.web_fetch_enabled,
+                "github_enabled": body.github_enabled,
                 "max_steps": body.max_steps,
                 "context_window": body.context_window,
             }

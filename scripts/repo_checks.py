@@ -166,6 +166,20 @@ def check_history(found: Findings) -> None:
         # secret-only filter suppressed historical addresses and privacy markers.
         scan_text(f"{path} ({sha[:10]})", data.decode("utf-8", errors="replace"), sub,
                   tests=path.startswith("tests/"))
+        # Audited legacy warning in an old, unpublished RC helper. Its text
+        # tells the builder NOT to distribute an invalid installer; it is not
+        # a confidentiality marking or a secret. Match the exact Git blob,
+        # file path, line and expected message, never exempt unrelated text.
+        audited_rc_blob = "0984e73a90f68584c1e2b2c8ebd44a4424d1bed6"
+        audited_rc_message = (
+            "    throw 'Unexpected build provenance or local trust-key override; "
+            "do not distribute this build.'"
+        )
+        if sha == audited_rc_blob and path == "scripts/windows_rc_stage.ps1":
+            lines = data.decode("utf-8", errors="replace").splitlines()
+            if len(lines) >= 81 and lines[80] == audited_rc_message:
+                sub = Findings((c, w, d) for c, w, d in sub
+                               if not (c == "confidential" and w.endswith(":81")))
         found.extend(("history-" + c, w, d) for c, w, d in sub)
 
 

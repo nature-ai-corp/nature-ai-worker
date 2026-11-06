@@ -69,3 +69,37 @@ def test_history_respects_test_fixture_address_exception_but_flags_confidential(
     findings = checker.Findings()
     checker.check_history(findings)
     assert {category for category, _, _ in findings} == {"history-confidential"}
+
+
+def test_exact_audited_legacy_rc_warning_is_benign_but_other_markers_are_not(monkeypatch):
+    checker = _load_checker()
+    blob_id = "0984e73a90f68584c1e2b2c8ebd44a4424d1bed6"
+    warning = ("    throw 'Unexpected build provenance or local trust-key override; "
+               "do not distribute this build.'")
+    base_lines = ["# historical RC helper"] * 80 + [warning, "other=confidential and proprietary"]
+    text = ("\n".join(base_lines) + "\n").encode()
+
+    def scan(oid, path, blob):
+        def fake_run(args, **kwargs):
+            command = " ".join(args)
+            if "rev-list" in command:
+                return SimpleNamespace(stdout=oid + " " + path + "\n")
+            if "cat-file -t" in command:
+                return SimpleNamespace(stdout="blob\n")
+            if "cat-file blob" in command:
+                return SimpleNamespace(stdout=blob)
+            raise AssertionError(command)
+        monkeypatch.setattr(checker.subprocess, "run", fake_run)
+        found = checker.Findings()
+        checker.check_history(found)
+        return [(kind, location) for kind, location, _ in found]
+
+    findings = scan(blob_id, "scripts/windows_rc_stage.ps1", text)
+    assert len(findings) == 1 and findings[0][0] == "history-confidential"
+    assert findings[0][1].endswith(":82")
+    # Any other object ID or path must still flag the old warning.
+    assert len(scan("c" * 40, "scripts/windows_rc_stage.ps1", text)) == 2
+    assert len(scan(blob_id, "docs/windows_rc_stage.ps1", text)) == 2
+    # A modified warning at that line is NOT exempted.
+    altered = text.replace(b"Unexpected build provenance", b"Unexpected confidential provenance")
+    assert len(scan(blob_id, "scripts/windows_rc_stage.ps1", altered)) == 2

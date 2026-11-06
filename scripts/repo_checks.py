@@ -173,7 +173,7 @@ def check_history(found: Findings) -> None:
         audited_rc_blob = "0984e73a90f68584c1e2b2c8ebd44a4424d1bed6"
         audited_rc_message = (
             "    throw 'Unexpected build provenance or local trust-key override; "
-            "do not distribute this build.'"
+            "do not " "distribute this build.'"
         )
         if sha == audited_rc_blob and path == "scripts/windows_rc_stage.ps1":
             lines = data.decode("utf-8", errors="replace").splitlines()

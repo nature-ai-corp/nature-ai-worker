@@ -18,6 +18,18 @@ function Write-Status([string]$name, [string]$status) {
     Add-Content -LiteralPath $summary -Value $line
     Write-Host $line
 }
+function Invoke-PrivatePython([string[]]$Arguments, [string]$Name) {
+    # PowerShell 5.1 turns native stderr with redirection into NativeCommandError
+    # when ErrorActionPreference is Stop. Capture both streams as files.
+    $stdout = Join-Path $reportDir ($Name + "-stdout.txt")
+    $stderr = Join-Path $reportDir ($Name + "-stderr.txt")
+    $argsQuoted = @($Arguments | ForEach-Object {
+        '"' + $_.Replace('"', '\\"') + '"'
+    })
+    $process = Start-Process -FilePath $python -ArgumentList $argsQuoted -Wait -PassThru -NoNewWindow `
+        -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    return $process.ExitCode
+}
 Set-Content -LiteralPath $summary -Value "NATURE AI Worker v0.1.1 private release preflight"
 $commit = (& git -C $repo rev-parse HEAD).Trim()
 Write-Status "COMMIT" $commit
@@ -31,22 +43,22 @@ if ($shallow -eq "true") {
     Write-Status "GIT HISTORY" "NOT VERIFIED (shallow clone)"
     throw "Full-history scan requires a non-shallow clone."
 }
-& $python -m pytest -q (Join-Path $repo "tests\test_repo_history_scanning.py") *> (Join-Path $reportDir "regression.txt")
-if ($LASTEXITCODE -ne 0) {
+$regressionExit = Invoke-PrivatePython @("-m", "pytest", "-q", (Join-Path $repo "tests\test_repo_history_scanning.py")) "regression"
+if ($regressionExit -ne 0) {
     Write-Status "REGRESSION" "FAIL (see private report)"
 } else {
     Write-Status "REGRESSION" "PASS"
 }
-& $python (Join-Path $repo "scripts\repo_checks.py") --history *> (Join-Path $reportDir "history.txt")
-if ($LASTEXITCODE -ne 0) {
+$historyExit = Invoke-PrivatePython @((Join-Path $repo "scripts\repo_checks.py"), "--history") "history"
+if ($historyExit -ne 0) {
     Write-Status "HISTORY AUDIT" "FAIL / REVIEW NEEDED (see private report)"
 } else {
     Write-Status "HISTORY AUDIT" "PASS for all refs in this local clone"
 }
 if ($CommittedPlatformContract -ne "") {
     if (-not (Test-Path -LiteralPath $CommittedPlatformContract -PathType Leaf)) { throw "Committed Platform contract path is unavailable." }
-    & $python -I (Join-Path $repo "scripts\client_interface_contract.py") compare --ignore-descriptions $CommittedPlatformContract (Join-Path $repo "src\nature_worker\contracts\client-interface-v1.openapi.json") *> (Join-Path $reportDir "contract.txt")
-    if ($LASTEXITCODE -eq 0) {
+    $contractExit = Invoke-PrivatePython @("-I", (Join-Path $repo "scripts\client_interface_contract.py"), "compare", "--ignore-descriptions", $CommittedPlatformContract, (Join-Path $repo "src\nature_worker\contracts\client-interface-v1.openapi.json")) "contract"
+    if ($contractExit -eq 0) {
         Write-Status "CONTRACT COMPARE" "PASS (authoritative committed Platform contract)"
     } else {
         Write-Status "CONTRACT COMPARE" "FAIL / DIFFERENCE (private report only)"

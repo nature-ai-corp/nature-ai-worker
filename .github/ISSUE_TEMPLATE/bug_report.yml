@@ -1,0 +1,51 @@
+name: Bug report
+description: Report a reproducible problem with Nature AI Worker
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please never include API keys, passwords, private URLs, customer data, or private NATURE AI Platform information. Security vulnerabilities must be reported privately following SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Worker version
+      placeholder: "v0.1.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - Linux / WSL
+        - macOS
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Model provider (no API keys)
+      placeholder: "Ollama, OpenAI, Anthropic, Gemini, DeepSeek, OpenAI-compatible"
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide a minimal example using synthetic, non-sensitive data.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true

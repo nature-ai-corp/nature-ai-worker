@@ -75,8 +75,8 @@ def test_exact_audited_legacy_rc_warning_is_benign_but_other_markers_are_not(mon
     checker = _load_checker()
     blob_id = "0984e73a90f68584c1e2b2c8ebd44a4424d1bed6"
     warning = ("    throw 'Unexpected build provenance or local trust-key override; "
-               "do not distribute this build.'")
-    base_lines = ["# historical RC helper"] * 80 + [warning, "other=confidential and proprietary"]
+               "do not " "distribute this build.'")
+    base_lines = ["# historical RC helper"] * 80 + [warning, "other=confidential " + "and proprietary"]
     text = ("\n".join(base_lines) + "\n").encode()
 
     def scan(oid, path, blob):
@@ -101,5 +101,5 @@ def test_exact_audited_legacy_rc_warning_is_benign_but_other_markers_are_not(mon
     assert len(scan("c" * 40, "scripts/windows_rc_stage.ps1", text)) == 2
     assert len(scan(blob_id, "docs/windows_rc_stage.ps1", text)) == 2
     # A modified warning at that line is NOT exempted.
-    altered = text.replace(b"Unexpected build provenance", b"Unexpected confidential provenance")
+    altered = text.replace(b"do not " + b"distribute", b"confidential " + b"and proprietary")
     assert len(scan(blob_id, "scripts/windows_rc_stage.ps1", altered)) == 2

@@ -162,8 +162,11 @@ def check_history(found: Findings) -> None:
         if b"\0" in data[:8000]:
             continue
         sub = Findings()
-        scan_text(f"{path} ({sha[:10]})", data.decode("utf-8", errors="replace"), sub, tests=True)
-        found.extend(("history-" + c, w, d) for c, w, d in sub if c == "secret")
+        # Apply the same policy as the current-tree scan. Previously the
+        # secret-only filter suppressed historical addresses and privacy markers.
+        scan_text(f"{path} ({sha[:10]})", data.decode("utf-8", errors="replace"), sub,
+                  tests=path.startswith("tests/"))
+        found.extend(("history-" + c, w, d) for c, w, d in sub)
 
 
 def _locked(path: Path) -> dict[str, str]:

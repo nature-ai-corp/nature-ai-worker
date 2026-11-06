@@ -19,6 +19,8 @@
 
 **Private / must never be copied to public releases:** NATURE AI Platform server/backend code, proprietary orchestration, internal agent prompts and business knowledge, Validator/Coach private implementation, deployment configuration, credentials/API keys, release-signing private keys or passphrases, actual enterprise/user records, internal log/transcript contents, production addresses/hostnames or private network details, proprietary commercial/OEM agreements, internal test reports containing sensitive details. Keep the separate private Platform repository private.
 
+**Public Worker vs private editions:** The current open-source Worker contains Standalone and an authorized Platform Client (S–C) mode in one repository. A separate proprietary/internal Worker distribution is a **deferred product plan**, not part of v0.1.1, and should not be implied to exist as a shipped package. If it is implemented later, its proprietary code, configuration, build products and licenses must live in separately controlled private repositories/pipelines and **never** be included in the public source or Windows installer. Do not confuse a private **release candidate** of the public Worker with a proprietary **private edition**: the former is only a testing stage for publicly licensable source.
+
 **Separate categories of files and artifact handling:**
 
 | Material | Destination / treatment |
@@ -33,7 +35,7 @@
 
 - [ ] Determine scope of visibility change: only the reviewed Worker repository; **never** make NATURE AI Platform/Validator/Coach repositories public as a side effect.
 - [ ] Review the exact Git **tag commit and all history reachable from the public refs**, not just current files. Run `python scripts/repo_checks.py --history` in a full clean clone, then manually review findings and the candidate release archive. Verify historical rewrite/backup refs or unpublished sensitive commits are not pushed.
-- [ ] Explicitly verify that the public Client Interface contract contains only the owner's approved v1.3 interface material (no live tenant information, credentials or Platform Server implementation).
+- [ ] Explicitly verify that the public Client Interface contract contains only the owner's approved v1.3 interface material (no live tenant information, credentials or Platform Server implementation). Remote snapshot: 23 paths / 28 operations / 40 schemas, no OpenAPI `servers` field, no matched private network/tailnet host or common private-key/token prefixes in the contract text; **does not replace** source-to-source comparison.
 - [ ] Inspect public release notes, `NOTICE`, support links, installer metadata, bundled license text, `release.json`, `build-info.json` (if distributed), and installer `payload.tar` contents for disclosures. **Do not** blindly upload `dist/`, private test reports or logs.
 - [ ] Check artifact lists/archives against a **positive allowlist**, rather than assuming everything in the private checkout is publishable. Ensure no private keys, passwords or confidential test data inside wheels, install payload or build outputs.
 - [ ] Keep the official Ed25519 private key only on the controlled signing computer; only the official **public** verification key may ship.

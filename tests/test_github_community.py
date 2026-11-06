@@ -96,13 +96,11 @@ def test_rate_limit_handled_without_sensitive_response_body(fake_github, ctx):
 
 
 def test_no_repo_override_or_remote_execution(fake_github, ctx):
-    fake_github.responses = [response([])]
-    execute(ctx, "github_issues",
-            {"mode": "list", "repository": "nature-ai-corp/private-platform",
-             "url": "http://127.0.0.1:8000/admin", "token": "SECRET"})
-    url, _ = fake_github.urls[0]
-    assert url.startswith("https://api.github.com/repos/nature-ai-corp/nature-ai-worker/")
-    assert "private-platform" not in url and "SECRET" not in url
+    with pytest.raises(ToolError, match="Unexpected"):
+        execute(ctx, "github_issues",
+                {"mode": "list", "repository": "nature-ai-corp/private-platform",
+                 "url": "http://127.0.0.1:8000/admin", "token": "SECRET"})
+    assert fake_github.urls == []
 
 
 def test_no_network_error_leakage(fake_github, ctx):

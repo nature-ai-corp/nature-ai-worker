@@ -13,6 +13,34 @@
 - The **private-candidate** installer is **not** an official `v0.1.1` artifact: it was built before the version-matching Git tag existed. Do not publish it merely by renaming it.
 - Inno Setup 6.7.3 currently reports `Non-commercial use only`. If the owner plans commercial installer distribution, clarify installer-tool licensing before that use. Separate third-party notice review is recorded without changing Apache-2.0.
 
+## Public / private boundary — mandatory before publication
+
+**Public/open source:** `nature-ai-worker` repository source authorized for release, Standalone runtime/UI, general Worker tools, documented Platform Client **client-side** implementation, and the **owner-approved S–C Client Interface v1.3 contract** (`src/nature_worker/contracts/client-interface-v1.openapi.json`). Apache-2.0 applies to code intentionally released here. Do not treat the S–C contract approval as permission to publish Platform Server internals.
+
+**Private / must never be copied to public releases:** NATURE AI Platform server/backend code, proprietary orchestration, internal agent prompts and business knowledge, Validator/Coach private implementation, deployment configuration, credentials/API keys, release-signing private keys or passphrases, actual enterprise/user records, internal log/transcript contents, production addresses/hostnames or private network details, proprietary commercial/OEM agreements, internal test reports containing sensitive details. Keep the separate private Platform repository private.
+
+**Separate categories of files and artifact handling:**
+
+| Material | Destination / treatment |
+| --- | --- |
+| Reviewed Worker source, public README, LICENSE, NOTICE, applicable client interface contract, public user release notes | Public open-source repo / official release where approved |
+| Signed public release bundles, final installer, public SHA256 checksums | GitHub Release **only after** source-tag-signature verification and explicit authorization |
+| Internal RC installers and acceptance kits (especially broken-upgrade fixtures), raw Windows logs, test user backup folders, internal validation narratives | Private test storage; do **not** attach to public Release |
+| Private key PEM, passphrase, API keys, `.env`, enterprise config and data | Controlled local/private storage only; **never** git or release assets |
+| Platform Server, internal business rules, server APIs not covered by explicit public contract approval | Private Platform repository only |
+
+**Pre-publication gates (must all pass and be recorded):**
+
+- [ ] Determine scope of visibility change: only the reviewed Worker repository; **never** make NATURE AI Platform/Validator/Coach repositories public as a side effect.
+- [ ] Review the exact Git **tag commit and all history reachable from the public refs**, not just current files. Run `python scripts/repo_checks.py --history` in a full clean clone, then manually review findings and the candidate release archive. Verify historical rewrite/backup refs or unpublished sensitive commits are not pushed.
+- [ ] Explicitly verify that the public Client Interface contract contains only the owner's approved v1.3 interface material (no live tenant information, credentials or Platform Server implementation).
+- [ ] Inspect public release notes, `NOTICE`, support links, installer metadata, bundled license text, `release.json`, `build-info.json` (if distributed), and installer `payload.tar` contents for disclosures. **Do not** blindly upload `dist/`, private test reports or logs.
+- [ ] Check artifact lists/archives against a **positive allowlist**, rather than assuming everything in the private checkout is publishable. Ensure no private keys, passwords or confidential test data inside wheels, install payload or build outputs.
+- [ ] Keep the official Ed25519 private key only on the controlled signing computer; only the official **public** verification key may ship.
+- [ ] Confirm Standalone and S–C modes do not interchange stored data, sessions, settings, credentials or logs, and that no in-place S–C to Standalone conversion is offered.
+- [ ] Distinguish product data licensing: public Worker code is Apache-2.0; the enterprise Platform Server, nonpublic OEM services/components and enterprise data are **not** put under Apache-2.0 merely by connecting them through an approved interface.
+- [ ] Obtain separate, explicit owner approval for public repo visibility and publication, after reviewing the above evidence. Publishing a GitHub Release on a **private** repository does not make it publicly downloadable.
+
 ## Release preparation
 
 1. Confirm `docs/RELEASE_NOTES_v0.1.1.md` is the finished public-facing note, with no claims for unexecuted model scenarios. Keep internal checklists separate from user release text.

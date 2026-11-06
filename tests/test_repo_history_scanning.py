@@ -46,6 +46,8 @@ def test_history_scans_removed_private_addresses_hosts_and_confidential_markers(
     }
     assert any("tailnet host name" in detail for _, _, detail in findings)
     assert any("private/tailnet address" in detail for _, _, detail in findings)
+    assert all("10.18.27.36" not in detail and "synthetic.example.ts.net" not in detail
+               for _, _, detail in findings)
 
 
 def test_history_respects_test_fixture_address_exception_but_flags_confidential(monkeypatch):

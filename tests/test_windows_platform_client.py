@@ -24,7 +24,7 @@ from nature_worker.platform_client.windows_setup import ACCOUNT, Setup, SetupErr
 from nature_worker.windows_isolation import evaluate_windows_isolation
 from nature_worker.windows_security import (
     ADMINISTRATORS, SYSTEM, TRUSTED_INSTALLER, Ace, Acl, Token, admin_only_problems, parent_problems,
-    private_problems, service_sid,
+    private_problems, service_sid, system_tool,
 )
 
 SVC = service_sid("NatureWorkerPlatformClient")
@@ -945,6 +945,34 @@ def test_native_token_and_acl_reads(tmp_path):
     acl = read_acl(folder)
     assert acl.protected and acl.grantees() == {token.user, SYSTEM, ADMINISTRATORS}
     assert private_problems(acl, token.user) == [] or acl.owner not in (SYSTEM, ADMINISTRATORS)
+
+
+def test_current_user_sid_runs_the_system_whoami_by_absolute_path(monkeypatch):
+    # Git for Windows puts its own coreutils whoami on PATH; a bare "whoami" ran it and startup
+    # refused to secure the data directory ("whoami: extra operand '/user'").
+    from nature_worker import config
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout='"host\\user","S-1-5-21-1-2-3-1001"\n')
+    monkeypatch.setattr(config.subprocess, "run", run)
+    assert config.current_user_sid() == "S-1-5-21-1-2-3-1001"
+    assert calls[0][0] == system_tool("whoami.exe")
+    assert PureWindowsPath(calls[0][0]).is_absolute()
+
+
+@windows_only
+@pytest.mark.parametrize("keep_system_path", [True, False], ids=["decoy-first", "no-system32"])
+def test_current_user_sid_ignores_whoami_on_path(tmp_path, monkeypatch, keep_system_path):
+    from nature_worker.config import current_user_sid
+    from nature_worker.windows_security import current_token
+    decoy = tmp_path / "decoy"
+    decoy.mkdir()
+    shutil.copy(system_tool("hostname.exe"), decoy / "whoami.exe")  # prints no SID, rejects /user
+    path = str(decoy) + (os.pathsep + os.environ["PATH"] if keep_system_path else "")
+    monkeypatch.setenv("PATH", path)
+    assert current_user_sid() == current_token().user
 
 
 @windows_only

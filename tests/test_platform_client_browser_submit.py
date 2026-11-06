@@ -6,6 +6,7 @@ Never talks to the customer's live Platform or installed Windows service.
 """
 import json
 import os
+import sys
 from pathlib import Path
 import threading
 import time
@@ -180,3 +181,47 @@ def test_different_task_while_first_waits_is_intentional_new_work(isolated_brows
     assert len(fake.conversations) == 2
     assert len(fake.tasks) == 2
     assert len(app.state.submissions) == 2
+
+
+@pytest.fixture
+def slow_templates(monkeypatch):
+    """The Platform answers the template list late, as on a busy machine or network."""
+    original = FakePlatform.handle
+
+    def handle(self, req):
+        if req.method == "GET" and req.url.path == "/api/v1/task-templates":
+            time.sleep(0.3)
+        return original(self, req)
+    monkeypatch.setattr(FakePlatform, "handle", handle)
+
+
+def test_returning_to_new_task_never_offers_stale_templates(slow_templates, isolated_browser):
+    # CI regression (PR #42): on a second visit the previous visit's cards stayed clickable
+    # until the reload finished; the reload then closed the form the user had just opened.
+    fake, app, b = isolated_browser
+    b.wait("document.querySelector('#platform').textContent.includes('Client Interface')")
+    b.eval("document.querySelector('#login-email').value = " + json.dumps(USER["email"]))
+    b.eval("document.querySelector('#login-password').value = " + json.dumps(fake.password))
+    b.click('#login-form button[type="submit"]')
+    b.wait("!document.querySelector('#nav').hidden")
+    b.eval("location.hash = '#/new'")
+    b.click("#template-list .card")
+    b.wait("!document.querySelector('#template-form').hidden")
+    b.eval("location.hash = '#/'")
+    b.wait("document.querySelector('#view-new').hidden")
+    # Navigate and look in the same JavaScript turn: no stale card may be offered while loading.
+    assert b.eval("""(() => { location.hash = '#/new'; window.dispatchEvent(new HashChangeEvent('hashchange'));
+        return document.querySelector('#template-list .card') === null; })()""")
+    b.click("#template-list .card")
+    time.sleep(1.0)  # longer than the late template answer: nothing may close the form afterwards
+    assert b.eval("!document.querySelector('#template-form').hidden")
+
+
+def test_browser_start_failure_reports_the_browser_output(tmp_path):
+    # Python rejects Chrome's options and exits at once: the error must say so instead of a bare
+    # "Chrome did not start" after a timeout.
+    with pytest.raises(AssertionError) as failure:
+        Browser(sys.executable, "about:blank")
+    message = str(failure.value)
+    assert "exited with code" in message
+    assert "--headless=new" in message or "option" in message.lower()

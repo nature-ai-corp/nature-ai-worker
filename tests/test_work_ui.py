@@ -7,6 +7,7 @@ how real records are presented, not what a real model would do.
 """
 
 import json
+import os
 
 import httpx
 import pytest
@@ -182,12 +183,15 @@ def test_returning_refresh_restart_and_interrupted_work(app, fake_model):
 def test_model_and_file_text_is_never_rendered_as_html(app, fake_model):
     b = app["browser"]
     evil = '<img src=x onerror="window.pwned=1">'
-    fake_model.queue(openai_tool_call(("write_file", {"path": "x<b>.md", "content": evil})), openai_text(evil))
+    # Windows forbids < and > in file names. An entity-encoded name is legal there and would
+    # read "x<b>.md" if the page rendered it as HTML, so it must appear literally.
+    name = "x&lt;b&gt;.md" if os.name == "nt" else "x<b>.md"
+    fake_model.queue(openai_tool_call(("write_file", {"path": name, "content": evil})), openai_text(evil))
     _start_work(b, evil)
     b.wait("document.querySelector('#work-status').textContent === 'Finished'", timeout=20)
     assert b.eval("document.querySelectorAll('#view-work img, #work-nav img').length") == 0
     assert b.eval("window.pwned === undefined") is True
-    assert evil in b.text("#work-update") and "x<b>.md" in b.text("#work-results")
+    assert evil in b.text("#work-update") and name in b.text("#work-results")
 
 
 def test_accessibility_basics_and_phone_layout(app, fake_model):

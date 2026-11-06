@@ -196,8 +196,8 @@ class E2E:
     def base(self) -> str:
         return f"http://127.0.0.1:{self.port}"
 
-    def api(self, method: str, path: str, **kwargs) -> httpx.Response:
-        return httpx.request(method, self.base + path, timeout=120, trust_env=False, **kwargs)
+    def api(self, method: str, path: str, timeout: float = 120, **kwargs) -> httpx.Response:
+        return httpx.request(method, self.base + path, timeout=timeout, trust_env=False, **kwargs)
 
     def stop_worker(self) -> None:
         if self.worker is None or self.worker.poll() is not None:
@@ -393,7 +393,9 @@ class E2E:
         reply: dict = {}
 
         def send():
-            reply["r"] = self.api("POST", f"/api/conversations/{conv}/messages", json={"text": text})
+            # Held by the model until the upgrader asks for a stop, which comes only after it has staged
+            # the new version (minutes on Windows): wait as long as the model's own gate deadline.
+            reply["r"] = self.api("POST", f"/api/conversations/{conv}/messages", json={"text": text}, timeout=600)
             reply["at"] = time.monotonic()
         reply["thread"] = threading.Thread(target=send)
         reply["thread"].start()

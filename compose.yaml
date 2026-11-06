@@ -1,7 +1,7 @@
 services:
   worker:
     build: .
-    image: nature-ai-worker:0.1.1
+    image: nature-ai-worker:0.1.2
     # Container user (default 1000:1000). To match your own user, run
     # `NATURE_WORKER_UID=$(id -u) NATURE_WORKER_GID=$(id -g) docker compose up -d`
     # or set both in .env. (Bash's UID is read-only, so it cannot be used here.)

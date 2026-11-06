@@ -327,7 +327,7 @@ The General Agent can help maintainers of **any GitHub repository** look after t
 
 Tokens are stored encrypted with the Worker's other credentials. They are sent only to `api.github.com`, never returned by the Worker's API, and never included in model requests, conversation history or logs. GitHub text is treated as **untrusted data**, never as instructions or approval. These tools exist only in Standalone; the Platform Client does not load them or the Standalone credentials.
 
-This capability is **not included in the published v0.1.1 installer**. Any public release is a separate verified process.
+This capability is planned for **v0.1.2**, which has **not been released yet**; the published v0.1.1 installer does not include it. Any public release is a separate verified process.
 
 ## Community and support
 

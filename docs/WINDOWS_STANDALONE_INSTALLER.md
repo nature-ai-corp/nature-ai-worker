@@ -182,28 +182,39 @@ driver `scripts/windows_standalone_acceptance.py` and numbered steps.
 
 ## Private release-candidate staging on the controlled Windows signing computer
 
-Use `scripts/windows_rc_stage.ps1` to stage the current Windows-first RC from committed
-source using the already-registered **official private signing key**. This is an
-**internal test build**, not a GitHub Release: the current source reports version
-`0.1.1`, and the existing `v0.1.0` tag belongs to an earlier commit. No
-official `v0.1.1` tag or GitHub Release has been created. Signing the manifest
-does **not** substitute for release provenance and publication checks.
+Two helpers stage signed Windows builds with the **official private signing key**, which stays on
+the signing computer. Neither tags, pushes, uploads nor publishes anything, and neither assumes a
+version: the version (and, for a candidate, the commit) is given explicitly and must match the
+committed source, the release notes and the signed manifest. Every check runs before the
+passphrase is requested.
 
-Prerequisites: Windows, Git, Python 3.13 with the repository's pinned dependencies,
-and a clean checkout of `release/v0.1.0-rc-windows-first`. Build or install
-Inno Setup 6 to produce an EXE; without ISCC, the helper only stages the
-installer files. Run from PowerShell on the **signing computer**, not in CI:
+- `scripts/windows_rc_stage.ps1 -Version X.Y.Z -Commit <full sha> [-Label rc1]` stages a **private
+  release candidate** from an exact, untagged commit checked out in detached HEAD mode. It refuses
+  if the official `vX.Y.Z` tag already exists. The committed `docs/RELEASE_NOTES_vX.Y.Z.md` must
+  be final text; the "private release candidate" banner is added only to the copy signed into the
+  candidate, so the same commit can later be tagged unchanged. `release_bundle.py verify` must
+  confirm the signature, the official key and the repository, and must report the build as **not
+  an official release** (no tag). The script writes `rc-evidence.json` with the commit, manifest
+  SHA-256 and installer SHA-256.
+- `scripts/windows_official_release_stage.ps1 -Version X.Y.Z` builds from the exact `vX.Y.Z` tag
+  (detached HEAD at the tag) and requires a fully verified official release before compiling.
+
+Prerequisites: Windows, Git with the full history, Python 3.13 with the repository's pinned
+dependencies, and Inno Setup 6 to produce the EXE (without ISCC only the installer files are
+staged). Run from PowerShell on the **signing computer**, not in CI:
 
 ```powershell
-git switch release/v0.1.0-rc-windows-first
-git pull --ff-only
+git fetch origin
+git checkout --detach <commit>
 py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.lock -r requirements-dev.lock
 .\.venv\Scripts\python.exe -m pip install --no-deps .
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows_rc_stage.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows_rc_stage.ps1 -Version X.Y.Z -Commit <commit>
 ```
 
-The default private staging folder for this 0.1.1 candidate is `dist/windows-rc-stage-0.1.1`, intentionally separate from the already-built 0.1.0 Windows installer. On the Testing Computer, use the 0.1.1 installer to **upgrade** the previously installed 0.1.0 Standalone installation and verify that task history, model configuration, workspace and downloads remain intact. Do not uninstall 0.1.0 before upgrade testing.
+The candidate is staged in `dist\windows-rc-X.Y.Z-rc1` (official builds: `dist\windows-tagged-official-vX.Y.Z`);
+an existing folder is never overwritten. Test upgrades from the previous release on a disposable
+Windows account before any publication.
 
 The helper verifies the private key's public ID is `64ecfc2da2ed12e9`,
 prompts without echoing the passphrase or putting it in shell history, stages

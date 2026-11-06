@@ -2,7 +2,7 @@
 
 GitHub Community Agent is a **prebuilt professional profile** in the open-source Nature AI Worker Standalone edition. It shares Nature AI Worker's ordinary AI runtime, work history, model configuration, tools and human approval controls. You do **not** have to build an agent, workflow or prompt yourself.
 
-> Status: This feature is being developed in PR #39. It is **not included in the published v0.1.1 Windows installer**.
+> Status: Merged in #39 and planned for **v0.1.2**, which has **not been released yet**. The published v0.1.1 Windows installer does not include it.
 
 ## Getting started
 

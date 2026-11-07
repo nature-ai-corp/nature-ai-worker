@@ -2,8 +2,34 @@
 
 **An open-source project maintained by [NATURE AI CORP](https://github.com/nature-ai-corp).**
 
-**A self-hosted AI agent that works on the files in a folder on your computer.**
-Connect the model you already use, describe a task in plain language, and approve anything risky before it happens.
+## Enterprise AI System Client — the primary purpose
+
+**Nature AI Worker is an open-source desktop client for enterprise AI systems.** Its primary purpose is to give people a practical interface to AI systems and platforms through a standardized **Server–Client (S–C) interface** — rather than to build another competing standalone agent.
+
+The client is intended to work with **compatible, explicitly integrated AI systems**. In Platform Client mode, the enterprise system remains authoritative for identity, permissions, AI agents, tasks, execution, approvals, and results. The Worker provides the user-facing experience; it does not replace the enterprise server or bypass its governance.
+
+### Two ways to experience Nature AI Worker
+
+| Mode | Purpose | Where the work is governed |
+|---|---|---|
+| **AI System / Platform Client (primary)** | Connect to a supported enterprise AI system; access its tasks, agent activity, approvals, and results through the S–C interface. | The connected enterprise AI system |
+| **Standalone (lightweight introduction)** | Explore the Worker interface and basic AI interactions with a local model or cloud AI API, without an enterprise system. | The local standalone app |
+
+**Development priority: Enterprise AI System Client first.** Standalone is retained as a simple hands-on introduction, not an attempt to compete feature-for-feature with general-purpose AI agents.
+
+**Compatibility is not universal:** an enterprise AI system must implement or support the relevant S–C contracts and authentication. Integration with NATURE AI Platform is the reference implementation; support for an arbitrary third-party system should not be assumed.
+
+> **Release scope matters:** The published **v0.1.1 Windows installer** documented below is the **Standalone release**. Enterprise Platform Client work is on development branches and must be independently verified and packaged before it can be described as available in an official release. The installer link below does **not** imply that the v0.1.1 installer connects to enterprise AI systems.
+
+### Why an enterprise AI system client?
+
+- **A user-facing desktop entry point** for supported enterprise AI systems, with Windows as the primary target and Linux development/testing.
+- **A shared S–C contract** for task and agent interaction instead of a separate proprietary desktop-only backend.
+- **Server-owned security and operations:** the enterprise system, not the desktop UI, enforces authentication, authorization, task lifecycle, and approval decisions.
+- **Clear work visibility:** distinguish the task lifecycle, current agent execution, user decisions, and results.
+- **Separated modes:** Standalone and enterprise client data, credentials, sessions, caches, and work history must not cross mode boundaries.
+
+
 
 [![CI](https://github.com/nature-ai-corp/nature-ai-worker/actions/workflows/ci.yml/badge.svg)](https://github.com/nature-ai-corp/nature-ai-worker/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/nature-ai-corp/nature-ai-worker)](https://github.com/nature-ai-corp/nature-ai-worker/releases/tag/v0.1.1)
@@ -13,7 +39,7 @@ Connect the model you already use, describe a task in plain language, and approv
 
 <sub>The real web UI. This screenshot was taken during automated UI testing with a scripted test model, not a real AI model; see [Verification status](#verification-status) for real-model results. More: [My Work](docs/screenshots/10-my-work.png), [approval request](docs/screenshots/12-work-approval.png), [New Work templates](docs/screenshots/13-new-work-templates.png).</sub>
 
-## Highlights
+## Standalone highlights (published v0.1.1)
 
 - **One built-in General Agent.** No agents, workflows or code to set up. It reads, searches and writes files, summarizes CSV/TSV/JSON tables, does exact arithmetic, and can fetch web pages if you turn that on.
 - **You stay in control.** Changing or deleting one of your files and fetching a web page always wait for your approval. The agent may revise only the files it created itself in the same conversation, and only while they are exactly as it left them. This is enforced where tools run, not just requested in the prompt.
@@ -22,13 +48,13 @@ Connect the model you already use, describe a task in plain language, and approv
 - **Small and local.** One Python process, SQLite, and a plain web UI. API keys are encrypted at rest and only sent to the endpoint you configured.
 - **Apache-2.0 licensed.**
 
-## Download — Windows v0.1.1
+## Download — Standalone Windows v0.1.1
 
 **Windows 10/11 x64:** [Download the official installer](https://github.com/nature-ai-corp/nature-ai-worker/releases/download/v0.1.1/NatureAIWorker-Setup-0.1.1.exe) · [SHA256 checksums](https://github.com/nature-ai-corp/nature-ai-worker/releases/download/v0.1.1/SHA256SUMS.txt) · [Release notes](https://github.com/nature-ai-corp/nature-ai-worker/releases/tag/v0.1.1)
 
 The Windows installer includes its own Python runtime and dependencies. No Python, Git, WSL, Docker or administrator privileges are needed. Choose an AI provider or local model in the first-run setup. Check the SHA256 before installation. The app listens locally; do not expose it directly to the network.
 
-## Quick start — source installation
+## Standalone quick start — source installation
 
 Requires Python 3.11–3.14 and a model that supports tool calling (for example, a tool-capable model in Ollama). On Ubuntu or WSL, install the venv package first: `sudo apt install python3-venv` (see [Ubuntu and WSL prerequisites](#ubuntu-and-wsl-prerequisites)).
 
@@ -124,7 +150,7 @@ The port is published on `127.0.0.1` only, so other machines cannot reach it. To
 
 ---
 
-## First-run setup
+## Standalone first-run setup
 
 The first time you open the app, a setup dialog asks for:
 
@@ -155,7 +181,7 @@ You can change these later under **Settings**. Settings also includes:
 
 ---
 
-## Using it
+## Using Standalone mode
 
 1. Put the files you want to work with in the workspace folder. You can also use **Workspace files → Upload file**.
 2. Click **+ New Work**, optionally choose a **Template**, and describe the task. A template only fills the box with starting instructions that you can edit; it does not give the agent any extra abilities, and approvals still apply. If you have already typed something, switching templates keeps your text and asks whether to insert or replace. Built-in templates: General Work, Research & Summary, Data Analysis, Document & Report, File Organization. They are defined in `src/nature_worker/work_templates.json` (set `"enabled": false` to hide one). Examples of tasks:

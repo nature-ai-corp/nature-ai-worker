@@ -41,7 +41,9 @@ if ($sourceVersion.package -ne $sourceVersion.project) {
 Write-Status "VERSION" $sourceVersion.package
 $commit = (& git -C $repo rev-parse HEAD).Trim()
 Write-Status "COMMIT" $commit
-$branch = (& git -C $repo branch --show-current).Trim()
+# Empty when HEAD is detached, as the release procedure requires: report it, never call .Trim() on $null.
+$branch = "$(& git -C $repo branch --show-current)".Trim()  # [string]$null stays $null in PowerShell 5.1
+if (-not $branch) { $branch = "(detached HEAD)" }
 Write-Status "BRANCH" $branch
 $dirty = @(& git -C $repo status --porcelain)
 if ($dirty.Count -gt 0) { Write-Status "WORKTREE" "FAIL (uncommitted changes)"; throw "Stop: repository is not clean." }

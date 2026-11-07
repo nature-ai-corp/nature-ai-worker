@@ -47,8 +47,9 @@ $notes = Get-NotesPath $repo $Version
 if (-not (Test-Path -LiteralPath $KeyPath -PathType Leaf)) { throw "Signing key not found: $KeyPath" }
 Write-Host "Verified immutable release source: tag=$tag commit=$commit"
 
-Read-PassphraseIntoEnvironment
 try {
+    # Inside try: a cancelled or failed prompt still clears the variable in finally.
+    Read-PassphraseIntoEnvironment
     & $Python (Join-Path $repo 'scripts\check_release_signing_key.py') $KeyPath $OfficialKeyId
     if ($LASTEXITCODE -ne 0) { throw 'Signing-key verification failed; nothing was staged.' }
     Write-Host "Staging official-tag candidate from commit $commit"

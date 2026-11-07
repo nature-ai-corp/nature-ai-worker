@@ -130,6 +130,7 @@ def release_repo(tmp_path):
     (repo / "pyproject.toml").write_text('[project]\nname = "x"\nversion = "1.2.3"\n')
     (repo / "docs").mkdir()
     (repo / "docs" / "RELEASE_NOTES_v1.2.3.md").write_text("# Nature AI Worker v1.2.3\n\nFinal notes.\n")
+    (repo / ".gitignore").write_text(".venv/\ndist/\n")  # as in the real repository
     _git(repo, "init", "-q")
     _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "add", ".")
     _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-q", "-m", "release")
@@ -138,11 +139,11 @@ def release_repo(tmp_path):
     return repo, head, tmp_path
 
 
-def _run(repo, script, *args):
+def _run(repo, script, *args, key=None, env=None):
     proc = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
                            str(repo / "scripts" / script), *args, "-Python", sys.executable,
-                           "-KeyPath", str(repo.parent / "absent-key.pem")],
-                          capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
+                           "-KeyPath", str(key or repo.parent / "absent-key.pem")],
+                          capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL, env=env)
     return proc.returncode, proc.stdout + proc.stderr
 
 
@@ -215,3 +216,65 @@ def test_official_script_requires_the_exact_tag(release_repo):
     assert code != 0 and "Signing key not found" in out  # every source check passed
     code, out = _run(repo, "windows_official_release_stage.ps1", "-Version", "1.2.4")
     assert code != 0 and "Missing or mismatched v1.2.4 Git tag" in out
+
+
+# -- detached HEAD and a cancelled signing prompt (found before official RC signing) --------------
+
+def _preflight(repo):
+    proc = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+                           str(repo / "scripts" / "windows_release_preflight.ps1")],
+                          capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+@pytest.fixture
+def preflight_repo(release_repo):
+    """The disposable release repository, detached, with the .venv the preflight requires."""
+    repo, head, tmp_path = release_repo
+    base = getattr(sys, "_base_executable", sys.executable)
+    subprocess.run([base, "-m", "venv", "--without-pip", str(repo / ".venv")], check=True, timeout=300)
+    return repo, head
+
+
+@windows_only
+def test_preflight_supports_the_detached_head_the_procedure_requires(preflight_repo):
+    # It called .Trim() on the empty output of "git branch --show-current" and stopped with
+    # "You cannot call a method on a null-valued expression" in every detached checkout.
+    repo, head = preflight_repo
+    assert _git(repo, "branch", "--show-current") == ""
+    code, out = _preflight(repo)
+    assert "null-valued" not in out, out
+    assert f"COMMIT : {head}" in out and "BRANCH : (detached HEAD)" in out and "WORKTREE : PASS" in out
+    assert "CONTRACT COMPARE : NOT EXECUTED" in out  # it ran to the end
+    assert code == 0, out
+
+
+@windows_only
+def test_preflight_still_refuses_a_dirty_detached_checkout(preflight_repo):
+    repo, _ = preflight_repo
+    (repo / "untracked.txt").write_text("x")
+    code, out = _preflight(repo)
+    assert code != 0 and "WORKTREE : FAIL" in out and "BRANCH : (detached HEAD)" in out
+
+
+@windows_only
+@pytest.mark.parametrize("script", ["windows_rc_stage.ps1", "windows_official_release_stage.ps1"])
+def test_a_cancelled_or_failed_signing_prompt_leaves_no_notes_copy_and_stages_nothing(release_repo, script):
+    # The candidate's notes copy was written before the prompt but removed only in the finally
+    # of the try that followed it: a cancelled prompt left it in %TEMP%. -NonInteractive makes
+    # Read-Host fail exactly where a cancelled prompt would.
+    repo, head, tmp_path = release_repo
+    if script == "windows_official_release_stage.ps1":
+        _git(repo, "tag", "v1.2.3")
+    key = tmp_path / "keys" / "release-key.pem"  # only has to exist: the prompt fails before any use
+    key.parent.mkdir()
+    key.write_text("placeholder, never read")
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    env = {**os.environ, "TEMP": str(temp), "TMP": str(temp)}
+    args = ["-Version", "1.2.3"] + (["-Commit", head] if script == "windows_rc_stage.ps1" else [])
+    code, out = _run(repo, script, *args, key=key, env=env)
+    assert code != 0 and "Read-Host" in out, out  # every check passed; the prompt itself failed
+    assert "Verified candidate source" in out or "Verified immutable release source" in out
+    assert list(temp.glob("nature-worker-*-notes-*.md")) == []
+    assert not (repo / "dist").exists()

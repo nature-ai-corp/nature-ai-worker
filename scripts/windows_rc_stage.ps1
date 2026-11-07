@@ -55,8 +55,9 @@ $banner = "> **PRIVATE RELEASE CANDIDATE $Version-$Label - not an official relea
           "no v$Version tag exists yet. Verify it only as a candidate.`r`n`r`n"
 [IO.File]::WriteAllText($rcNotes, $banner + (Get-Content -LiteralPath $notes -Raw), (New-Object Text.UTF8Encoding $false))
 
-Read-PassphraseIntoEnvironment
 try {
+    # Inside try: a cancelled or failed prompt still removes the notes copy and the variable.
+    Read-PassphraseIntoEnvironment
     & $Python (Join-Path $repo 'scripts\check_release_signing_key.py') $KeyPath $OfficialKeyId
     if ($LASTEXITCODE -ne 0) { throw 'Signing-key verification failed; nothing was staged.' }
     Write-Host "Staging private candidate from commit $head"

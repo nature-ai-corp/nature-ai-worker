@@ -214,3 +214,31 @@ def test_a_run_without_a_junit_report_fails_with_every_case_missing(tmp_path, mo
     summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
     assert summary["privileged_cases"] == {"PASS": 0, "FAIL": 0, "NOT RUN": 0, "MISSING": 29}
     assert any("no JUnit report" in p for p in summary["problems"]) and summary["result"] != "PASS"
+
+
+def _skips_on_windows_unconditionally(func) -> bool:
+    """True if an `if os.name == "nt"` / `sys.platform == "win32"` branch calls pytest.skip directly."""
+    import ast
+    for node in ast.walk(func):
+        if isinstance(node, ast.If) and any(t in ast.unparse(node.test) for t in ("os.name", "sys.platform")):
+            for stmt in node.body:
+                if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call) \
+                        and ast.unparse(stmt.value.func) == "pytest.skip":
+                    return True
+    return False
+
+
+def test_no_required_security_test_skips_windows_without_trying():
+    # test_damaged_or_swapped_files_are_refused[symlink] skipped on every Windows computer, even
+    # elevated with symbolic links available, because it skipped on os.name == "nt" instead of
+    # trying to create the link. Privilege-dependent skips must come from a real attempt
+    # (tests/os_helpers.make_link / try_link), so an elevated run actually runs them.
+    import ast
+    offenders = []
+    for test in runner.REQUIRED:
+        path, name = test.split("::")
+        tree = ast.parse((REPO / path).read_text(encoding="utf-8"))
+        func = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name)
+        if _skips_on_windows_unconditionally(func):
+            offenders.append(test)
+    assert offenders == []

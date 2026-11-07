@@ -13,6 +13,7 @@ from nature_worker.upgrade.release import (
     Manifest, ReleaseError, Version, load_keys, public_key_entry, sign_manifest, stage_bundle,
     trusted_keys, verify_bundle, wheel_requirement,
 )
+from os_helpers import make_link
 from upgrade_fixtures import make_bundle, trusted
 
 KEY = Ed25519PrivateKey.generate()
@@ -87,12 +88,14 @@ def test_damaged_or_swapped_files_are_refused(tmp_path, damage):
     elif damage == "remove":
         wheel.unlink()
     else:
-        if os.name == "nt":
-            pytest.skip("creating symbolic links needs extra privileges on Windows")
+        # A wheel swapped for a link to an identical file outside the bundle. On Windows the link
+        # needs Developer Mode or elevation; make_link skips only when Windows withholds that
+        # privilege (this case once skipped on every Windows computer, elevated or not).
         outside = tmp_path / "outside.whl"
         outside.write_bytes(data)
         wheel.unlink()
-        wheel.symlink_to(outside)
+        make_link(outside, wheel)
+        assert wheel.is_symlink() and wheel.read_bytes() == data  # same bytes: only the link may be refused
     with pytest.raises(ReleaseError):
         verify_bundle(bundle, [trusted(KEY)])
 

@@ -374,6 +374,11 @@ def verify_stage(args) -> int:
         if not (integrity and integrity[0].get("ok") is True):
             report["error"] = "signature_and_integrity: " + (integrity[0]["detail"] if integrity else "not checked")
             code = 1
+        else:
+            # The signed notes' text (the manifest records only their path and hash, now verified),
+            # e.g. for the stage scripts' release-candidate banner check.
+            report["notes_text"] = bundle.joinpath(*manifest["notes"]["path"].split("/")).read_text(
+                encoding="utf-8", errors="replace")
     except (StageError, OSError, ValueError, KeyError, tarfile.TarError) as exc:
         report["error"] = str(exc)
         code = 2

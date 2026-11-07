@@ -53,7 +53,11 @@ def test_candidate_is_untagged_and_must_verify_as_signed_but_not_official():
     assert "[Parameter(Mandatory = $true)][string]$Commit" in text
     assert "The official tag v$Version already exists" in text
     assert "Assert-StagedBuild $StageDir $Version $head $MinUpgradeFrom '' $verified" in text
-    assert "PRIVATE RELEASE CANDIDATE" in text and "$manifest.notes -notmatch 'PRIVATE RELEASE CANDIDATE'" in text
+    # The banner is checked in the verified notes text: the manifest's "notes" is only a path and hash,
+    # so the former check of $manifest.notes could never pass.
+    assert "PRIVATE RELEASE CANDIDATE" in text and "$manifest.notes" not in text
+    assert '$verified.notes_text -cnotmatch "PRIVATE RELEASE CANDIDATE $Version-$Label"' in text
+    assert '$verified.notes_text -notlike "*$head*"' in text
     for required in ("signature_and_integrity", "official_signer", "official_repository"):
         assert f"'{required}'" in text
     assert "'tag_matches_version', 'tag_points_at_commit'" in text
@@ -89,7 +93,10 @@ def test_staged_build_checks_read_no_unpacked_folder():
 
 def test_committed_notes_must_be_final_text():
     common = _text("windows_release_common.ps1")
-    assert "'DRAFT|PRIVATE RC ONLY|NOT PUBLISHED|PRIVATE RELEASE CANDIDATE'" in common
+    # Case-sensitive in PowerShell too (-cmatch), like the Python check below: -match ignores case
+    # and refused the final v0.1.2 notes for the feature name "Draft Replies".
+    assert "-cmatch 'DRAFT|PRIVATE RC ONLY|NOT PUBLISHED|PRIVATE RELEASE CANDIDATE'" in common
+    assert "-match 'DRAFT" not in common
     assert '"docs\\RELEASE_NOTES_v{0}.md" -f $Version' in common
 
 
@@ -175,6 +182,20 @@ def test_candidate_script_refuses_wrong_states(release_repo, change, args, messa
     code, out = _run(repo, "windows_rc_stage.ps1", *args, "-Commit", commit)
     assert code != 0 and message in out, out
     assert "Signing key not found" not in out  # refused before even looking for the key
+
+
+@windows_only
+def test_candidate_script_accepts_ordinary_words_that_contain_a_marker(release_repo):
+    # The final v0.1.2 notes name the starter task "Draft Replies"; only the upper-case banners
+    # (DRAFT, PRIVATE RC ONLY, NOT PUBLISHED, PRIVATE RELEASE CANDIDATE) mark candidate-only text.
+    repo, _, _ = release_repo
+    notes = repo / "docs" / "RELEASE_NOTES_v1.2.3.md"
+    notes.write_text(notes.read_text() + "\nStarters: *Draft Replies*; drafts are not published by default.\n")
+    _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qam", "final wording")
+    commit = _git(repo, "rev-parse", "HEAD")
+    code, out = _run(repo, "windows_rc_stage.ps1", "-Version", "1.2.3", "-Commit", commit)
+    assert code != 0 and "Signing key not found" in out, out  # every source check passed
+    assert "candidate-only wording" not in out
 
 
 @windows_only

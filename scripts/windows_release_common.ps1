@@ -49,7 +49,9 @@ function Assert-CleanDetachedCheckout([string]$Repo, [string]$Commit) {
 function Get-NotesPath([string]$Repo, [string]$Version) {
     $notes = Join-Path $Repo ("docs\RELEASE_NOTES_v{0}.md" -f $Version)
     if (-not (Test-Path -LiteralPath $notes -PathType Leaf)) { throw "Release notes not found: $notes" }
-    if ((Get-Content -LiteralPath $notes -Raw) -match 'DRAFT|PRIVATE RC ONLY|NOT PUBLISHED|PRIVATE RELEASE CANDIDATE') {
+    # Case-sensitive (-cmatch): the markers are upper-case banners. A case-insensitive -match also
+    # refused ordinary prose such as the feature name "Draft Replies" in final release notes.
+    if ((Get-Content -LiteralPath $notes -Raw) -cmatch 'DRAFT|PRIVATE RC ONLY|NOT PUBLISHED|PRIVATE RELEASE CANDIDATE') {
         throw 'The committed release notes contain candidate-only wording; they must be the final text.'
     }
     return $notes

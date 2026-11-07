@@ -11,7 +11,7 @@ explicit: it checks the rights first, runs exactly these tests and nothing else,
 every skip among them as NOT RUN, never as a pass.
 
 What the tests touch: symbolic links and files only inside pytest's own temporary folder (a new
-short folder under %TEMP%, removed afterwards); the native tests only list and read (LocalService's
+short folder such as C:\\nws-xxxx, removed afterwards); the native tests only list and read (LocalService's
 profile, registry hive and Credential Manager folder) and fail if anything tries to delete. No
 service, installation, registry value, network or port is changed or used.
 
@@ -70,6 +70,18 @@ OPTIONAL = {
 }
 
 
+def short_base() -> Path:
+    """A new, empty folder with a short path. The Platform Client profile tests build a copy of a
+    real Windows service profile (deepest file about 145 characters below the base) and refuse to
+    run beyond MAX_PATH, so %TEMP% under a long user name is too deep. Prefer the system drive's
+    root (C:\\nws-xxxx); fall back to %TEMP% if that folder cannot be created."""
+    root = os.environ.get("SystemDrive", "C:") + "\\"
+    try:
+        return Path(tempfile.mkdtemp(prefix="nws-", dir=root))
+    except OSError:
+        return Path(tempfile.mkdtemp(prefix="nws-"))
+
+
 def can_create_symlinks() -> bool:
     with tempfile.TemporaryDirectory(prefix="nw-link-probe-") as tmp:
         target = Path(tmp) / "target"
@@ -118,7 +130,45 @@ def outcomes(junit: Path) -> dict[str, list[tuple[str, str, str]]]:
     return found
 
 
-def evaluate(found: dict[str, list[tuple[str, str, str]]]) -> tuple[bool, list[dict]]:
+_WPC = "tests/test_windows_platform_client.py::"
+# The 29 cases that need symbolic links or elevation, each of which must be reported and PASS.
+# (The same test functions have further cases that run anywhere; they must pass too.)
+PRIVILEGED = (
+    "tests/test_security.py::test_escape_attempts_are_blocked[link_to_secret.txt]",
+    "tests/test_security.py::test_escape_attempts_are_blocked[link_dir/secret.txt]",
+    "tests/test_security.py::test_escape_attempts_are_blocked[link_dir]",
+    "tests/test_security.py::test_writes_outside_workspace_are_blocked[link_dir/evil.txt]",
+    "tests/test_security.py::test_writes_outside_workspace_are_blocked[link_to_secret.txt]",
+    "tests/test_security.py::test_symlinks_inside_workspace_still_work",
+    "tests/test_security.py::test_listing_hides_escaping_symlinks",
+    "tests/test_security.py::test_dangling_symlinks_do_not_break_listing",
+    "tests/test_document_input.py::test_a_document_link_out_of_the_workspace_is_refused",
+    "tests/test_document_writing.py::test_a_worker_file_replaced_by_a_symlink_to_a_user_file_needs_approval",
+    "tests/test_installation_mode.py::test_marker_symlink_is_rejected",
+    "tests/test_platform_crypto.py::test_rejects_symlinked_file",
+    "tests/test_platform_storage.py::test_symlink_root_blocks",
+    "tests/test_release.py::test_damaged_or_swapped_files_are_refused[symlink]",
+    _WPC + "test_remove_service_profile_refuses_a_linked_profile_folder",
+    _WPC + "test_the_observed_windows_profile_is_all_windows_standard",
+    _WPC + "test_the_observed_profile_is_removed_on_request_once_its_hive_is_unloaded",
+    _WPC + "test_a_file_windows_does_not_create_blocks_removal[Documents/notes.txt-files Windows does not create: Documents]",
+    _WPC + "test_a_file_windows_does_not_create_blocks_removal[Desktop/report.pdf-files Windows does not create: Desktop]",
+    _WPC + "test_a_file_windows_does_not_create_blocks_removal[AppData/Local/Temp/nwpc.tmp-files Windows does not create: AppData]",
+    _WPC + "test_a_file_windows_does_not_create_blocks_removal[AppData/Roaming/Vendor/settings.json-files Windows does not create: AppData]",
+    _WPC + "test_a_file_windows_does_not_create_blocks_removal[notes.txt-files Windows does not create: notes.txt]",
+    _WPC + "test_a_link_that_is_not_windows_own_junction_blocks_removal[Documents/My Music-outside]",
+    _WPC + "test_a_link_that_is_not_windows_own_junction_blocks_removal[Documents/My Music-Documents]",
+    _WPC + "test_a_link_that_is_not_windows_own_junction_blocks_removal[Desktop/shortcut-Music]",
+    _WPC + "test_a_kept_profile_never_fails_an_ordinary_uninstall_or_blocks_a_new_installation",
+    _WPC + "test_uninstall_never_follows_links_out_of_the_data_root",
+    _WPC + "test_native_service_profile_inspection_is_read_only",
+    "tests/test_windows_e2e_lifecycle.py::test_native_service_profile_of_a_builtin_account",
+)
+OUTCOME = {"passed": "PASS", "failed": "FAIL", "error": "FAIL", "skipped": "NOT RUN"}
+
+
+def evaluate(found: dict[str, list[tuple[str, str, str]]]) -> tuple[bool, list[dict], list[dict]]:
+    """Per function (every case must pass) and per privileged case (each must be present and PASS)."""
     rows, ok = [], True
     for test, right in {**REQUIRED, **OPTIONAL}.items():
         cases = found.get(test, [])
@@ -135,7 +185,15 @@ def evaluate(found: dict[str, list[tuple[str, str, str]]]) -> tuple[bool, list[d
             ok = False
         rows.append({"test": test, "required": required, "needs": right, "status": status, "cases": len(cases),
                      "details": [f"{n}: {o}{' - ' + m if m else ''}" for n, o, m in cases if o != "passed"]})
-    return ok, rows
+    by_id = {f"{test.split('::')[0]}::{name}": (outcome, message)
+             for test, cases in found.items() for name, outcome, message in cases}
+    privileged = []
+    for case in PRIVILEGED:
+        outcome, message = by_id.get(case, ("missing", "not reported"))
+        status = OUTCOME.get(outcome, "MISSING")
+        ok = ok and status == "PASS"
+        privileged.append({"case": case, "status": status, "message": message})
+    return ok, rows, privileged
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -158,8 +216,8 @@ def main(argv: list[str] | None = None) -> int:
               "Developer Mode, on the dedicated test computer.")
         return 2
     args.out.mkdir(parents=True)
-    # A new folder of its own, removed afterwards (tests keep their trees within MAX_PATH from %TEMP%).
-    base = Path(tempfile.mkdtemp(prefix="nw-sec-"))
+    base = short_base()  # removed afterwards
+    env_info["base_folder"] = str(base)
     junit = args.out / "junit.xml"
     env = {k: v for k, v in os.environ.items() if not k.startswith("NATURE_WORKER_") and not k.endswith("_API_KEY")}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -171,13 +229,19 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         shutil.rmtree(base, ignore_errors=True)
     (args.out / "pytest-output.txt").write_text(proc.stdout + proc.stderr, encoding="utf-8")
-    ok, rows = evaluate(outcomes(junit)) if junit.exists() else (False, [])
+    ok, rows, privileged = evaluate(outcomes(junit) if junit.exists() else {})  # no report: all MISSING
+    counts = {s: sum(1 for p in privileged if p["status"] == s) for s in ("PASS", "FAIL", "NOT RUN", "MISSING")}
     summary = {**env_info, "pytest_exit": proc.returncode, "seconds": round(time.time() - started),
-               "temp_removed": not base.exists(), "result": "PASS" if ok else "INCOMPLETE OR FAILED", "tests": rows}
+               "temp_removed": not base.exists(), "result": "PASS" if ok else "INCOMPLETE OR FAILED",
+               "privileged_cases": counts, "privileged": privileged, "tests": rows}
     (args.out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     lines = [f"Nature AI Worker privileged Windows security tests: {summary['result']}",
              f"commit {commit}{'' if not dirty else ' (WORKING TREE NOT CLEAN)'}; Windows {env_info['windows']}; "
-             f"Python {env_info['python']}; elevated {admin}; Developer Mode {devmode}; symlinks {links}", ""]
+             f"Python {env_info['python']}; elevated {admin}; Developer Mode {devmode}; symlinks {links}", "",
+             f"The {len(PRIVILEGED)} privileged cases: " + ", ".join(f"{n} {s}" for s, n in counts.items()), ""]
+    for i, p in enumerate(privileged, 1):
+        lines.append(f"{i:2}. {p['status']:8} {p['case']}" + (f"  -- {p['message']}" if p["status"] != "PASS" else ""))
+    lines += ["", "Whole test functions (every case, including those that run without privileges):"]
     for row in rows:
         lines.append(f"{row['status']:8} {'required' if row['required'] else 'optional'}  {row['test']} "
                      f"({row['cases']} case{'s' if row['cases'] != 1 else ''}; needs {row['needs']})")

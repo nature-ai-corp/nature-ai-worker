@@ -71,7 +71,10 @@ finally {
 
 $verified = Invoke-StagedPayloadVerification $Python $repo $StageDir
 $manifest = Assert-StagedBuild $StageDir $Version $head $MinUpgradeFrom '' $verified
-if ($manifest.notes -notmatch 'PRIVATE RELEASE CANDIDATE') { throw 'The candidate banner is missing from the signed notes.' }
+# The manifest records only the notes' path and hash; their verified text comes from the payload.
+if ($verified.notes_text -cnotmatch "PRIVATE RELEASE CANDIDATE $Version-$Label" -or $verified.notes_text -notlike "*$head*") {
+    throw 'The candidate banner is missing from the signed notes.'
+}
 
 # Signature, official key and repository must verify; only the tag checks may (and must) fail.
 $report = $verified.verify

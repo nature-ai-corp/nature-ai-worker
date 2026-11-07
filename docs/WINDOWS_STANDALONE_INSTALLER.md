@@ -323,8 +323,40 @@ The 2026-11-06 re-check used a staged v0.1.2 build and the pinned inputs:
    - distribute the code for a non-Microsoft platform;
    - include it in malicious, deceptive or unlawful programs.
 
-   The installer does none of these. Whether that proviso alone satisfies the "require ... end
-   users to agree to terms" sentence is the question for counsel. **Still open.**
+   The installer does none of these, but that does not settle the question. **Still open.**
+
+   **Evidence (2026-11-06):**
+   - `vcruntime140.dll` and `vcruntime140_1.dll` in the pinned runtime are Microsoft-signed
+     (Authenticode status Valid) and unmodified, version 14.44.35211.0 (Visual Studio 2022
+     toolset 14.44).
+   - They are installed app-locally in each version's runtime folder; no VC++ Redistributable
+     package is installed.
+   - The runtime's `python.exe` and `python312.dll` are not signed.
+   - Microsoft's own Visual Studio licence terms and redistribution list were **not** reviewed
+     here.
+
+   **Unresolved questions for counsel** (bundling a runtime is not assumed to permit
+   redistribution):
+   1. **Chain of rights.** The DLLs were redistributed by python-build-standalone (Astral), whose
+      Visual Studio licence made them Distributable Code. Does that licence let downstream
+      distributors such as NATURE AI redistribute them, or does NATURE AI need its own basis,
+      for example its own Visual Studio licence, or shipping Microsoft's VC++ Redistributable
+      package instead?
+   2. **Whose statement is the proviso.** The "complies with this agreement, provided that you
+      do not …" paragraph was written by the PSF for python.org's Windows builds. Does it apply
+      to python-build-standalone's build, which reproduces CPython's `LICENSE.txt` unchanged?
+   3. **End-user agreement.** Does "require distributors and external end users to agree to
+      terms" require an affirmative agreement? Setup's licence page (`LicenseFile`, "I accept")
+      currently shows only Apache-2.0. Or do the installed notices suffice?
+   4. **Minimum terms.** If terms must be presented, what text protects the Distributable Code
+      "at least as much as Microsoft's own requirements"? Must it go into Setup's licence page,
+      and must the Worker's `NOTICE` or `THIRD_PARTY.md` pass it on?
+   5. **Downstream redistributors.** Apache-2.0 lets anyone redistribute the installer. Must
+      NATURE AI bind such distributors to the Microsoft terms, and how?
+   6. **App-local deployment and servicing.** Microsoft documents app-local deployment of these
+      runtime files. Is it within the applicable terms for this product? Who is responsible for
+      shipping Microsoft security updates to them, given that Windows Update does not service
+      app-local copies?
 2. **Inno Setup commercial use.** The Inno Setup License (6.7.3, installed `license.txt`) grants
    use "for any purpose, including commercial applications". Its binding conditions are:
    - binary redistributions must retain the copyright notice and web-site addresses that are in

@@ -176,6 +176,7 @@ def test_a_consistent_stage_verifies_from_its_payload_and_cleans_up(staged):
     assert all(c["ok"] for c in report["checks"])
     assert report["payload_sha256"] == windows_installer.sha256(stage / "payload.tar")
     assert report["manifest"]["source"]["commit"] == COMMIT and report["manifest"]["version"] == "1.2.3"
+    assert report["notes_text"] == "# Nature AI Worker 1.2.3\n\nTest notes.\n"  # the signed notes, verified
     assert _check(report, "signature_and_integrity")["ok"] is True
     assert _check(report, "official_signer")["ok"] is False  # a test key is never official
     assert report["verify_exit"] == 1                      # not an official release
@@ -187,6 +188,7 @@ def test_without_a_trusted_key_the_signature_fails_and_the_folder_is_still_remov
     stage, _, _, work = staged
     code, report = _verify(stage, work)
     assert code == 1 and "signature_and_integrity" in report["error"]
+    assert "notes_text" not in report  # unverified notes are never handed on
     assert report["cleaned_up"] is True and not any(work.iterdir())
 
 
@@ -393,6 +395,7 @@ def test_real_stage_then_verify_end_to_end(tmp_path, key):
     assert all(c["ok"] for c in report["checks"])
     assert report["payload_sha256"] == info["payload_sha256"]
     assert report["manifest"]["source"]["commit"] == info["commit"]
+    assert report["notes_text"] == (REPO / "README.md").read_text(encoding="utf-8")
     assert report["manifest"]["runtime"]["sha256"] == json.loads(
         (REPO / "packaging" / "windows" / "runtime.json").read_text())["sha256"]
     assert len(report["manifest"]["artifacts"]) == 43

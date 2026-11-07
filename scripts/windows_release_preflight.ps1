@@ -7,6 +7,8 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "windows_release_common.ps1")
+$sourceVersion = Get-SourceVersions $repo
 $python = Join-Path $repo ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $python)) { throw "Missing local venv Python. Run from the validated Windows release checkout." }
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -30,10 +32,18 @@ function Invoke-PrivatePython([string[]]$Arguments, [string]$Name) {
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     return $process.ExitCode
 }
-Set-Content -LiteralPath $summary -Value "NATURE AI Worker v0.1.1 private release preflight"
+# The version comes from the source being checked, never from this script.
+Set-Content -LiteralPath $summary -Value "NATURE AI Worker private release preflight"
+if ($sourceVersion.package -ne $sourceVersion.project) {
+    Write-Status "VERSION" "FAIL (__init__.py $($sourceVersion.package), pyproject.toml $($sourceVersion.project))"
+    throw "Stop: package and project versions differ."
+}
+Write-Status "VERSION" $sourceVersion.package
 $commit = (& git -C $repo rev-parse HEAD).Trim()
 Write-Status "COMMIT" $commit
-$branch = (& git -C $repo branch --show-current).Trim()
+# Empty when HEAD is detached, as the release procedure requires: report it, never call .Trim() on $null.
+$branch = "$(& git -C $repo branch --show-current)".Trim()  # [string]$null stays $null in PowerShell 5.1
+if (-not $branch) { $branch = "(detached HEAD)" }
 Write-Status "BRANCH" $branch
 $dirty = @(& git -C $repo status --porcelain)
 if ($dirty.Count -gt 0) { Write-Status "WORKTREE" "FAIL (uncommitted changes)"; throw "Stop: repository is not clean." }

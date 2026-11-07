@@ -158,27 +158,39 @@ def _find_chrome():
 class Browser:
     """Minimal Chrome DevTools Protocol client: load a page and evaluate JavaScript in it."""
 
+    # The first launch on a fresh CI runner can be much slower than later ones.
+    START_TIMEOUT = 45.0
+
     def __init__(self, chrome: str, url: str):
         from websockets.sync.client import connect
 
         self.profile = tempfile.mkdtemp()
+        # Chrome's own output is kept so that a start-up failure explains itself in CI.
+        self.stderr = tempfile.TemporaryFile()
         port = _free_port()
         self.proc = subprocess.Popen(
             [chrome, "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run",
              f"--remote-debugging-port={port}", f"--user-data-dir={self.profile}", url],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        for _ in range(100):
+            stdout=subprocess.DEVNULL, stderr=self.stderr)
+        started = time.monotonic()
+        pages = []
+        # A launcher that hands over to a child process exits 0; only a failure ends the wait early.
+        while not pages and time.monotonic() - started < self.START_TIMEOUT and self.proc.poll() in (None, 0):
             try:
                 pages = [t for t in httpx.get(f"http://127.0.0.1:{port}/json/list", timeout=1).json()
                          if t["type"] == "page"]
-                if pages:
-                    break
             except httpx.HTTPError:
                 pass
-            time.sleep(0.1)
-        else:
+            if not pages:
+                time.sleep(0.1)
+        if not pages:
+            code = self.proc.poll()
+            self.stderr.seek(0)
+            output = self.stderr.read()[-2000:].decode("utf-8", "replace").strip()
             self.close()
-            raise AssertionError("Chrome did not start")
+            state = (f"exited with code {code}" if code
+                     else f"no DevTools page after {self.START_TIMEOUT:.0f} s")
+            raise AssertionError(f"Chrome did not start ({state}). Chrome output:\n{output or '(none)'}")
         self.ws = connect(pages[0]["webSocketDebuggerUrl"], max_size=None)
         self.ids = 0
 
@@ -231,6 +243,7 @@ class Browser:
             self.ws.close()
         self.proc.kill()
         self.proc.wait()
+        self.stderr.close()
         shutil.rmtree(self.profile, ignore_errors=True)
 
 
@@ -241,7 +254,8 @@ def ui(tmp_path, fake_model):
         pytest.skip("Chrome/Chromium not installed")
     port = _free_port()
     (tmp_path / "workspace").mkdir()
-    (tmp_path / "workspace" / "sales.csv").write_text("region,revenue\nNorth,170\n")
+    # Bytes, so the file has the same line endings on Windows as everywhere else.
+    (tmp_path / "workspace" / "sales.csv").write_bytes(b"region,revenue\nNorth,170\n")
     (tmp_path / "workspace" / "report.docx").write_bytes(b"PK\x03\x04")
     proc, base = _start(tmp_path, port)
     configure_body = {"provider": "openai_compatible", "model": "fake", "endpoint": fake_model.url + "/v1",

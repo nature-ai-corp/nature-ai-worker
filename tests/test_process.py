@@ -12,6 +12,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -36,8 +37,13 @@ def _start(tmp_path, port):
         NATURE_WORKER_PORT=str(port),
         PYTHONUNBUFFERED="1",
     )
+    # A thread drains the pipe while the server runs: unread, its buffer (about 4 KB on Windows)
+    # fills and every further log line blocks the whole server.
     proc = subprocess.Popen([sys.executable, "-m", "nature_worker"], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    proc.lines = []
+    proc.reader = threading.Thread(target=lambda: proc.lines.extend(proc.stdout), daemon=True)
+    proc.reader.start()
     base = f"http://127.0.0.1:{port}"
     for _ in range(100):
         try:
@@ -46,13 +52,28 @@ def _start(tmp_path, port):
         except httpx.HTTPError:
             time.sleep(0.1)
     proc.kill()
-    raise AssertionError("server did not start:\n" + proc.stdout.read())
+    proc.wait()
+    raise AssertionError("server did not start:\n" + _output(proc))
+
+
+def _output(proc) -> str:
+    """Everything the server printed. The pipe ends only when every process holding it has exited:
+    on Windows the venv's python.exe is a launcher, and the real server outlives it briefly, still
+    holding the database. Waiting for the launcher alone races the next test step."""
+    proc.reader.join(timeout=15)
+    if proc.reader.is_alive():
+        raise AssertionError("server output did not end 15 s after the server was stopped")
+    proc.stdout.close()
+    return "".join(proc.lines)
 
 
 def _stop(proc):
     proc.send_signal(signal.SIGTERM)
-    out, _ = proc.communicate(timeout=15)
-    return out
+    if not hasattr(proc, "reader"):  # started by the caller with its own stdout pipe
+        out, _ = proc.communicate(timeout=15)
+        return out
+    proc.wait(timeout=15)
+    return _output(proc)
 
 
 def test_history_persists_across_restart(tmp_path, fake_model):

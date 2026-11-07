@@ -202,12 +202,19 @@ $("logout").addEventListener("click", async () => {
 
 let templates = [];
 let chosen = null;
+let templatesLoad = 0;
 
 async function loadTemplates() {
-  templates = await api("/api/templates");
+  const load = ++templatesLoad;
   const list = $("template-list");
-  list.replaceChildren();
+  // Clear the previous visit's cards before waiting for the Platform: a click on a stale card
+  // would open the form, and this load would then close it again under the user.
+  list.replaceChildren(el("p", { class: "muted" }, "Loading templates..."));
   $("template-form").hidden = true;
+  const fresh = await api("/api/templates");
+  if (load !== templatesLoad) return; // A newer visit to New Task owns the list now.
+  templates = fresh;
+  list.replaceChildren();
   if (!templates.length) list.append(el("p", { class: "muted" }, "The Platform has no enabled templates for you."));
   for (const t of templates) {
     list.append(el("div", { class: "card", tabindex: "0", onclick: () => chooseTemplate(t) },

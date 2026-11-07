@@ -2,7 +2,7 @@
 
 `nature-worker-upgrade` upgrades a **managed installation** of Nature AI Worker (Standalone or Platform Client) to a verified release, with the user's explicit authorization, and rolls back if anything fails.
 
-> **Status (2026-10-26).** Standalone upgrades on Linux are implemented and tested with real processes on a disposable installation (12 scenarios, see [Verification](#verification-status)). Standalone on Windows and Platform Client upgrades on Linux are implemented but **not yet exercised on a real installation**. No official release key exists yet ([RELEASES.md](RELEASES.md)), so today only bundles signed by a locally trusted key can be installed. Not production-ready until the open rows in the verification table are closed.
+> **Status (2026-11-06).** Standalone upgrades are implemented and tested with real processes on a disposable installation on Linux and on Windows (12 scenarios each, see [Verification](#verification-status)). Platform Client upgrades are implemented but **not yet exercised on a real installation**. The official release key (`64ecfc2da2ed12e9`) is registered, but no official signed release has been built yet ([RELEASES.md](RELEASES.md)). Not production-ready until the open rows in the verification table are closed.
 
 ## Commands
 
@@ -114,11 +114,12 @@ Every phase is written to `upgrade/state.json` before it starts.
 |---|---|---|
 | Unit tests: release verification, layout, launchers, migrations, drain handshake, engine (every failure point, interruption and recovery path, both rollbacks), CLI authorization, Platform Client toolkit with a recording runner | PASS (Linux) | `tests/test_release.py`, `test_upgrade_engine.py`, `test_upgrade_layout_cli.py`, `test_migrations_maintenance.py` |
 | Real Standalone upgrades on Linux, disposable installation: install over v0.1 data; upgrade while Agent work runs; drain timeout; refusals (tampered, untrusted, altered, downgrade, wrong platform, incompatible path, unauthorized); failed upgrade with automatic rollback; kill during migration plus recover; kill during verification plus recover; user rollback; edition separation | PASS | `python scripts/upgrade_e2e.py --workdir <new dir>` (report written there; CI job `upgrade-e2e`) |
-| Real Standalone upgrades on Windows | PARTIAL evidence; not re-run on the current revision | Local run on Windows 11 (Python 3.11.15) on 2026-10-26 at 10:01: 8 of 12 scenarios passed. Its 4 failures were Windows sharing violations on `state.json`, fixed in `7eb07bb` two minutes later. A later 12/12 run was reported by the maintainer, but its report is not in this repository. CI job `upgrade-e2e` on `windows-2022` runs the same script. |
+| Real Standalone upgrades on Windows | PASS | `scripts/upgrade_e2e.py`, 12/12 scenarios, on Windows 11 (Python 3.13.14) on 2026-11-06 for the trees of `57a9f15` and `9bd594a`; CI job `upgrade-e2e` on `windows-2022` passed on `4fc4b38`. An earlier run (2026-10-26, 8 of 12) failed on `state.json` sharing violations, fixed in `7eb07bb`. |
 | Real Platform Client upgrade on Linux (root, systemd, `nature-pc`) | NOT EXECUTED | requires sudo; see [Manual Platform Client upgrade test](#manual-platform-client-upgrade-test) |
 | Platform Client upgrades on Windows (service, `WindowsPlatformClientToolkit`) | IMPLEMENTED; unit-tested on Linux; NOT EXECUTED on Windows | `tests/test_windows_platform_client.py`; real run: `scripts/platform_client_windows_e2e.py` ([PLATFORM_CLIENT_WINDOWS.md](PLATFORM_CLIENT_WINDOWS.md)) |
 | Updated `platform-client-linux-install.sh` (versioned layout, legacy conversion) | NOT EXECUTED | requires sudo; syntax and fragments checked only |
-| Official release key, signed official releases | NOT DONE | owner decision ([RELEASES.md](RELEASES.md)) |
+| Official release key | DONE | `64ecfc2da2ed12e9` in `src/nature_worker/upgrade/release_keys.json` (2026-11-03, [RELEASES.md](RELEASES.md)) |
+| Signed official releases | NOT DONE | owner decision ([RELEASES.md](RELEASES.md)) |
 
 ## Manual Platform Client upgrade test
 

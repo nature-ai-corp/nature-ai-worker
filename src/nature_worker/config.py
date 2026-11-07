@@ -69,7 +69,9 @@ _BROAD = ("S-1-1-0", "S-1-5-11", "S-1-5-32-545")  # Everyone, Authenticated User
 
 
 def current_user_sid() -> str:
-    out = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, text=True,
+    # Never by bare name: PATH may lack System32, or put Git's coreutils whoami first.
+    from .windows_security import system_tool
+    out = subprocess.run([system_tool("whoami.exe"), "/user", "/fo", "csv", "/nh"], capture_output=True, text=True,
                          check=True, timeout=30, stdin=subprocess.DEVNULL).stdout
     sid = next(csv.reader([out.strip()]))[-1]
     if not sid.startswith("S-1-"):

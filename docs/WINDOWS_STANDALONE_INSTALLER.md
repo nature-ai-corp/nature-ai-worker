@@ -182,30 +182,58 @@ driver `scripts/windows_standalone_acceptance.py` and numbered steps.
 
 ## Private release-candidate staging on the controlled Windows signing computer
 
-Use `scripts/windows_rc_stage.ps1` to stage the current Windows-first RC from committed
-source using the already-registered **official private signing key**. This is an
-**internal test build**, not a GitHub Release: the current source reports version
-`0.1.1`, and the existing `v0.1.0` tag belongs to an earlier commit. No
-official `v0.1.1` tag or GitHub Release has been created. Signing the manifest
-does **not** substitute for release provenance and publication checks.
+Two helpers stage signed Windows builds with the **official private signing key**, which stays on
+the signing computer. Neither tags, pushes, uploads nor publishes anything, and neither assumes a
+version: the version (and, for a candidate, the commit) is given explicitly and must match the
+committed source, the release notes and the signed manifest. Every check runs before the
+passphrase is requested.
 
-Prerequisites: Windows, Git, Python 3.13 with the repository's pinned dependencies,
-and a clean checkout of `release/v0.1.0-rc-windows-first`. Build or install
-Inno Setup 6 to produce an EXE; without ISCC, the helper only stages the
-installer files. Run from PowerShell on the **signing computer**, not in CI:
+- `scripts/windows_rc_stage.ps1 -Version X.Y.Z -Commit <full sha> -KeyPath <key file> [-Label rc1]` stages a **private
+  release candidate** from an exact, untagged commit checked out in detached HEAD mode. It refuses
+  if the official `vX.Y.Z` tag already exists. The committed `docs/RELEASE_NOTES_vX.Y.Z.md` must
+  be final text; the "private release candidate" banner is added only to the copy signed into the
+  candidate, so the same commit can later be tagged unchanged. `release_bundle.py verify` must
+  confirm the signature, the official key and the repository, and must report the build as **not
+  an official release** (no tag). The script writes `rc-evidence.json` with the commit, manifest
+  SHA-256 and installer SHA-256.
+- Both helpers verify **the payload Setup will install**, not a separate copy. Staging keeps only
+  `payload.tar`. The check is `windows_installer.py verify-stage`, run via
+  `Invoke-StagedPayloadVerification`:
+  - `payload.tar` must match the SHA-256 in `build-info.json` and the `PayloadSha256` compiled into
+    `defines.iss`;
+  - it is then extracted into a new temporary folder. Only plain files and folders under
+    `payload/` are accepted: no links, devices, absolute, drive, backslash, `.`/`..`, device-name
+    or stream paths, and no duplicates. Each file is created exclusively and must resolve inside
+    the folder. One unsafe member refuses the whole archive;
+  - the manifest, runtime, `bootstrap.py` and trust-key file must match the build records, and
+    nothing may look like a private key;
+  - the extracted bundle goes through `release_bundle.py verify`.
+
+  The temporary folder is always removed, and the run fails if it cannot be.
+- `scripts/windows_official_release_stage.ps1 -Version X.Y.Z -KeyPath <key file>` builds from the exact `vX.Y.Z` tag
+  (detached HEAD at the tag) and requires a fully verified official release before compiling.
+
+Prerequisites: Windows, Git with the full history, Python 3.13 with the repository's pinned
+dependencies, and Inno Setup 6 to produce the EXE (without ISCC only the installer files are
+staged). Run from PowerShell on the **signing computer**, not in CI:
 
 ```powershell
-git switch release/v0.1.0-rc-windows-first
-git pull --ff-only
+git fetch origin
+git checkout --detach <commit>
 py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.lock -r requirements-dev.lock
 .\.venv\Scripts\python.exe -m pip install --no-deps .
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows_rc_stage.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows_rc_stage.ps1 -Version X.Y.Z -Commit <commit> `
+    -KeyPath "$HOME\NatureAI-Release-Keys\release-key.pem"
 ```
 
-The default private staging folder for this 0.1.1 candidate is `dist/windows-rc-stage-0.1.1`, intentionally separate from the already-built 0.1.0 Windows installer. On the Testing Computer, use the 0.1.1 installer to **upgrade** the previously installed 0.1.0 Standalone installation and verify that task history, model configuration, workspace and downloads remain intact. Do not uninstall 0.1.0 before upgrade testing.
+The candidate is staged in `dist\windows-rc-X.Y.Z-rc1` (official builds: `dist\windows-tagged-official-vX.Y.Z`);
+an existing folder is never overwritten. Test upgrades from the previous release on a disposable
+Windows account before any publication.
 
-The helper verifies the private key's public ID is `64ecfc2da2ed12e9`,
+`-KeyPath` is required and has no default: a run without it stops before any other check, so no
+rehearsal or test can pick up the official key implicitly. The helper verifies the private key's
+public ID is `64ecfc2da2ed12e9`,
 prompts without echoing the passphrase or putting it in shell history, stages
 the signed Windows payload, checks the commit in `build-info.json` and,
 when ISCC.exe is available, compiles the installer and prints its SHA-256.
@@ -246,23 +274,40 @@ The build fails if a wheel has neither a license file nor a declared license.
   manifest/source provenance before publication; do not move or overwrite an existing tag.
 - **Legal review:** see [Licensing review](#licensing-review) (Microsoft runtime terms, Inno
   Setup commercial-use request).
+- **Code signing:** the installer is not Authenticode-signed. See
+  [decision 0002](decisions/0002-windows-code-signing.md) (open: signed installer, or an explicitly
+  unsigned one with documented limitations).
+- **Privileged security tests:** 29 security tests need symbolic links or elevation and are
+  skipped elsewhere, including CI. Run `scripts/windows_privileged_security_tests.py` on the
+  dedicated test computer; it reports any skip as NOT RUN.
 - **Native evidence on the current revision:** see VERIFICATION.md. Every result there names
   the tree it was built from.
 
 ## Licensing review
 
-Reviewed 2026-10-28 from the shipped files themselves. This is not legal advice; the open items
-need the owner's decision.
+Reviewed 2026-10-28 from the shipped files themselves, and re-checked 2026-11-06 for v0.1.2. This
+is not legal advice; the open items need the owner's decision.
+
+The 2026-11-06 re-check used a staged v0.1.2 build and the pinned inputs:
+
+| Item | Finding |
+|---|---|
+| Runtime | `ssl.OPENSSL_VERSION` from the shipped runtime is OpenSSL 3.5.9; SQLite 3.53.1 |
+| `cryptography` 50.0.2 wheel | `_rust.pyd` statically links OpenSSL 4.0.3 |
+| Microsoft files in the runtime | `vcruntime140.dll` and `vcruntime140_1.dll` |
+| Inno Setup | installed compiler 6.7.3, as pinned; licence read from its installed `license.txt` |
+| OpenSSL licence text | `runtime-licenses/LICENSE.openssl-3.txt` is byte-identical to upstream `LICENSE.txt` at the `openssl-3.5.9` and `openssl-4.0.3` tags (SHA-256 `7d5450cb…`) |
 
 | Component | License | Status |
 |---|---|---|
 | Nature AI Worker | Apache-2.0 | LICENSE and NOTICE installed; the license is shown in Setup |
 | Python packages (42 wheels) | permissive (MIT, BSD, Apache-2.0, PSF), certifi MPL-2.0 | every wheel's license files in `THIRD_PARTY_LICENSES.txt`; certifi unmodified, its source (`.py`) is in the wheel |
+| OpenSSL 4.0.3 inside the `cryptography` wheel | Apache-2.0 | named in THIRD_PARTY.md; the Apache-2.0 text is in `THIRD_PARTY_LICENSES.txt` (the wheel ships cryptography's own Apache/BSD files); no NOTICE upstream, see 3 |
 | CPython 3.12.15 | PSF-2.0 | `LICENSE.txt` reproduced |
-| Runtime libraries: OpenSSL 3 (Apache-2.0), SQLite (public domain), libffi, expat (MIT), zlib, bzip2, liblzma, mpdecimal, libuuid, Tcl/Tk, Tix | permissive | texts reproduced from python-build-standalone's own license files; the stripped runtime omits them, so `runtime-licenses/` carries them |
+| Runtime libraries: OpenSSL 3.5.9 (Apache-2.0), SQLite (public domain), libffi, expat (MIT), zlib, bzip2, liblzma, mpdecimal, libuuid, Tcl/Tk, Tix | permissive | texts reproduced from python-build-standalone's own license files; the stripped runtime omits them, so `runtime-licenses/` carries them |
 | pip inside the runtime, and the pip wheel used for venvs | MIT, with vendored packages | license files reproduced |
-| Microsoft Visual C++ runtime (`vcruntime140*.dll` in the runtime) | Microsoft Distributable Code terms (in CPython's Windows `LICENSE.txt`) | **open**, see 1 |
-| Inno Setup code inside `Setup.exe` | Inno Setup License | notice kept in NOTICE; **open**, see 2 |
+| Microsoft Visual C++ runtime (`vcruntime140.dll`, `vcruntime140_1.dll` in the runtime) | Microsoft Distributable Code terms (in CPython's Windows `LICENSE.txt`) | **open**, see 1 |
+| Inno Setup 6.7.3 code inside `Setup.exe` | Inno Setup License | notice kept in NOTICE; **open**, see 2 |
 
 **Open legal issues:**
 
@@ -273,10 +318,62 @@ need the owner's decision.
    Microsoft terms are installed in `licenses\` but not presented for agreement. The owner
    should decide whether to present end-user terms that cover this, or confirm, with counsel,
    that the current notices suffice.
-2. **Inno Setup commercial use.** The Inno Setup License permits commercial use. jrsoftware's
-   ordering page also "request[s] that all commercial users of Inno Setup purchase licenses".
-   The owner should decide whether NATURE AI buys one before distributing installers.
-3. **OpenSSL NOTICE.** Apache-2.0 §4(d) requires passing on a NOTICE file if the work has one.
-   The OpenSSL license text is reproduced. No OpenSSL NOTICE file was found in the shipped
-   wheels or runtime licenses, but this was not checked against OpenSSL's 3.x source
-   distribution.
+
+   The same text also says that redistributing the Windows build of the interpreter "complies
+   with this agreement, provided that you do not":
+   - alter Microsoft's notices;
+   - use Microsoft's trademarks in program names or to suggest endorsement;
+   - distribute the code for a non-Microsoft platform;
+   - include it in malicious, deceptive or unlawful programs.
+
+   The installer does none of these, but that does not settle the question. **Still open.**
+
+   **Evidence (2026-11-06):**
+   - `vcruntime140.dll` and `vcruntime140_1.dll` in the pinned runtime are Microsoft-signed
+     (Authenticode status Valid) and unmodified, version 14.44.35211.0 (Visual Studio 2022
+     toolset 14.44).
+   - They are installed app-locally in each version's runtime folder; no VC++ Redistributable
+     package is installed.
+   - The runtime's `python.exe` and `python312.dll` are not signed.
+   - Microsoft's own Visual Studio licence terms and redistribution list were **not** reviewed
+     here.
+
+   **Unresolved questions for counsel** (bundling a runtime is not assumed to permit
+   redistribution):
+   1. **Chain of rights.** The DLLs were redistributed by python-build-standalone (Astral), whose
+      Visual Studio licence made them Distributable Code. Does that licence let downstream
+      distributors such as NATURE AI redistribute them, or does NATURE AI need its own basis,
+      for example its own Visual Studio licence, or shipping Microsoft's VC++ Redistributable
+      package instead?
+   2. **Whose statement is the proviso.** The "complies with this agreement, provided that you
+      do not …" paragraph was written by the PSF for python.org's Windows builds. Does it apply
+      to python-build-standalone's build, which reproduces CPython's `LICENSE.txt` unchanged?
+   3. **End-user agreement.** Does "require distributors and external end users to agree to
+      terms" require an affirmative agreement? Setup's licence page (`LicenseFile`, "I accept")
+      currently shows only Apache-2.0. Or do the installed notices suffice?
+   4. **Minimum terms.** If terms must be presented, what text protects the Distributable Code
+      "at least as much as Microsoft's own requirements"? Must it go into Setup's licence page,
+      and must the Worker's `NOTICE` or `THIRD_PARTY.md` pass it on?
+   5. **Downstream redistributors.** Apache-2.0 lets anyone redistribute the installer. Must
+      NATURE AI bind such distributors to the Microsoft terms, and how?
+   6. **App-local deployment and servicing.** Microsoft documents app-local deployment of these
+      runtime files. Is it within the applicable terms for this product? Who is responsible for
+      shipping Microsoft security updates to them, given that Windows Update does not service
+      app-local copies?
+2. **Inno Setup commercial use.** The Inno Setup License (6.7.3, installed `license.txt`) grants
+   use "for any purpose, including commercial applications". Its binding conditions are:
+   - binary redistributions must retain the copyright notice and web-site addresses that are in
+     place;
+   - the origin must not be misrepresented;
+   - modified versions must be marked as such.
+
+   `Setup.exe` is unmodified Inno Setup output and NOTICE acknowledges Inno Setup, so the
+   licence conditions are met. jrsoftware's ordering page separately *requests* that commercial
+   users buy a licence. That is a request, not a licence condition. **Owner decision still open.**
+3. **OpenSSL NOTICE: resolved, no NOTICE obligation.** Apache-2.0 §4(d) requires passing on a
+   NOTICE file only if the work has one. The upstream source trees at both shipped versions
+   (`openssl-3.5.9`, runtime; `openssl-4.0.3`, `cryptography` wheel) contain no `NOTICE`,
+   `NOTICE.txt` or `NOTICE.md`; their root holds `LICENSE.txt`, `AUTHORS.md` and
+   `ACKNOWLEDGEMENTS.md`. The Apache-2.0 licence text (§4(a)) is shipped, byte-identical to
+   upstream. Optional improvement: label that text in `THIRD_PARTY_LICENSES.txt` as covering both
+   OpenSSL copies, not only the runtime's.

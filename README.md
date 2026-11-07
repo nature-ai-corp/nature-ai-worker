@@ -35,9 +35,15 @@ The client is intended to work with **compatible, explicitly integrated AI syste
 [![Release](https://img.shields.io/github/v/release/nature-ai-corp/nature-ai-worker)](https://github.com/nature-ai-corp/nature-ai-worker/releases/tag/v0.1.1)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-![A finished piece of work in Nature AI Worker: status, execution facts, the agent's update, the report.md result with Preview and Download, the input file it read, the tool activity and the conversation](docs/screenshots/11-work-detail.png)
+![Standalone v0.1.1 interface preview: work status, agent update, resulting files and activity](docs/screenshots/11-work-detail.png)
 
-<sub>The real web UI. This screenshot was taken during automated UI testing with a scripted test model, not a real AI model; see [Verification status](#verification-status) for real-model results. More: [My Work](docs/screenshots/10-my-work.png), [approval request](docs/screenshots/12-work-approval.png), [New Work templates](docs/screenshots/13-new-work-templates.png).</sub>
+<sub>**Standalone interface preview (v0.1.1), not a Platform Client screenshot.** This real UI screenshot was taken during automated testing with a scripted test model, not a real AI model. Enterprise-client UI evidence will be published only after release-specific verification; see [Verification status](#verification-status). More Standalone views: [My Work](docs/screenshots/10-my-work.png), [approval request](docs/screenshots/12-work-approval.png), [New Work templates](docs/screenshots/13-new-work-templates.png).</sub>
+
+### Enterprise AI System Client availability
+
+The enterprise client is the **primary direction of this project**, but it is **not included in the published v0.1.1 Standalone installer**. Before an enterprise client release, maintainers will confirm its exact source revision, supported S–C contract version, target operating systems, authentication and authorization behavior, Task/Agent status, approval flows, data isolation and installer provenance. The results will be documented against that release, not inferred from Standalone test results.
+
+For current release evidence, see [Verification status](#verification-status) and [official release requirements](docs/RELEASES.md). To follow enterprise-client release readiness, see [GitHub Issue #45](https://github.com/nature-ai-corp/nature-ai-worker/issues/45).
 
 ## Standalone highlights (published v0.1.1)
 

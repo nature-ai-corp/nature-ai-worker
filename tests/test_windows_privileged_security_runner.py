@@ -145,6 +145,10 @@ def pytest_only_python(tmp_path_factory):
     return python
 
 
+# The runner is Windows-only: main() refuses elsewhere (parser.error), so tests that call it are too.
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="the runner's main() runs on Windows only")
+
+
 def _env():
     return {k: v for k, v in os.environ.items() if not k.startswith("NATURE_WORKER_") and not k.endswith("_API_KEY")}
 
@@ -161,6 +165,7 @@ def test_collection_check_accepts_the_intended_environment():
     assert problems == []
 
 
+@windows_only
 def test_a_collection_failure_reports_every_case_missing_and_never_passes(tmp_path, monkeypatch, pytest_only_python):
     monkeypatch.setattr(runner, "can_create_symlinks", lambda: True)
     out = tmp_path / "out"
@@ -174,17 +179,19 @@ def test_a_collection_failure_reports_every_case_missing_and_never_passes(tmp_pa
     assert not (out / "junit.xml").exists()
 
 
+@windows_only
 def test_pytest_runs_in_the_intended_environment_whatever_python_started_the_runner(tmp_path, monkeypatch,
                                                                                      pytest_only_python):
     # The failed run: the runner itself needs only the standard library, so it started under a
     # Python without the test dependencies and handed that interpreter to pytest.
     monkeypatch.setattr(runner, "can_create_symlinks", lambda: True)
+    intended = sys.executable  # this test session's Python, which has the test dependencies
     monkeypatch.setattr(runner.sys, "executable", str(pytest_only_python))
     out = tmp_path / "out"
-    runner.main(["--out", str(out), "--python", str(Path(sys.prefix) / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))])
+    runner.main(["--out", str(out), "--python", intended])
     summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
     assert summary["runner_interpreter"] == str(pytest_only_python)
-    assert summary["interpreter"] != str(pytest_only_python)
+    assert summary["interpreter"] == intended
     assert summary["privileged_cases"]["MISSING"] == 0  # every case was collected and reported
     assert (out / "junit.xml").exists()
 
@@ -199,6 +206,7 @@ def test_the_checkouts_venv_is_preferred_over_the_starting_interpreter(tmp_path)
     assert runner.pytest_interpreter(tmp_path, other) == other  # --python wins
 
 
+@windows_only
 def test_a_run_without_a_junit_report_fails_with_every_case_missing(tmp_path, monkeypatch):
     real_run = subprocess.run
 

@@ -60,9 +60,11 @@ finally {
     Remove-Item Env:NATURE_RELEASE_KEY_PASSPHRASE -ErrorAction SilentlyContinue
 }
 
-Assert-StagedBuild $StageDir $Version $commit $MinUpgradeFrom $tag | Out-Null
-& $Python (Join-Path $repo 'scripts\release_bundle.py') verify --bundle (Join-Path $StageDir 'payload\bundle') --repo $repo
-if ($LASTEXITCODE -ne 0) { throw 'Official source/signature/integrity verification failed.' }
+$verified = Invoke-StagedPayloadVerification $Python $repo $StageDir
+Assert-StagedBuild $StageDir $Version $commit $MinUpgradeFrom $tag $verified | Out-Null
+if ($verified.verify_exit -ne 0 -or $verified.verify.verified_official_release -ne $true) {
+    throw 'Official source/signature/integrity verification failed.'
+}
 Write-Host 'Verified tagged source, official manifest signature and artifact integrity.'
 
 $compiler = Find-ISCC $ISCC

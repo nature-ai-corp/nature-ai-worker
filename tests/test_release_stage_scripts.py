@@ -52,7 +52,7 @@ def test_candidate_is_untagged_and_must_verify_as_signed_but_not_official():
     text = _text("windows_rc_stage.ps1")
     assert "[Parameter(Mandatory = $true)][string]$Commit" in text
     assert "The official tag v$Version already exists" in text
-    assert "Assert-StagedBuild $StageDir $Version $head $MinUpgradeFrom ''" in text
+    assert "Assert-StagedBuild $StageDir $Version $head $MinUpgradeFrom '' $verified" in text
     assert "PRIVATE RELEASE CANDIDATE" in text and "$manifest.notes -notmatch 'PRIVATE RELEASE CANDIDATE'" in text
     for required in ("signature_and_integrity", "official_signer", "official_repository"):
         assert f"'{required}'" in text
@@ -63,8 +63,28 @@ def test_official_build_requires_the_exact_tag_and_a_fully_verified_release():
     text = _text("windows_official_release_stage.ps1")
     assert '$tag = "v$Version"' in text and "refs/tags/$tag^{commit}" in text
     assert "describe --tags --exact-match HEAD" in text
-    assert "Assert-StagedBuild $StageDir $Version $commit $MinUpgradeFrom $tag" in text
-    assert "if ($LASTEXITCODE -ne 0) { throw 'Official source/signature/integrity verification failed.' }" in text
+    assert "Assert-StagedBuild $StageDir $Version $commit $MinUpgradeFrom $tag $verified" in text
+    assert "$verified.verify_exit -ne 0 -or $verified.verify.verified_official_release -ne $true" in text
+    assert "throw 'Official source/signature/integrity verification failed.'" in text
+
+
+@pytest.mark.parametrize("name", ["windows_rc_stage.ps1", "windows_official_release_stage.ps1"])
+def test_stage_scripts_verify_the_payload_setup_installs(name):
+    # Staging keeps only payload.tar; the scripts once read payload\bundle, which no longer exists,
+    # and failed after signing. They must verify the archive itself, with no local trust override.
+    text = _text(name).replace("\r\n", "\n")
+    assert "payload\bundle" not in text and "release_bundle.py') verify" not in text
+    assert "$verified = Invoke-StagedPayloadVerification $Python $repo $StageDir\n" in text
+    assert "-TrustKey" not in text and "--trust-key" not in text
+    prompt = text.index("Read-PassphraseIntoEnvironment\n")
+    assert text.index("Invoke-StagedPayloadVerification") > prompt
+
+
+def test_staged_build_checks_read_no_unpacked_folder():
+    common = _text("windows_release_common.ps1")
+    assert "payload\bundle" not in common and "'verify-stage'" in common
+    assert "$manifest = $Verified.manifest" in common
+    assert "if ($exit -ne 0 -or -not $result.cleaned_up)" in common
 
 
 def test_committed_notes_must_be_final_text():

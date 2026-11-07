@@ -196,6 +196,20 @@ passphrase is requested.
   confirm the signature, the official key and the repository, and must report the build as **not
   an official release** (no tag). The script writes `rc-evidence.json` with the commit, manifest
   SHA-256 and installer SHA-256.
+- Both helpers verify **the payload Setup will install**, not a separate copy. Staging keeps only
+  `payload.tar`. The check is `windows_installer.py verify-stage`, run via
+  `Invoke-StagedPayloadVerification`:
+  - `payload.tar` must match the SHA-256 in `build-info.json` and the `PayloadSha256` compiled into
+    `defines.iss`;
+  - it is then extracted into a new temporary folder. Only plain files and folders under
+    `payload/` are accepted: no links, devices, absolute, drive, backslash, `.`/`..`, device-name
+    or stream paths, and no duplicates. Each file is created exclusively and must resolve inside
+    the folder. One unsafe member refuses the whole archive;
+  - the manifest, runtime, `bootstrap.py` and trust-key file must match the build records, and
+    nothing may look like a private key;
+  - the extracted bundle goes through `release_bundle.py verify`.
+
+  The temporary folder is always removed, and the run fails if it cannot be.
 - `scripts/windows_official_release_stage.ps1 -Version X.Y.Z` builds from the exact `vX.Y.Z` tag
   (detached HEAD at the tag) and requires a fully verified official release before compiling.
 
@@ -257,23 +271,40 @@ The build fails if a wheel has neither a license file nor a declared license.
   manifest/source provenance before publication; do not move or overwrite an existing tag.
 - **Legal review:** see [Licensing review](#licensing-review) (Microsoft runtime terms, Inno
   Setup commercial-use request).
+- **Code signing:** the installer is not Authenticode-signed. See
+  [decision 0002](decisions/0002-windows-code-signing.md) (open: signed installer, or an explicitly
+  unsigned one with documented limitations).
+- **Privileged security tests:** 29 security tests need symbolic links or elevation and are
+  skipped elsewhere, including CI. Run `scripts/windows_privileged_security_tests.py` on the
+  dedicated test computer; it reports any skip as NOT RUN.
 - **Native evidence on the current revision:** see VERIFICATION.md. Every result there names
   the tree it was built from.
 
 ## Licensing review
 
-Reviewed 2026-10-28 from the shipped files themselves. This is not legal advice; the open items
-need the owner's decision.
+Reviewed 2026-10-28 from the shipped files themselves, and re-checked 2026-11-06 for v0.1.2. This
+is not legal advice; the open items need the owner's decision.
+
+The 2026-11-06 re-check used a staged v0.1.2 build and the pinned inputs:
+
+| Item | Finding |
+|---|---|
+| Runtime | `ssl.OPENSSL_VERSION` from the shipped runtime is OpenSSL 3.5.9; SQLite 3.53.1 |
+| `cryptography` 50.0.2 wheel | `_rust.pyd` statically links OpenSSL 4.0.3 |
+| Microsoft files in the runtime | `vcruntime140.dll` and `vcruntime140_1.dll` |
+| Inno Setup | installed compiler 6.7.3, as pinned; licence read from its installed `license.txt` |
+| OpenSSL licence text | `runtime-licenses/LICENSE.openssl-3.txt` is byte-identical to upstream `LICENSE.txt` at the `openssl-3.5.9` and `openssl-4.0.3` tags (SHA-256 `7d5450cb…`) |
 
 | Component | License | Status |
 |---|---|---|
 | Nature AI Worker | Apache-2.0 | LICENSE and NOTICE installed; the license is shown in Setup |
 | Python packages (42 wheels) | permissive (MIT, BSD, Apache-2.0, PSF), certifi MPL-2.0 | every wheel's license files in `THIRD_PARTY_LICENSES.txt`; certifi unmodified, its source (`.py`) is in the wheel |
+| OpenSSL 4.0.3 inside the `cryptography` wheel | Apache-2.0 | named in THIRD_PARTY.md; the Apache-2.0 text is in `THIRD_PARTY_LICENSES.txt` (the wheel ships cryptography's own Apache/BSD files); no NOTICE upstream, see 3 |
 | CPython 3.12.15 | PSF-2.0 | `LICENSE.txt` reproduced |
-| Runtime libraries: OpenSSL 3 (Apache-2.0), SQLite (public domain), libffi, expat (MIT), zlib, bzip2, liblzma, mpdecimal, libuuid, Tcl/Tk, Tix | permissive | texts reproduced from python-build-standalone's own license files; the stripped runtime omits them, so `runtime-licenses/` carries them |
+| Runtime libraries: OpenSSL 3.5.9 (Apache-2.0), SQLite (public domain), libffi, expat (MIT), zlib, bzip2, liblzma, mpdecimal, libuuid, Tcl/Tk, Tix | permissive | texts reproduced from python-build-standalone's own license files; the stripped runtime omits them, so `runtime-licenses/` carries them |
 | pip inside the runtime, and the pip wheel used for venvs | MIT, with vendored packages | license files reproduced |
-| Microsoft Visual C++ runtime (`vcruntime140*.dll` in the runtime) | Microsoft Distributable Code terms (in CPython's Windows `LICENSE.txt`) | **open**, see 1 |
-| Inno Setup code inside `Setup.exe` | Inno Setup License | notice kept in NOTICE; **open**, see 2 |
+| Microsoft Visual C++ runtime (`vcruntime140.dll`, `vcruntime140_1.dll` in the runtime) | Microsoft Distributable Code terms (in CPython's Windows `LICENSE.txt`) | **open**, see 1 |
+| Inno Setup 6.7.3 code inside `Setup.exe` | Inno Setup License | notice kept in NOTICE; **open**, see 2 |
 
 **Open legal issues:**
 
@@ -284,10 +315,30 @@ need the owner's decision.
    Microsoft terms are installed in `licenses\` but not presented for agreement. The owner
    should decide whether to present end-user terms that cover this, or confirm, with counsel,
    that the current notices suffice.
-2. **Inno Setup commercial use.** The Inno Setup License permits commercial use. jrsoftware's
-   ordering page also "request[s] that all commercial users of Inno Setup purchase licenses".
-   The owner should decide whether NATURE AI buys one before distributing installers.
-3. **OpenSSL NOTICE.** Apache-2.0 §4(d) requires passing on a NOTICE file if the work has one.
-   The OpenSSL license text is reproduced. No OpenSSL NOTICE file was found in the shipped
-   wheels or runtime licenses, but this was not checked against OpenSSL's 3.x source
-   distribution.
+
+   The same text also says that redistributing the Windows build of the interpreter "complies
+   with this agreement, provided that you do not":
+   - alter Microsoft's notices;
+   - use Microsoft's trademarks in program names or to suggest endorsement;
+   - distribute the code for a non-Microsoft platform;
+   - include it in malicious, deceptive or unlawful programs.
+
+   The installer does none of these. Whether that proviso alone satisfies the "require ... end
+   users to agree to terms" sentence is the question for counsel. **Still open.**
+2. **Inno Setup commercial use.** The Inno Setup License (6.7.3, installed `license.txt`) grants
+   use "for any purpose, including commercial applications". Its binding conditions are:
+   - binary redistributions must retain the copyright notice and web-site addresses that are in
+     place;
+   - the origin must not be misrepresented;
+   - modified versions must be marked as such.
+
+   `Setup.exe` is unmodified Inno Setup output and NOTICE acknowledges Inno Setup, so the
+   licence conditions are met. jrsoftware's ordering page separately *requests* that commercial
+   users buy a licence. That is a request, not a licence condition. **Owner decision still open.**
+3. **OpenSSL NOTICE: resolved, no NOTICE obligation.** Apache-2.0 §4(d) requires passing on a
+   NOTICE file only if the work has one. The upstream source trees at both shipped versions
+   (`openssl-3.5.9`, runtime; `openssl-4.0.3`, `cryptography` wheel) contain no `NOTICE`,
+   `NOTICE.txt` or `NOTICE.md`; their root holds `LICENSE.txt`, `AUTHORS.md` and
+   `ACKNOWLEDGEMENTS.md`. The Apache-2.0 licence text (§4(a)) is shipped, byte-identical to
+   upstream. Optional improvement: label that text in `THIRD_PARTY_LICENSES.txt` as covering both
+   OpenSSL copies, not only the runtime's.

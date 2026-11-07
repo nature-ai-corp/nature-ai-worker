@@ -15,12 +15,22 @@
 
 Details: [GitHub Community Agent](GITHUB_COMMUNITY_AGENT.md) and the *GitHub Community tools* section of the README.
 
-## Upgrade from v0.1.1 or v0.1.0
+## Upgrading
 
-- Run the v0.1.2 installer while signed in as the same Windows user. It upgrades the existing per-user installation in place and keeps settings, encrypted API keys, work history and workspace files. Let running work finish first: the upgrade waits for it and backs up the data folder before switching.
-- The data format is unchanged from v0.1.1. The GitHub outbox tables are added automatically when v0.1.2 first starts and are ignored by older versions.
+- **Windows installation (made with the v0.1.1 or an earlier 0.1.x Windows installer):** run the v0.1.2 installer while signed in as the same Windows user.
+  - It upgrades the per-user installation in place and keeps settings, encrypted API keys, work history and workspace files.
+  - Before changing anything, it verifies the release signature and every file.
+  - It backs up the data folder before switching versions.
+  - Running work is allowed to finish first, for up to 10 minutes. If work is still running after that, the upgrade stops and nothing is changed. Let the work finish, or stop it, then run the installer again.
+  - A silent upgrade (`/VERYSILENT`) also needs `/CONFIRMUPGRADE=0.1.2`; without it, nothing is changed.
+- **Use the installer, not `nature-worker-upgrade`, from installations made before v0.1.1.** Their upgrader may not include the official release key and then refuses the release. The installer always verifies with the key built into v0.1.2.
+- **v0.1.0 run from source (`pip install`) or Docker Compose:** there is no in-place upgrade. Update the source and run `pip install .` again, or rebuild the Docker image. Keep the same data folder (default `./data`); v0.1.2 reads v0.1.0 data.
+- The data format is unchanged from v0.1.1. The GitHub outbox tables are added automatically when v0.1.2 first opens the database. Older versions ignore them.
 - All GitHub features stay **off** after the upgrade until you turn them on.
-- **Going back:** if v0.1.2 fails to start during the upgrade, the installer returns to the previous version automatically. After a successful upgrade, `nature-worker-upgrade rollback` (in the installation's `bin` folder) returns to the previous version. `nature-worker-upgrade history` shows every upgrade outcome. See [UPGRADES.md](UPGRADES.md).
+- **Going back:**
+  - If v0.1.2 does not start and pass its checks during the upgrade, the previous version and its data are restored automatically.
+  - After a successful upgrade, `nature-worker-upgrade rollback` (the `bin` folder of the installation, by default `%LOCALAPPDATA%\Programs\NatureAIWorker\bin`) returns to the previous version. Because the data format is unchanged, your data, including work done on v0.1.2, is kept.
+  - `nature-worker-upgrade history` shows every upgrade outcome. See [UPGRADES.md](UPGRADES.md).
 - Uninstalling keeps your data folder and workspace; deleting data is a separate, explicitly confirmed step.
 
 ## Requirements

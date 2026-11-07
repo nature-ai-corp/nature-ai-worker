@@ -69,13 +69,13 @@ finally {
     Remove-Item -LiteralPath $rcNotes -ErrorAction SilentlyContinue
 }
 
-$manifest = Assert-StagedBuild $StageDir $Version $head $MinUpgradeFrom ''
+$verified = Invoke-StagedPayloadVerification $Python $repo $StageDir
+$manifest = Assert-StagedBuild $StageDir $Version $head $MinUpgradeFrom '' $verified
 if ($manifest.notes -notmatch 'PRIVATE RELEASE CANDIDATE') { throw 'The candidate banner is missing from the signed notes.' }
 
 # Signature, official key and repository must verify; only the tag checks may (and must) fail.
-$report = & $Python (Join-Path $repo 'scripts\release_bundle.py') verify --bundle (Join-Path $StageDir 'payload\bundle') --repo $repo
-$verifyExit = $LASTEXITCODE
-$report = ($report -join "`n") | ConvertFrom-Json
+$report = $verified.verify
+$verifyExit = $verified.verify_exit
 $failed = @($report.checks | Where-Object { $_.ok -eq $false } | ForEach-Object { $_.check })
 foreach ($required in 'signature_and_integrity', 'official_signer', 'official_repository') {
     $c = @($report.checks | Where-Object { $_.check -eq $required })

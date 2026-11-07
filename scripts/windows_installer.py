@@ -18,6 +18,14 @@ packaging/windows/runtime.json, both checked byte for byte. DIR then holds:
     licenses/                         LICENSE.txt, NOTICE.txt, THIRD_PARTY.md, THIRD_PARTY_LICENSES.txt
     build-info.json                   commit, version, every pinned hash used
 
+    python scripts/windows_installer.py verify-stage --stage DIR [--repo CLONE]
+
+``verify-stage`` checks a staged build by the payload Setup will install: payload.tar against
+build-info.json and the PayloadSha256 compiled into defines.iss, then a safe extraction into a
+new temporary folder (plain files and folders under payload/ only; no links, devices, absolute
+or '..' paths), the manifest, runtime and bootstrap.py against the build records, and
+``release_bundle.py verify`` on the extracted bundle. The folder is always removed.
+
     python scripts/windows_installer.py kit --private-key KEY.pem --trust-key KEYS.json --out DIR
         [--runtime ARCHIVE] [--innosetup EXE] [--worktree [--exclude PATH ...]]
 
@@ -53,6 +61,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -182,6 +191,202 @@ def license_texts(bundle: Path, runtime: Path) -> str:
     return head + "".join(f"\n\n{'-' * 78}\n{title}\n{'-' * 78}\n\n{text.strip()}\n" for title, text in parts)
 
 
+def write_payload_tar(out: Path) -> Path:
+    """out/payload as out/payload.tar: sorted, with no owner names or times (reproducible)."""
+    tar_path = out / "payload.tar"
+    with tarfile.open(tar_path, "w", format=tarfile.PAX_FORMAT) as tar:
+        for path in sorted((out / "payload").rglob("*")):
+            info = tar.gettarinfo(path, path.relative_to(out).as_posix())
+            info.uid = info.gid = 0
+            info.uname = info.gname = ""
+            info.mtime = 0
+            if path.is_file():
+                with open(path, "rb") as stream:
+                    tar.addfile(info, stream)
+            else:
+                tar.addfile(info)
+    return tar_path
+
+
+# -- verifying a staged build: exactly the payload Setup will install --------------------------
+
+class StageError(Exception):
+    """The staged build is inconsistent or its payload archive is unsafe."""
+
+
+_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(10)), *(f"lpt{i}" for i in range(10))}
+
+
+def _member_problem(member: tarfile.TarInfo) -> str | None:
+    """Why a payload.tar member may not be extracted, or None. Only plain files and folders
+    under payload/ with ordinary relative names are allowed: no links, devices or FIFOs, no
+    absolute, drive-qualified, backslash, '.' or '..' paths, no Windows device names or
+    alternate data streams."""
+    if not (member.isreg() or member.isdir()):
+        return "is not a regular file or folder (links, devices and other special members are refused)"
+    name = member.name
+    if not name or "\\" in name or ":" in name or name.startswith("/") or "\0" in name:
+        return "has an absolute, drive-qualified, backslash or stream path"
+    parts = name.rstrip("/").split("/")
+    if parts[0] != "payload":
+        return "is outside payload/"
+    for part in parts:
+        if part in ("", ".", "..") or part != part.rstrip(". ") or part.split(".")[0].lower() in _RESERVED:
+            return "has an empty, '.', '..', trailing-dot/space or Windows device-name component"
+    return None
+
+
+def extract_payload(tar_path: Path, dest: Path) -> int:
+    """Extract payload.tar into the empty folder ``dest``, refusing the whole archive if any
+    member is unsafe. Members are written one by one (never ``extractall``): files are created
+    exclusively, so nothing that already exists - including a link - is ever written through,
+    and every resolved path must stay inside ``dest``. Returns the number of files written."""
+    root = dest.resolve(strict=True)
+    if any(root.iterdir()):
+        raise StageError(f"{dest} is not empty.")
+    with tarfile.open(tar_path, "r:") as tar:
+        members = tar.getmembers()
+        seen: set[str] = set()
+        for member in members:
+            problem = _member_problem(member)
+            if problem:
+                raise StageError(f"payload.tar member {member.name!r} {problem}.")
+            key = member.name.rstrip("/").casefold()  # Windows names are case-insensitive
+            if key in seen:
+                raise StageError(f"payload.tar has the member {member.name!r} more than once.")
+            seen.add(key)
+        files = 0
+        for member in members:
+            target = root.joinpath(*member.name.rstrip("/").split("/"))
+            if not target.resolve().is_relative_to(root):
+                raise StageError(f"payload.tar member {member.name!r} resolves outside the folder.")
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if not target.parent.resolve(strict=True).is_relative_to(root):
+                    raise StageError(f"payload.tar member {member.name!r} resolves outside the folder.")
+                source = tar.extractfile(member)
+                with source, open(target, "xb") as stream:
+                    shutil.copyfileobj(source, stream)
+                files += 1
+    return files
+
+
+def _defines(path: Path) -> dict[str, str]:
+    values = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parts = line.split(maxsplit=2)
+        if len(parts) == 3 and parts[0] == "#define":
+            values[parts[1]] = parts[2].strip('"')
+    return values
+
+
+def _remove_tree(path: Path) -> bool:
+    """Delete ``path``; a few retries for Windows scanners that briefly hold new files open."""
+    for _ in range(10):
+        shutil.rmtree(path, ignore_errors=True)
+        if not path.exists():
+            return True
+        time.sleep(0.3)
+    return False
+
+
+def verify_stage(args) -> int:
+    """Verify a staged build by the payload Setup will install: payload.tar must match the
+    SHA-256 recorded in build-info.json and compiled into defines.iss; it is extracted safely
+    into a new temporary folder; its manifest, runtime, bootstrap.py and trust-key file must
+    match the build records; and its bundle goes through ``release_bundle.py verify``. The
+    temporary folder is always removed. Prints one JSON report.
+
+    Exit 0: consistent and the bundle's signature and every file hash verify (whether the
+    signer is official and the tag matches is in ``verify``, for the caller to judge).
+    1: the bundle's signature or integrity fails. 2: inconsistent build or unsafe archive.
+    3: the temporary folder could not be removed."""
+    stage_dir: Path = args.stage
+    report: dict = {"stage": str(stage_dir), "checks": []}
+
+    def check(name: str, ok: bool, detail: str) -> None:
+        report["checks"].append({"check": name, "ok": ok, "detail": detail})
+        if not ok:
+            raise StageError(f"{name}: {detail}")
+
+    work: Path | None = None
+    code = 0
+    try:
+        try:
+            info = json.loads((stage_dir / "build-info.json").read_text(encoding="utf-8"))
+            defines = _defines(stage_dir / "defines.iss")
+        except (OSError, ValueError) as exc:
+            raise StageError(f"unreadable build records: {exc}") from exc
+        tar_path = stage_dir / "payload.tar"
+        if not tar_path.is_file():
+            raise StageError("payload.tar is missing.")
+        actual = sha256(tar_path)
+        report["payload_sha256"] = actual
+        check("payload_matches_build_info", actual == info.get("payload_sha256"),
+              f"payload.tar {actual}, build-info.json {info.get('payload_sha256')}")
+        check("payload_matches_installer", actual == defines.get("PayloadSha256"),
+              f"payload.tar {actual}, defines.iss PayloadSha256 {defines.get('PayloadSha256')}")
+        work = Path(tempfile.mkdtemp(prefix="nw-stage-verify-", dir=args.work_dir))
+        report["work_dir"] = str(work)
+        files = extract_payload(tar_path, work)
+        check("payload_extracted_safely", True, f"{files} regular files, all inside the temporary folder")
+        payload = work / "payload"
+        bundle = payload / "bundle"
+        manifest_raw = (bundle / "release.json").read_bytes() if (bundle / "release.json").is_file() else b""
+        digest = hashlib.sha256(manifest_raw).hexdigest()
+        check("manifest_matches_build_info", bool(manifest_raw) and digest == info.get("manifest_sha256"),
+              f"release.json {digest if manifest_raw else 'missing'}, build-info.json {info.get('manifest_sha256')}")
+        manifest = json.loads(manifest_raw)
+        report["manifest"] = manifest
+        runtime = manifest.get("runtime") or {}
+        runtime_path = bundle.joinpath(*str(runtime.get("path", "")).split("/")) if runtime else None
+        check("runtime_matches_installer",
+              bool(runtime) and runtime["path"].replace("/", "\\") == defines.get("RuntimePath")
+              and runtime["sha256"] == defines.get("RuntimeSha256") and runtime_path.is_file()
+              and sha256(runtime_path) == runtime["sha256"],
+              f"manifest runtime {runtime.get('path')} {runtime.get('sha256')}, defines.iss "
+              f"{defines.get('RuntimePath')} {defines.get('RuntimeSha256')}")
+        boot = payload / "bootstrap.py"
+        check("bootstrap_matches_source", boot.is_file() and sha256(boot) == sha256(PACKAGING / "bootstrap.py"),
+              "payload/bootstrap.py equals packaging/windows/bootstrap.py")
+        has_key = (payload / "trusted-dev-key.json").exists()
+        check("trust_key_matches_build_info", has_key == bool(info.get("trust_key")),
+              f"trusted-dev-key.json {'present' if has_key else 'absent'}, build-info.json trust_key "
+              f"{bool(info.get('trust_key'))}")
+        leaked = [p.relative_to(work).as_posix() for p in work.rglob("*") if p.is_file() and
+                  (p.suffix in (".pem", ".key") or b"PRIVATE KEY" in p.read_bytes()[:1 << 20])]
+        check("no_private_key", not leaked, f"files that look like private keys: {leaked}" if leaked else "none")
+        cmd = [sys.executable, str(REPO / "scripts" / "release_bundle.py"), "verify", "--bundle", str(bundle)]
+        if args.repo:
+            cmd += ["--repo", str(args.repo)]
+        if args.trust_key:
+            cmd += ["--trust-key", str(args.trust_key)]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            verified = json.loads(result.stdout)
+        except ValueError:
+            raise StageError(f"release_bundle.py verify gave no report (exit {result.returncode}): "
+                             f"{result.stderr.strip()[-500:]}") from None
+        report.update(verify=verified, verify_exit=result.returncode)
+        integrity = [c for c in verified.get("checks", []) if c.get("check") == "signature_and_integrity"]
+        if not (integrity and integrity[0].get("ok") is True):
+            report["error"] = "signature_and_integrity: " + (integrity[0]["detail"] if integrity else "not checked")
+            code = 1
+    except (StageError, OSError, ValueError, KeyError, tarfile.TarError) as exc:
+        report["error"] = str(exc)
+        code = 2
+    finally:
+        if work is not None:
+            report["cleaned_up"] = _remove_tree(work)
+            if not report["cleaned_up"]:
+                report["error"] = (report.get("error", "") + f" Could not remove {work}.").strip()
+                code = code or 3
+    print(json.dumps(report, indent=2))
+    return code
+
+
 def stage(args) -> int:
     out: Path = args.out
     if out.exists():
@@ -234,18 +439,7 @@ def stage(args) -> int:
     for path in (p for p in out.rglob("*") if p.is_file()):
         if path.suffix in (".pem", ".key") or b"PRIVATE KEY" in path.read_bytes()[:1 << 20]:
             raise SystemExit(f"Refusing: {path} looks like a private key; nothing may ship one.")
-    tar_path = out / "payload.tar"
-    with tarfile.open(tar_path, "w", format=tarfile.PAX_FORMAT) as tar:
-        for path in sorted(payload.rglob("*")):
-            info = tar.gettarinfo(path, path.relative_to(out).as_posix())
-            info.uid = info.gid = 0
-            info.uname = info.gname = ""
-            info.mtime = 0
-            if path.is_file():
-                with open(path, "rb") as stream:
-                    tar.addfile(info, stream)
-            else:
-                tar.addfile(info)
+    tar_path = write_payload_tar(out)
     shutil.rmtree(payload)
     v = manifest["version"]
     numeric = ".".join(v.split("+")[0].split(".") + ["0"])
@@ -493,8 +687,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--worktree", action="store_true")
     p.add_argument("--exclude", action="append", default=[])
     p.add_argument("--refresh", action="store_true", help="rebuild an existing kit, keeping tools\\ and results\\")
+    p = sub.add_parser("verify-stage", help="verify a staged build by extracting payload.tar safely")
+    p.add_argument("--stage", type=Path, required=True, help="the folder written by 'stage'")
+    p.add_argument("--repo", type=Path, help="a git clone with the release tags (for the tag checks)")
+    p.add_argument("--trust-key", type=Path, help="tests only: also accept these keys (never official)")
+    p.add_argument("--work-dir", type=Path, help="parent of the temporary folder (default: system temp)")
     args = parser.parse_args(argv)
-    return {"stage": stage, "kit": kit}[args.command](args)
+    return {"stage": stage, "kit": kit, "verify-stage": verify_stage}[args.command](args)
 
 
 if __name__ == "__main__":

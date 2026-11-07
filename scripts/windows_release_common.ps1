@@ -83,10 +83,30 @@ function Find-ISCC([string]$ISCC) {
     return ''
 }
 
+function Invoke-StagedPayloadVerification([string]$Python, [string]$Repo, [string]$StageDir,
+                                          [string]$TrustKey = '') {
+    # Staging keeps only payload.tar, which is what Setup installs. Verify exactly that: it must
+    # match build-info.json and defines.iss, is extracted safely into a new temporary folder
+    # (removed afterwards), and its bundle goes through release_bundle.py verify. -TrustKey is
+    # for tests only; the stage scripts never pass it, and official_signer still decides.
+    $arguments = @((Join-Path $Repo 'scripts\windows_installer.py'), 'verify-stage', '--stage', $StageDir, '--repo', $Repo)
+    if ($TrustKey) { $arguments += @('--trust-key', $TrustKey) }
+    $raw = & $Python @arguments
+    $exit = $LASTEXITCODE
+    try { $result = ($raw -join "`n") | ConvertFrom-Json }
+    catch { throw "Staged payload verification gave no report (exit $exit)." }
+    if ($exit -ne 0 -or -not $result.cleaned_up) {
+        throw "Staged payload verification failed (exit $exit): $($result.error)"
+    }
+    return $result
+}
+
 function Assert-StagedBuild([string]$StageDir, [string]$Version, [string]$Commit, [string]$MinUpgradeFrom,
-                            [AllowNull()][string]$Tag) {
+                            [AllowNull()][string]$Tag, $Verified) {
     # What was staged is exactly what was requested: version, commit, upgrade floor, no local
     # trust-key override, the official repository and the expected tag (none for a candidate).
+    # The manifest is the one inside payload.tar, from Invoke-StagedPayloadVerification.
+    if ($null -eq $Verified -or $null -eq $Verified.manifest) { throw 'No verified payload manifest was supplied.' }
     $info = Get-Content -LiteralPath (Join-Path $StageDir 'build-info.json') -Raw | ConvertFrom-Json
     if ($info.version -ne $Version) { throw "Staged version $($info.version), expected $Version." }
     if ($info.commit -ne $Commit) { throw "Staged commit $($info.commit), expected $Commit." }
@@ -94,9 +114,7 @@ function Assert-StagedBuild([string]$StageDir, [string]$Version, [string]$Commit
     if ($info.min_upgrade_from -ne $MinUpgradeFrom) {
         throw "Upgrade floor $($info.min_upgrade_from), expected $MinUpgradeFrom."
     }
-    $manifestFile = Join-Path $StageDir 'payload\bundle\release.json'
-    if (-not (Test-Path -LiteralPath $manifestFile -PathType Leaf)) { throw 'Signed release manifest not found.' }
-    $manifest = Get-Content -LiteralPath $manifestFile -Raw | ConvertFrom-Json
+    $manifest = $Verified.manifest
     if ($manifest.version -ne $Version -or $manifest.source.commit -ne $Commit) {
         throw 'Manifest version or source commit mismatch.'
     }

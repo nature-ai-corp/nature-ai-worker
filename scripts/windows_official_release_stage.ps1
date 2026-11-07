@@ -4,7 +4,7 @@
 # No GitHub upload, publishing, tagging or repo visibility changes are performed.
 #
 #   git checkout --detach vX.Y.Z
-#   powershell -File scripts\windows_official_release_stage.ps1 -Version X.Y.Z
+#   powershell -File scripts\windows_official_release_stage.ps1 -Version X.Y.Z -KeyPath <key file>
 #
 # The version is never assumed: the tag, the source version, the notes file, the staged build
 # and the signed manifest must all agree with -Version, and release_bundle.py verify must
@@ -13,7 +13,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$Version,
     [string]$MinUpgradeFrom = '0.1.0',
-    [string]$KeyPath = (Join-Path $HOME 'NatureAI-Release-Keys\release-key.pem'),
+    [string]$KeyPath = '',  # required: no default, so no run ever picks up a key implicitly
     [string]$StageDir = '',
     [string]$ISCC = '',
     [string]$Python = ''
@@ -21,6 +21,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# First, before any other check or file access: the signing key is always named explicitly.
+if (-not $KeyPath) { throw '-KeyPath is required: name the signing key file explicitly (there is no default key path).' }
 . (Join-Path $PSScriptRoot 'windows_release_common.ps1')
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 

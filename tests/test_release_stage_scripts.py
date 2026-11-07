@@ -139,10 +139,13 @@ def release_repo(tmp_path):
     return repo, head, tmp_path
 
 
+_NO_KEY = object()  # pass key=_NO_KEY to leave -KeyPath out entirely
+
+
 def _run(repo, script, *args, key=None, env=None):
+    key_args = [] if key is _NO_KEY else ["-KeyPath", str(key if key is not None else repo.parent / "absent-key.pem")]
     proc = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
-                           str(repo / "scripts" / script), *args, "-Python", sys.executable,
-                           "-KeyPath", str(key or repo.parent / "absent-key.pem")],
+                           str(repo / "scripts" / script), *args, "-Python", sys.executable, *key_args],
                           capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL, env=env)
     return proc.returncode, proc.stdout + proc.stderr
 
@@ -278,3 +281,58 @@ def test_a_cancelled_or_failed_signing_prompt_leaves_no_notes_copy_and_stages_no
     assert "Verified candidate source" in out or "Verified immutable release source" in out
     assert list(temp.glob("nature-worker-*-notes-*.md")) == []
     assert not (repo / "dist").exists()
+
+
+# -- -KeyPath is required: no script picks up a signing key implicitly ---------------------------
+
+@pytest.mark.parametrize("name", ["windows_rc_stage.ps1", "windows_official_release_stage.ps1"])
+def test_key_path_has_no_default_and_is_checked_first(name):
+    # A development-key rehearsal that left out -KeyPath once fell back to the default production
+    # key path and read the official (encrypted) key file. There is no default any more, and the
+    # check is the first statement, before any source check or file access.
+    text = _text(name).replace("\r\n", "\n")
+    assert "NatureAI-Release-Keys" not in text and "release-key.pem" not in text
+    assert "[string]$KeyPath = ''," in text
+    body = text.index("Set-StrictMode -Version Latest\n")
+    first = text.index("if (-not $KeyPath) { throw '-KeyPath is required", body)
+    assert text[body:first].count("\n") == 2  # the comment line, then the check
+    for later in ("Assert-ReleaseVersion", "Test-Path -LiteralPath $KeyPath", "Read-PassphraseIntoEnvironment"):
+        assert text.index(later) > first, later
+
+
+def _fake_profile(tmp_path):
+    """A profile folder with a decoy key at the old default path, and an environment that uses it."""
+    home = tmp_path / "home"
+    decoy = home / "NatureAI-Release-Keys" / "release-key.pem"
+    decoy.parent.mkdir(parents=True)
+    decoy.write_bytes(b"decoy - a script that falls back to the default path would find this")
+    before = decoy.stat()
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+    return decoy, before, env
+
+
+@windows_only
+@pytest.mark.parametrize("script", ["windows_rc_stage.ps1", "windows_official_release_stage.ps1"])
+@pytest.mark.parametrize("how", ["omitted", "empty"])
+def test_a_missing_key_path_fails_immediately_and_touches_no_key(release_repo, script, how):
+    repo, head, tmp_path = release_repo
+    if script == "windows_official_release_stage.ps1":
+        _git(repo, "tag", "v1.2.3")
+    decoy, before, env = _fake_profile(tmp_path)
+    args = ["-Version", "1.2.3"] + (["-Commit", head] if script == "windows_rc_stage.ps1" else [])
+    code, out = _run(repo, script, *args, key=_NO_KEY if how == "omitted" else "", env=env)
+    assert code != 0 and "-KeyPath is required" in out, out
+    for later in ("Verified candidate source", "Verified immutable release source", "Signing key not found",
+                  "Read-Host", "Source version"):
+        assert later not in out, later  # it stopped before every other check
+    after = decoy.stat()
+    assert decoy.read_bytes().startswith(b"decoy") and after.st_mtime_ns == before.st_mtime_ns
+    assert not (repo / "dist").exists()
+
+
+@windows_only
+def test_an_explicit_key_path_is_still_checked_for_existence(release_repo):
+    repo, head, tmp_path = release_repo
+    code, out = _run(repo, "windows_rc_stage.ps1", "-Version", "1.2.3", "-Commit", head,
+                     key=tmp_path / "nowhere" / "key.pem")
+    assert code != 0 and "Signing key not found" in out and "-KeyPath is required" not in out

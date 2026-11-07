@@ -188,7 +188,7 @@ version: the version (and, for a candidate, the commit) is given explicitly and 
 committed source, the release notes and the signed manifest. Every check runs before the
 passphrase is requested.
 
-- `scripts/windows_rc_stage.ps1 -Version X.Y.Z -Commit <full sha> [-Label rc1]` stages a **private
+- `scripts/windows_rc_stage.ps1 -Version X.Y.Z -Commit <full sha> -KeyPath <key file> [-Label rc1]` stages a **private
   release candidate** from an exact, untagged commit checked out in detached HEAD mode. It refuses
   if the official `vX.Y.Z` tag already exists. The committed `docs/RELEASE_NOTES_vX.Y.Z.md` must
   be final text; the "private release candidate" banner is added only to the copy signed into the
@@ -210,7 +210,7 @@ passphrase is requested.
   - the extracted bundle goes through `release_bundle.py verify`.
 
   The temporary folder is always removed, and the run fails if it cannot be.
-- `scripts/windows_official_release_stage.ps1 -Version X.Y.Z` builds from the exact `vX.Y.Z` tag
+- `scripts/windows_official_release_stage.ps1 -Version X.Y.Z -KeyPath <key file>` builds from the exact `vX.Y.Z` tag
   (detached HEAD at the tag) and requires a fully verified official release before compiling.
 
 Prerequisites: Windows, Git with the full history, Python 3.13 with the repository's pinned
@@ -223,14 +223,17 @@ git checkout --detach <commit>
 py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.lock -r requirements-dev.lock
 .\.venv\Scripts\python.exe -m pip install --no-deps .
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows_rc_stage.ps1 -Version X.Y.Z -Commit <commit>
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows_rc_stage.ps1 -Version X.Y.Z -Commit <commit> `
+    -KeyPath "$HOME\NatureAI-Release-Keys\release-key.pem"
 ```
 
 The candidate is staged in `dist\windows-rc-X.Y.Z-rc1` (official builds: `dist\windows-tagged-official-vX.Y.Z`);
 an existing folder is never overwritten. Test upgrades from the previous release on a disposable
 Windows account before any publication.
 
-The helper verifies the private key's public ID is `64ecfc2da2ed12e9`,
+`-KeyPath` is required and has no default: a run without it stops before any other check, so no
+rehearsal or test can pick up the official key implicitly. The helper verifies the private key's
+public ID is `64ecfc2da2ed12e9`,
 prompts without echoing the passphrase or putting it in shell history, stages
 the signed Windows payload, checks the commit in `build-info.json` and,
 when ISCC.exe is available, compiles the installer and prints its SHA-256.

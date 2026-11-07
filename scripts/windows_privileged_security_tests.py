@@ -17,7 +17,7 @@ service, installation, registry value, network or port is changed or used.
 
 Run it from a clean checkout of the commit under test, with the locked dependencies installed:
     elevated PowerShell:  .\\.venv\\Scripts\\python.exe scripts\\windows_privileged_security_tests.py --out C:\\nw-sec-1
-Writes NEW_DIR\\summary.txt, summary.json and junit.xml. Exit 0 only if every required test passed.
+Writes NEW_DIR\\summary.txt, summary.json, collect-output.txt, pytest-output.txt and junit.xml. Exit 0 only if every required test passed.
 """
 from __future__ import annotations
 
@@ -196,9 +196,65 @@ def evaluate(found: dict[str, list[tuple[str, str, str]]]) -> tuple[bool, list[d
     return ok, rows, privileged
 
 
+def pytest_interpreter(repo: Path = REPO, override: Path | None = None) -> Path:
+    """The interpreter that runs pytest: the given one, else the checkout's own .venv (which has
+    the locked test dependencies), never just whichever Python started this script. A runner
+    started by another Python once ran pytest without the Worker's dependencies: conftest
+    failed to import and all 29 cases were MISSING."""
+    if override is not None:
+        return override
+    venv = repo / ".venv" / "Scripts" / "python.exe"
+    return venv if venv.is_file() else Path(sys.executable)
+
+
+def collect(python: str, env: dict) -> tuple[list[str], str]:
+    """Collect the tests with the interpreter that will run them, before running anything.
+    Returns the problems (empty if every required test function and all 29 privileged cases are
+    collected) and pytest's output. An interpreter without the test dependencies (for example
+    not the checkout's .venv) fails here, with pytest's own error, instead of reporting 29
+    MISSING cases without a reason."""
+    proc = subprocess.run([python, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider",
+                           *REQUIRED, *OPTIONAL], cwd=REPO, env=env, capture_output=True, text=True, timeout=600)
+    output = proc.stdout + proc.stderr
+    collected = {line.strip().replace("\\", "/") for line in proc.stdout.splitlines() if "::" in line}
+    problems = []
+    if proc.returncode != 0:
+        errors = [line.strip() for line in output.splitlines() if line.startswith(("E ", "ERROR", "ImportError"))]
+        problems.append(f"pytest could not collect the tests (exit {proc.returncode}) with {python}: "
+                        + ("; ".join(errors[-3:]) or "see collect-output.txt"))
+    problems += [f"not collected: {case}" for case in PRIVILEGED if case not in collected]
+    problems += [f"not collected: {test}" for test in REQUIRED
+                 if not any(c == test or c.startswith(test + "[") for c in collected)]
+    return problems, output
+
+
+def write_reports(out: Path, summary: dict, rows: list[dict], privileged: list[dict]) -> list[str]:
+    counts = summary["privileged_cases"]
+    lines = [f"Nature AI Worker privileged Windows security tests: {summary['result']}",
+             f"commit {summary['commit']}{'' if summary['worktree_clean'] else ' (WORKING TREE NOT CLEAN)'}; "
+             f"Windows {summary['windows']}; Python {summary['python']}; elevated {summary['elevated']}; "
+             f"Developer Mode {summary['developer_mode']}; symlinks {summary['can_create_symlinks']}",
+             f"interpreter {summary['interpreter']} (prefix {summary['interpreter_prefix']}); "
+             f"pytest exit {summary.get('pytest_exit')}"]
+    lines += [f"PROBLEM: {problem}" for problem in summary.get("problems", [])]
+    lines += ["", f"The {len(PRIVILEGED)} privileged cases: " + ", ".join(f"{n} {s}" for s, n in counts.items()), ""]
+    for i, p in enumerate(privileged, 1):
+        lines.append(f"{i:2}. {p['status']:8} {p['case']}" + (f"  -- {p['message']}" if p["status"] != "PASS" else ""))
+    lines += ["", "Whole test functions (every case, including those that run without privileges):"]
+    for row in rows:
+        lines.append(f"{row['status']:8} {'required' if row['required'] else 'optional'}  {row['test']} "
+                     f"({row['cases']} case{'s' if row['cases'] != 1 else ''}; needs {row['needs']})")
+        lines += [f"           {d}" for d in row["details"]]
+    (out / "summary.json").write_text(json.dumps({**summary, "privileged": privileged, "tests": rows}, indent=2) + "\n",
+                                      encoding="utf-8")
+    (out / "summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--out", type=Path, required=True, help="new folder for the reports")
+    parser.add_argument("--python", type=Path, help="interpreter for pytest (default: the checkout's .venv)")
     args = parser.parse_args(argv)
     if sys.platform != "win32":
         parser.error("Windows only.")
@@ -208,7 +264,14 @@ def main(argv: list[str] | None = None) -> int:
     commit = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     dirty = bool(subprocess.run(["git", "-C", str(REPO), "status", "--porcelain"], capture_output=True,
                                 text=True).stdout.strip())
-    env_info = {"commit": commit, "worktree_clean": not dirty, "windows": platform.version(), "python": sys.version.split()[0],
+    # pytest runs with the checkout's environment (locked dependencies), verified by collection below.
+    python = str(pytest_interpreter(override=args.python))
+    probe = subprocess.run([python, "-c", "import sys; print(sys.prefix); print(sys.version.split()[0])"],
+                           capture_output=True, text=True)
+    prefix, version = (probe.stdout.split() + ["?", "?"])[:2] if probe.returncode == 0 else ("not runnable", "?")
+    env_info = {"commit": commit, "worktree_clean": not dirty, "windows": platform.version(),
+                "python": version, "interpreter": python, "interpreter_prefix": prefix,
+                "runner_interpreter": sys.executable,
                 "elevated": admin, "developer_mode": devmode, "can_create_symlinks": links}
     print(json.dumps(env_info, indent=2))
     if not links:
@@ -216,38 +279,40 @@ def main(argv: list[str] | None = None) -> int:
               "Developer Mode, on the dedicated test computer.")
         return 2
     args.out.mkdir(parents=True)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("NATURE_WORKER_") and not k.endswith("_API_KEY")}
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    problems, collect_output = collect(python, env)
+    (args.out / "collect-output.txt").write_text(collect_output, encoding="utf-8")
+    if problems:
+        _, rows, privileged = evaluate({})
+        for p in privileged:
+            p["message"] = "not run: the collection check failed (see PROBLEM above)"
+        summary = {**env_info, "pytest_exit": None, "problems": problems, "result": "COLLECTION FAILED",
+                   "privileged_cases": {"PASS": 0, "FAIL": 0, "NOT RUN": 0, "MISSING": len(PRIVILEGED)}}
+        print("\n".join(write_reports(args.out, summary, rows, privileged)))
+        print(f"pytest needs the checkout's environment: create {REPO / '.venv'} with the locked dependencies.")
+        return 3
     base = short_base()  # removed afterwards
     env_info["base_folder"] = str(base)
     junit = args.out / "junit.xml"
-    env = {k: v for k, v in os.environ.items() if not k.startswith("NATURE_WORKER_") and not k.endswith("_API_KEY")}
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
     started = time.time()
     try:
-        proc = subprocess.run([sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-rs", "-q",
+        proc = subprocess.run([python, "-m", "pytest", "-p", "no:cacheprovider", "-rs", "-q",
                                f"--basetemp={base / 't'}", f"--junitxml={junit}", *REQUIRED, *OPTIONAL],
                               cwd=REPO, env=env, capture_output=True, text=True, timeout=1800)
     finally:
         shutil.rmtree(base, ignore_errors=True)
     (args.out / "pytest-output.txt").write_text(proc.stdout + proc.stderr, encoding="utf-8")
     ok, rows, privileged = evaluate(outcomes(junit) if junit.exists() else {})  # no report: all MISSING
+    problems = [] if proc.returncode == 0 else [f"pytest exited {proc.returncode} (see pytest-output.txt)"]
+    if not junit.exists():
+        problems.append("pytest wrote no JUnit report: no case can count as run")
+    ok = ok and not problems
     counts = {s: sum(1 for p in privileged if p["status"] == s) for s in ("PASS", "FAIL", "NOT RUN", "MISSING")}
     summary = {**env_info, "pytest_exit": proc.returncode, "seconds": round(time.time() - started),
-               "temp_removed": not base.exists(), "result": "PASS" if ok else "INCOMPLETE OR FAILED",
-               "privileged_cases": counts, "privileged": privileged, "tests": rows}
-    (args.out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-    lines = [f"Nature AI Worker privileged Windows security tests: {summary['result']}",
-             f"commit {commit}{'' if not dirty else ' (WORKING TREE NOT CLEAN)'}; Windows {env_info['windows']}; "
-             f"Python {env_info['python']}; elevated {admin}; Developer Mode {devmode}; symlinks {links}", "",
-             f"The {len(PRIVILEGED)} privileged cases: " + ", ".join(f"{n} {s}" for s, n in counts.items()), ""]
-    for i, p in enumerate(privileged, 1):
-        lines.append(f"{i:2}. {p['status']:8} {p['case']}" + (f"  -- {p['message']}" if p["status"] != "PASS" else ""))
-    lines += ["", "Whole test functions (every case, including those that run without privileges):"]
-    for row in rows:
-        lines.append(f"{row['status']:8} {'required' if row['required'] else 'optional'}  {row['test']} "
-                     f"({row['cases']} case{'s' if row['cases'] != 1 else ''}; needs {row['needs']})")
-        lines += [f"           {d}" for d in row["details"]]
-    (args.out / "summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print("\n".join(lines))
+               "temp_removed": not base.exists(), "problems": problems,
+               "result": "PASS" if ok else "INCOMPLETE OR FAILED", "privileged_cases": counts}
+    print("\n".join(write_reports(args.out, summary, rows, privileged)))
     return 0 if ok else 1
 
 

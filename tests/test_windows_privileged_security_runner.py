@@ -5,10 +5,14 @@ symbolic links or elevation. Every test it names must exist (a rename must not s
 security test), and a skip must never count as a pass."""
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
@@ -110,3 +114,103 @@ def test_privileged_cases_are_exactly_the_ones_skipped_without_privileges(tmp_pa
     else:
         assert {c for c, o in every.items() if o == "skipped"} == set(runner.PRIVILEGED)
         assert all(o == "passed" for c, o in every.items() if c not in runner.PRIVILEGED)
+
+
+# -- the interpreter that runs pytest (regression: 29 MISSING after a run started by another Python) --
+
+PYTEST_ONLY = ("pytest", "_pytest", "pluggy", "iniconfig", "packaging", "pygments", "colorama", "py.py")
+
+
+@pytest.fixture(scope="module")
+def pytest_only_python(tmp_path_factory):
+    """A Python with pytest but without the Worker's dependencies (no fastapi): the interpreter of
+    the failed elevated run, where conftest could not import and nothing was reported."""
+    root = tmp_path_factory.mktemp("pytest-only")
+    base = getattr(sys, "_base_executable", sys.executable)
+    subprocess.run([base, "-m", "venv", "--without-pip", str(root / "venv")], check=True, timeout=300)
+    packages = root / "packages"
+    packages.mkdir()
+    site = Path(pytest.__file__).resolve().parents[1]
+    for name in PYTEST_ONLY:
+        if (site / name).is_dir():
+            shutil.copytree(site / name, packages / name)
+        elif (site / name).is_file():  # one-file modules (pytest's py.py)
+            shutil.copyfile(site / name, packages / name)
+    python = root / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    venv_site = next((root / "venv").glob("Lib/site-packages" if os.name == "nt" else "lib/python*/site-packages"))
+    (venv_site / "pytest-only.pth").write_text(str(packages) + "\n")
+    check = subprocess.run([str(python), "-c", "import pytest\ntry:\n import fastapi\nexcept ImportError: print('no fastapi')"],
+                           capture_output=True, text=True, timeout=60)
+    assert check.returncode == 0 and "no fastapi" in check.stdout, check.stdout + check.stderr
+    return python
+
+
+def _env():
+    return {k: v for k, v in os.environ.items() if not k.startswith("NATURE_WORKER_") and not k.endswith("_API_KEY")}
+
+
+def test_collection_check_refuses_an_interpreter_without_the_worker_dependencies(pytest_only_python):
+    problems, output = runner.collect(str(pytest_only_python), _env())
+    assert problems[0].startswith("pytest could not collect the tests (exit ")
+    assert "fastapi" in problems[0] and "fastapi" in output
+    assert sum(p.startswith("not collected: ") for p in problems) == 29 + len(runner.REQUIRED)
+
+
+def test_collection_check_accepts_the_intended_environment():
+    problems, _ = runner.collect(sys.executable, _env())
+    assert problems == []
+
+
+def test_a_collection_failure_reports_every_case_missing_and_never_passes(tmp_path, monkeypatch, pytest_only_python):
+    monkeypatch.setattr(runner, "can_create_symlinks", lambda: True)
+    out = tmp_path / "out"
+    assert runner.main(["--out", str(out), "--python", str(pytest_only_python)]) == 3
+    text = (out / "summary.txt").read_text(encoding="utf-8")
+    assert text.splitlines()[0].endswith("COLLECTION FAILED")
+    assert "29 privileged cases: 0 PASS, 0 FAIL, 0 NOT RUN, 29 MISSING" in text and "fastapi" in text
+    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    assert {p["status"] for p in summary["privileged"]} == {"MISSING"} and len(summary["privileged"]) == 29
+    assert summary["interpreter"] == str(pytest_only_python) and summary["result"] != "PASS"
+    assert not (out / "junit.xml").exists()
+
+
+def test_pytest_runs_in_the_intended_environment_whatever_python_started_the_runner(tmp_path, monkeypatch,
+                                                                                     pytest_only_python):
+    # The failed run: the runner itself needs only the standard library, so it started under a
+    # Python without the test dependencies and handed that interpreter to pytest.
+    monkeypatch.setattr(runner, "can_create_symlinks", lambda: True)
+    monkeypatch.setattr(runner.sys, "executable", str(pytest_only_python))
+    out = tmp_path / "out"
+    runner.main(["--out", str(out), "--python", str(Path(sys.prefix) / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))])
+    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    assert summary["runner_interpreter"] == str(pytest_only_python)
+    assert summary["interpreter"] != str(pytest_only_python)
+    assert summary["privileged_cases"]["MISSING"] == 0  # every case was collected and reported
+    assert (out / "junit.xml").exists()
+
+
+def test_the_checkouts_venv_is_preferred_over_the_starting_interpreter(tmp_path):
+    assert runner.pytest_interpreter(tmp_path) == Path(sys.executable)  # no .venv: the current Python
+    venv_python = tmp_path / ".venv" / "Scripts" / "python.exe"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.write_bytes(b"")
+    assert runner.pytest_interpreter(tmp_path) == venv_python
+    other = tmp_path / "other" / "python.exe"
+    assert runner.pytest_interpreter(tmp_path, other) == other  # --python wins
+
+
+def test_a_run_without_a_junit_report_fails_with_every_case_missing(tmp_path, monkeypatch):
+    real_run = subprocess.run
+
+    def run(cmd, *args, **kwargs):
+        if "--junitxml" in " ".join(map(str, cmd)):  # the test run: exits 0 but writes no report
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return real_run(cmd, *args, **kwargs)
+    monkeypatch.setattr(runner, "can_create_symlinks", lambda: True)
+    monkeypatch.setattr(runner, "collect", lambda python, env: ([], ""))
+    monkeypatch.setattr(runner.subprocess, "run", run)
+    out = tmp_path / "out"
+    assert runner.main(["--out", str(out), "--python", sys.executable]) == 1
+    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    assert summary["privileged_cases"] == {"PASS": 0, "FAIL": 0, "NOT RUN": 0, "MISSING": 29}
+    assert any("no JUnit report" in p for p in summary["problems"]) and summary["result"] != "PASS"
